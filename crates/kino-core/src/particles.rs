@@ -20,7 +20,7 @@ pub struct Emitter {
     #[serde(default = "d_sz")] pub size0: f64, #[serde(default = "d_sz")] pub size1: f64, #[serde(default)] pub size_var: f64,
     #[serde(default = "d_c0")] pub color0: [f64; 3], #[serde(default = "d_c1")] pub color1: [f64; 3],
     #[serde(default = "d1")] pub alpha0: f64, #[serde(default)] pub alpha1: f64,
-    #[serde(default)] pub trail: u32, #[serde(default = "d_sprite")] pub sprite: String,        // soft | hard | streak | ring | star | spark
+    #[serde(default)] pub fade_in: f64, #[serde(default)] pub trail: u32, #[serde(default = "d_sprite")] pub sprite: String,        // soft | hard | streak | ring | star | spark
     #[serde(default)] pub prewarm: bool, #[serde(default = "d_seed")] pub seed: u64, #[serde(default)] pub additive: bool,
 }
 impl Default for Emitter { fn default() -> Self { serde_json::from_str("{}").unwrap() } }
@@ -51,7 +51,7 @@ pub fn render(e: &Emitter, f: &mut Frame, t: f64) {
             let dr = (-e.drag * dt).exp(); vx = (vx + ax * dt) * dr; vy = (vy + ay * dt) * dr; px += vx * dt; py += vy * dt;
             if e.floor && py > hh { py = hh; vy = -vy.abs() * e.bounce; vx *= 0.85; }
             if e.trail > 0 && s % every == 0 { hist.push((px, py)); } }
-        let u = age / life; let size = lerp(e.size0, e.size1, u) * sc * (1.0 + (h(e.seed, i, 5) - 0.5) * 2.0 * e.size_var); let alpha = lerp(e.alpha0, e.alpha1, u).clamp(0.0, 1.5);
+        let u = age / life; let size = lerp(e.size0, e.size1, u) * sc * (1.0 + (h(e.seed, i, 5) - 0.5) * 2.0 * e.size_var); let mut alpha = lerp(e.alpha0, e.alpha1, u).clamp(0.0, 1.5); if e.fade_in > 0.0 { let t = (u / e.fade_in).clamp(0.0, 1.0); alpha *= t * t * (3.0 - 2.0 * t); }
         let col = [lerp(e.color0[0], e.color1[0], u), lerp(e.color0[1], e.color1[1], u), lerp(e.color0[2], e.color1[2], u)];
         let mut pts: Vec<(f64, f64, f64)> = hist.iter().rev().enumerate().map(|(k, p)| (p.0, p.1, alpha * (1.0 - (k as f64 + 1.0) / (hist.len() as f64 + 1.0)) * 0.6)).collect(); pts.insert(0, (px, py, alpha));
         for (k, (x, y, a)) in pts.iter().enumerate() { let s_ = size * (1.0 - 0.5 * k as f64 / pts.len() as f64).max(0.2); stamp(&mut buf, f.w, f.h, *x, *y, s_.max(0.4), *a as f32, col, &e.sprite, vx, vy); }
@@ -70,6 +70,8 @@ fn stamp(buf: &mut [f32], w: usize, hgt: usize, x: f64, y: f64, r: f64, a: f32, 
         let k = match sprite { "hard" => (1.0 - (d - 1.0) * 2.0).clamp(0.0, 1.0), "ring" => { (1.0 - ((d - 1.0).abs() * r / (r * 0.18).max(0.7))).clamp(0.0, 1.0) }
             "star" => { let ang = py.atan2(px); let rr = 0.55 + 0.45 * (ang * 4.0).cos().abs().powf(3.0); ((1.0 - d / (1.6 * rr)).clamp(0.0, 1.0)).powf(1.5) }
             "streak" | "spark" => { let along = px * dx + py * dy; let perp = -px * dy + py * dx; let l = if sprite == "spark" { slen * 1.6 } else { slen }; let q = (along / l).abs().min(2.0) + 0.0; let core = (1.0 - (perp.abs() / (r * 0.6)).min(1.0)) * (1.0 - (along.abs() / (l * if along > 0.0 { 0.3 } else { 1.0 })).min(1.0)); let _ = q; core.max(0.0).powf(1.2) }
+            "mote" => { let t = ((1.3 - d) / 0.7).clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) * 0.9 }
+            "puff" => (-(d * d) * 1.1).exp() * (1.0 - d / 2.6).clamp(0.0, 1.0),
             _ => (1.0 - d / 2.6).max(0.0).powi(3) * 1.8 } as f32;
         let kk = (k * a).min(1.0); if kk <= 0.0 { continue; } let o = (yy * w + xx) * 4; buf[o] += c[0] as f32 * kk; buf[o + 1] += c[1] as f32 * kk; buf[o + 2] += c[2] as f32 * kk; buf[o + 3] += kk; } }
 }
@@ -79,14 +81,15 @@ pub fn preset(name: &str) -> Result<serde_json::Value, String> {
     Ok(match name {
         "fire" => json!({"shape":"line","x":0.5,"y":0.95,"width":0.25,"height":0.0,"rate":220,"life":1.4,"life_var":0.5,"speed":260,"speed_var":120,"angle":270,"spread":14,"gravity":-120,"turbulence":520,"turb_scale":0.25,"drag":0.6,"size0":38,"size1":6,"size_var":0.5,"color0":[1.0,0.72,0.25],"color1":[0.9,0.1,0.0],"alpha0":0.7,"alpha1":0.0,"sprite":"soft","additive":true,"prewarm":true,"seed":3}),
         "sparks" => json!({"shape":"point","x":0.5,"y":0.8,"rate":170,"life":1.2,"life_var":0.5,"speed":700,"speed_var":420,"angle":270,"spread":55,"gravity":900,"drag":0.4,"size0":3.5,"size1":1.0,"color0":[1.0,0.9,0.6],"color1":[1.0,0.35,0.05],"alpha0":1.0,"alpha1":0.0,"sprite":"streak","trail":3,"floor":true,"bounce":0.4,"additive":true,"prewarm":true,"seed":5}),
-        "snow" => json!({"shape":"line","x":0.5,"y":-0.05,"width":1.2,"rate":90,"life":9,"life_var":3,"speed":70,"speed_var":40,"angle":90,"spread":12,"wind":14,"turbulence":38,"turb_scale":0.5,"size0":5,"size1":5,"size_var":0.6,"color0":[1,1,1],"color1":[0.85,0.92,1],"alpha0":0.85,"alpha1":0.85,"sprite":"soft","prewarm":true,"seed":9}),
+        "snow" => json!({"shape":"line","x":0.5,"y":-0.05,"width":1.2,"rate":90,"life":9,"life_var":3,"speed":70,"speed_var":40,"angle":90,"spread":12,"wind":14,"turbulence":38,"turb_scale":0.5,"size0":5,"size1":5,"size_var":0.6,"color0":[1,1,1],"color1":[0.85,0.92,1],"alpha0":0.8,"alpha1":0.8,"fade_in":0.1,"sprite":"soft","prewarm":true,"seed":9}),
         "rain" => json!({"shape":"line","x":0.5,"y":-0.05,"width":1.3,"rate":320,"life":1.1,"speed":1500,"speed_var":300,"angle":100,"spread":2,"size0":1.6,"size1":1.6,"color0":[0.75,0.85,1],"color1":[0.75,0.85,1],"alpha0":0.5,"alpha1":0.5,"sprite":"streak","prewarm":true,"seed":2}),
-        "smoke" => json!({"shape":"line","x":0.5,"y":0.9,"width":0.1,"rate":40,"life":5,"life_var":1.5,"speed":90,"speed_var":40,"angle":270,"spread":10,"turbulence":90,"turb_scale":0.35,"drag":0.3,"size0":40,"size1":170,"size_var":0.4,"color0":[0.55,0.55,0.58],"color1":[0.2,0.2,0.22],"alpha0":0.06,"alpha1":0.0,"sprite":"soft","prewarm":true,"seed":4}),
+        "smoke" => json!({"shape":"line","x":0.5,"y":0.95,"width":0.07,"rate":36,"life":8,"life_var":2.5,"speed":75,"speed_var":35,"angle":270,"spread":8,"wind":16,"turbulence":140,"turb_scale":0.28,"drag":0.25,"size0":45,"size1":210,"size_var":0.6,"color0":[0.66,0.66,0.7],"color1":[0.32,0.32,0.36],"alpha0":0.06,"alpha1":0.0,"fade_in":0.15,"sprite":"puff","prewarm":true,"seed":4}),
+        "dust" => json!({"shape":"rect","x":0.5,"y":0.5,"width":1.1,"height":1.1,"rate":9,"life":10,"life_var":3,"speed":8,"speed_var":6,"angle":300,"spread":90,"turbulence":10,"turb_scale":0.5,"size0":6,"size1":8,"size_var":1.2,"color0":[1.0,0.93,0.8],"color1":[0.9,0.92,1.0],"alpha0":0.16,"alpha1":0.16,"fade_in":0.25,"sprite":"mote","additive":true,"prewarm":true,"seed":41}),
         "confetti" => json!({"shape":"point","x":0.5,"y":0.9,"rate":150,"life":3.2,"life_var":0.8,"speed":1100,"speed_var":500,"angle":270,"spread":38,"gravity":1100,"drag":1.4,"turbulence":220,"turb_scale":0.3,"size0":9,"size1":9,"size_var":0.5,"color0":[1.0,0.3,0.5],"color1":[0.3,0.7,1.0],"alpha0":1,"alpha1":1,"sprite":"hard","seed":13}),
         "fireflies" => json!({"shape":"rect","x":0.5,"y":0.6,"width":1.0,"height":0.7,"rate":8,"life":6,"life_var":2,"speed":16,"speed_var":10,"angle":270,"spread":180,"turbulence":60,"turb_scale":0.3,"size0":7,"size1":7,"size_var":0.5,"color0":[1.0,0.95,0.55],"color1":[0.7,1.0,0.5],"alpha0":0.9,"alpha1":0.0,"sprite":"soft","additive":true,"prewarm":true,"seed":21}),
         "bokeh" => json!({"shape":"rect","x":0.5,"y":0.5,"width":1.1,"height":1.1,"rate":6,"life":8,"life_var":2,"speed":14,"speed_var":8,"angle":300,"spread":60,"size0":44,"size1":60,"size_var":0.6,"color0":[1.0,0.85,0.6],"color1":[0.6,0.7,1.0],"alpha0":0.0,"alpha1":0.0,"sprite":"ring","additive":true,"prewarm":true,"seed":17}),
         "magic_dust" => json!({"shape":"circle","x":0.5,"y":0.5,"width":0.15,"rate":120,"life":1.8,"life_var":0.6,"speed":120,"speed_var":90,"angle":270,"spread":180,"gravity":-30,"drag":0.9,"turbulence":160,"turb_scale":0.2,"size0":9,"size1":0.5,"color0":[1.0,0.95,0.7],"color1":[0.75,0.55,1.0],"alpha0":1,"alpha1":0,"sprite":"star","additive":true,"prewarm":true,"seed":23}),
         "explosion" => json!({"shape":"point","x":0.5,"y":0.5,"rate":700,"life":1.6,"life_var":0.6,"speed":900,"speed_var":700,"angle":0,"spread":180,"drag":2.2,"gravity":200,"turbulence":300,"size0":18,"size1":3,"size_var":0.4,"color0":[1.0,0.85,0.45],"color1":[0.8,0.1,0.0],"alpha0":0.5,"alpha1":0.0,"sprite":"soft","trail":2,"additive":true,"seed":31}),
-        o => return Err(format!("unknown preset {o}; presets: fire sparks snow rain smoke confetti fireflies bokeh magic_dust explosion")),
+        o => return Err(format!("unknown preset {o}; presets: dust fire sparks snow rain smoke confetti fireflies bokeh magic_dust explosion")),
     })
 }
