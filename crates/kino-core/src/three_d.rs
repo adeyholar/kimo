@@ -65,4 +65,5 @@ impl CamView {
     /// (screen x, screen y, view depth). None when behind the camera.
     pub fn project(&self, p: [f64; 3]) -> Option<(f64, f64, f64)> { let v = app(&self.rct, [p[0] - self.c[0], p[1] - self.c[1], p[2] - self.c[2]]); if v[2] < 1.0 { return None; } Some((self.w as f64 / 2.0 + self.f * v[0] / v[2], self.h as f64 / 2.0 + self.f * v[1] / v[2], v[2])) }
     pub fn focal(&self) -> f64 { self.f }
+    pub fn eye(&self) -> [f64; 3] { self.c }
 }

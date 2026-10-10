@@ -4,6 +4,7 @@
 pub mod keyframe;
 pub mod hud;
 pub mod shards;
+pub mod scene3d;
 pub mod physics;
 pub mod three_d;
 pub mod glass;

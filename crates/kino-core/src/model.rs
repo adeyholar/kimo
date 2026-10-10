@@ -16,6 +16,7 @@ pub enum Source {
     Emitter(crate::particles::Emitter),
     /// 3D glass shard burst (see shards.rs).
     ShardBurst(crate::shards::ShardBurst),
+    Scene3D(crate::scene3d::Scene3D),
     Particles { kind: String, count: u32, color: [f64; 3], size: f64, seed: u64 },
     /// Adjustment layer: its effects/mask/opacity apply to everything composited beneath it.
     Adjustment,

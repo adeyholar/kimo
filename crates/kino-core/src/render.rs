@@ -101,6 +101,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
                 for j in 0..3 { f.d[i + j] = ((fill[j] * fl + stroke_color[j] * sk * (1.0 - fl)) / a) as f32; } f.d[i + 3] = a as f32; } }
         }
         Source::Emitter(e) => crate::particles::render(e, &mut f, lt),
+        Source::Scene3D(e) => crate::scene3d::render(e, &mut f, lt, &crate::three_d::Camera::from_props(&p.camera, c.start + lt)),
         Source::ShardBurst(e) => crate::shards::render(e, &mut f, lt, &crate::three_d::Camera::from_props(&p.camera, c.start + lt), p.fps, c.duration),
         Source::Particles { kind, count, color, size, seed } => {
             let rnd = |i: u64, k: u64| { let mut x = (seed ^ (i * 0x9E3779B97F4A7C15) ^ (k * 0xBF58476D1CE4E5B9)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 29; (x >> 11) as f64 / (1u64 << 53) as f64 };
