@@ -197,3 +197,6 @@ Done: layer transforms, camera, shard-internal depth sort/DOF/motion blur. Todo:
 ## Rigid-body physics (physics.rs, used by add_shard_burst physics:true) - V1
 Deterministic 240 Hz baked sim: mass from size, linear/angular velocity, gravity, linear and angular drag, floor plane with restitution + Coulomb friction (spin from contact), body-body impulse collisions (sphere proxies, spatial-hash broadphase). Scrub-safe via cached trajectory. Gaps: sphere proxies not true convex hulls (no resting stability on faces), no joints/constraints/soft bodies/fluids, no general-layer physics tool yet (only shard bursts), CPU.
 Shard shading: Schlick fresnel and depth falloff params. Gaps: no real background refraction (generator layer has no access to what is behind it), no caustics, no area lights.
+
+## SCUMBLE hero shatter recreation (examples/scumble_shatter.py) - V1 (recreation, not parity)
+Composed from existing tools: keyboard bg with push-in and blur ramp, finger/key sprites, orange spark emitter, physics shard burst with camera fly-in and zoom-blur streaks, detection-box HUD. Gaps vs reference: finger/key/keyboard are drawn stand-ins (no real macro footage or 3D model), shards lack true refraction of the scene, no caustics, lighting is fake, no rigid-body interaction with the finger.
