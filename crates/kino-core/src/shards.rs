@@ -80,7 +80,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
     let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));
     let tex = e.plane.as_ref().and_then(|p| p.texture.as_ref().and_then(|t| load_tex(t, p.region)));
     let occ = e.plane.as_ref().and_then(|p| p.occlusion.as_ref().and_then(|o| load_occ(o, (t * fps).round() as i64, w, hh)));
-    let traj = if e.physics && pcells.is_none() { Some((bake_cached(e, k, total, hh), 0)) } else { None };
+    let traj = if e.physics { Some((bake_cached(e, k, total, hh), 0)) } else { None };
     for sub in 0..nsub { let ts = (t + ((sub as f64 + 0.5) / nsub as f64 - 0.5) * shutter).max(0.0);
         let mut prims: Vec<Prim> = Vec::with_capacity(e.count as usize * 2);
         let ncount = pcells.as_ref().map(|c| c.1.len() as u64).unwrap_or(e.count as u64);
@@ -160,7 +160,17 @@ fn bake_cached(e: &ShardBurst, k: f64, total: f64, hh: usize) -> std::sync::Arc<
     static C: OnceLock<Mutex<HashMap<String, Arc<crate::physics::Traj>>>> = OnceLock::new();
     let key = format!("{:?}|{}|{}|{}", serde_json::to_string(e).unwrap_or_default(), k, total, hh); let m = C.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(t) = m.lock().unwrap().get(&key) { return t.clone(); }
-    let mut bodies = vec![]; for i in 0..e.count as u64 { let r = |kk: u64| h(e.seed, i, kk);
+    let mut bodies = vec![];
+    if let Some(p) = e.plane.as_ref() { // plane cells as rigid bodies: same birth wave and pressure impulse as the analytic path, then drag, gravity, spin and the floor
+        let cells = plane_cells(p, e.seed, k); let (li, (ix, iy)) = { let (l, c) = plane_impact(p, k); (l, c) };
+        for (i, c) in cells.iter().enumerate() { let i = i as u64; let r = |kk: u64| h(e.seed, i, kk); let d = ((c.lc.0 - li.0).powi(2) + (c.lc.1 - li.1).powi(2)).sqrt(); let birth = (d / (p.wave_speed * k)).min(p.max_delay);
+            let size = (c.area.sqrt() / 1.8).max(1.0); let (dx, dy) = (c.c.0 - ix, c.c.1 - iy); let mg = (dx * dx + dy * dy).sqrt().max(1e-6); let (ux, uy) = if d < 1e-3 { let a = r(60) * std::f64::consts::TAU; (a.cos(), a.sin()) } else { (dx / mg, dy / mg) };
+            let v0 = p.impulse * k * (-d / (p.radius * k * 3.0)).exp().max(0.12) * (0.6 + 0.8 * r(4)) / (0.7 + size / (40.0 * k)).sqrt(); let vz = -p.lift * v0 * (0.6 + 0.8 * r(5));
+            let sd = e.spin.to_radians(); let thick = ({ let t = e.thickness.unwrap_or([0.3, 0.9]); t[0] + (t[1] - t[0]) * r(14) }) * size;
+            bodies.push(crate::physics::Body { p: [c.c.0, c.c.1, p.under_depth * k], v: [ux * v0, uy * v0, vz], q: [1.0, 0.0, 0.0, 0.0], w: [(r(7) - 0.5) * 2.0 * sd, (r(9) - 0.5) * 2.0 * sd, (r(11) - 0.5) * sd], r: size * 0.55, m: size * size * thick * 1e-3 + 1e-3, birth }); }
+        let par = crate::physics::Params { gravity: [0.0, e.gravity * k, 0.0], drag: e.drag, ang_drag: e.ang_drag, restitution: e.restitution, friction: e.friction, floor_y: e.floor.map(|f| f * k), collide: false };
+        let tj = Arc::new(crate::physics::bake(bodies, &par, total + 0.1)); m.lock().unwrap().insert(key, tj.clone()); return tj; }
+    for i in 0..e.count as u64 { let r = |kk: u64| h(e.seed, i, kk);
         let size = (e.size_min * (e.size_max / e.size_min.max(0.1)).powf(r(1))) * k; let (th, ph) = (r(2) * std::f64::consts::TAU, (r(3) * 2.0 - 1.0).acos()); let dir = [ph.sin() * th.cos(), ph.sin() * th.sin() * 0.8, ph.cos()];
         let sp = e.speed * k * (0.35 + 1.1 * r(4).powf(1.2)) / (0.6 + size / (30.0 * k)).sqrt(); let mut vz = dir[2] * sp; vz -= e.toward_camera * sp * (0.3 + r(5)); let os = e.origin_spread * k;
         let p = [e.origin[0] * k + (r(50) - 0.5) * 2.0 * os, e.origin[1] * k + (r(51) - 0.5) * 2.0 * os * 0.6, e.origin[2] + (r(52) - 0.5) * 2.0 * os];
