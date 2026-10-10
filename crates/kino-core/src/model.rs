@@ -20,6 +20,8 @@ pub enum Source {
     Particles { kind: String, count: u32, color: [f64; 3], size: f64, seed: u64 },
     /// Adjustment layer: its effects/mask/opacity apply to everything composited beneath it.
     Adjustment,
+    /// Nested composition: its own tracks on a local clock (clip start = 0). Transform, effects, masks and opacity apply to the whole group.
+    Precomp { tracks: Vec<Track> },
     /// Vector shape: rect | ellipse | polygon (sides) | line. Sizes in pixels, centered on canvas (offset with x/y props).
     Shape { shape: String, width: f64, height: f64, fill: [f64; 3], stroke_width: f64, stroke_color: [f64; 3], sides: u32, corner_radius: f64 },
     Text { text: String, font: String, size: f64, color: [f64; 3], letter_spacing: f64, stroke_width: f64, stroke_color: [f64; 3], shadow: f64, align: String },

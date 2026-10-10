@@ -222,7 +222,7 @@ Scene3D additions (V1): shadows:true (1536 px shadow map per directional light, 
 
 ## Motion program (queued, requested: all motion features of Premiere, After Effects, Resolve Studio, plus kino-exclusive)
 Status honest: nothing below is done unless marked. Existing: motion blur (shutter-angle, per layer), point/ring tracker, stabilizer, speed ramp, particles, physics, Scene3D.
-- [ ] 1. Track mattes (alpha/luma/inverted), precomps with own time, collapse transforms
+- [ ] 1. Track mattes (alpha/luma/inverted), collapse transforms. DONE V1: precomps (group_clips / ungroup_clip: nested tracks on a local clock, group transform/effects/mask/opacity/keyframes apply to the whole group; gaps: no editing of grouped clips in place, no time remap of the group, no continuous rasterization, nested audio not mixed)
 - [ ] 2. Expressions (wiggle, loopIn/Out, time, valueAtTime, linkage), bezier graph-editor handles, spatial motion paths with auto-orient, text animators
 - [ ] 3. Echo, posterize time, frame blending, optical-flow interpolation and slow-mo, optical-flow motion blur for footage, time displacement, rolling-shutter repair
 - [ ] 4. Motion blur for Scene3D geometry and 3D layers, per-effect blur
@@ -230,3 +230,5 @@ Status honest: nothing below is done unless marked. Existing: motion blur (shutt
 - [ ] 6. Roto/segmentation (ML model), puppet/mesh warp, liquify, Resolve-style smart reframe, speed warp, optical-flow retime
 - [ ] 7. Kino-exclusive ideas: beat-driven motion (bind any property to audio::analyze beats), motion-by-prompt presets (AI writes the curve set), physics-driven layers (any 2D layer joins the rigid-body sim), motion "diff" tool (compare two clips' motion curves and match one to the other), auto motion-match to reference footage via tracker.
 - [ ] Infra: HUD timecode as one dynamic text source (currently 2 clips per frame, slow export)
+
+- [x] impact landing for detection boxes (impact:true), add_box_expand (constant-speed expansion + 2-frame flash), add_camera_shake / impact_shake (damped spring, measured from SCUMBLE), add_hud_frame, dynamic text tokens {tc} {bar} {t} {pct}. V1: measured from one reference, not generalized beyond it; see examples/scumble_*.py for known diffs.

@@ -61,9 +61,10 @@ pub fn prepare_at(p: &Project, cache: &mut Cache, t: Option<f64>) -> Result<(), 
 pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result<(), String> {
     if cache.size != (p.width, p.height, p.fps) { cache.frames.clear(); cache.size = (p.width, p.height, p.fps); }
     let all = t0 == f64::MIN;
-    let active: std::collections::HashSet<String> = p.tracks.iter().flat_map(|tr| tr.clips.iter()).filter(|c| all || (c.start <= t1 && c.start + c.duration > t0)).map(|c| c.id.clone()).collect();
+    let flat = flat_clips(&p.tracks, 0.0);
+    let active: std::collections::HashSet<String> = flat.iter().filter(|c| all || (c.start <= t1 && c.start + c.duration > t0)).map(|c| c.id.clone()).collect();
     if !all { cache.frames.retain(|k, _| active.contains(k)); }
-    for tr in &p.tracks { for c in &tr.clips {
+    for c in &flat {
         let Source::Media { asset } = &c.source else { continue };
         if !active.contains(&c.id) || c.props.get("audio_only").map(|q| q.at(0.0)).unwrap_or(0.0) >= 0.5 { continue; }
         let total = ((c.duration * p.fps).ceil() as usize).max(1);
@@ -77,9 +78,12 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
         // whole-clip decode only for speed-ramped clips (index mapping is in source time); everything else is windowed
         let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(WINDOW).min(total - ia)) };
         let fr = decode(p, c, &a.path, start, count)?; cache.frames.insert(c.id.clone(), (sig, fr));
-    }}
+    }
     Ok(())
 }
+
+/// All clips including those inside precomps, with starts shifted onto the project clock (precomps nest recursively).
+pub fn flat_clips(tracks: &[Track], off: f64) -> Vec<Clip> { let mut v = vec![]; for tr in tracks { for c in &tr.clips { let mut cc = c.clone(); cc.start += off; if let Source::Precomp { tracks: inner } = &c.source { let sub = flat_clips(inner, cc.start); cc.source = Source::Adjustment; v.push(cc); v.extend(sub); } else { v.push(cc); } } } v }
 
 fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
     let lt = c.display_time(lt_in);
@@ -89,6 +93,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         Source::Solid { color } => for i in 0..w*h { f.d[i*4]=color[0] as f32; f.d[i*4+1]=color[1] as f32; f.d[i*4+2]=color[2] as f32; f.d[i*4+3]=1.0; },
         Source::Gradient { c1, c2 } => for y in 0..h { let k = y as f64 / h as f64; for x in 0..w { let i=(y*w+x)*4; for j in 0..3 { f.d[i+j] = (c1[j]*(1.0-k)+c2[j]*k) as f32; } f.d[i+3]=1.0; } },
         Source::Adjustment => {}
+        Source::Precomp { tracks } => { let mut sub = Project { tracks: tracks.clone(), assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 }; sub.name = c.id.clone(); if let Ok(fr) = render_frame_opts(&sub, lt, cache, true) { f = fr; } }
         Source::Shape { shape, width, height, fill, stroke_width, stroke_color, sides, corner_radius } => {
             let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0); let (hw, hh) = (width / 2.0, height / 2.0);
             // signed distance (negative inside)
@@ -189,10 +194,13 @@ fn blend(dst: &mut Frame, src: &Frame, opacity: f32, mode: &str, mask: Option<&d
     }
 }
 
-pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String> {
+pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String> { render_frame_opts(p, t, cache, false) }
+
+/// `transparent`: start from a clear canvas (used for precomps) instead of opaque black.
+pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) -> Result<Frame, String> {
     let (w, h) = (p.width as usize, p.height as usize);
     let mut out = Frame::new(w, h);
-    for i in 0..w*h { out.d[i*4+3] = 1.0; } // opaque black canvas
+    if !transparent { for i in 0..w*h { out.d[i*4+3] = 1.0; } } // opaque black canvas
     let seed = (t * p.fps).round() as u64;
     for tr in &p.tracks { for c in &tr.clips {
         if t < c.start || t >= c.start + c.duration { continue; }

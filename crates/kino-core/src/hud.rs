@@ -122,7 +122,7 @@ pub fn add_hud_frame(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let mut put = |ss: &mut Session, s: &str, x: f64, y: f64, c: [f64; 3], o: f64| -> Clip { let mut t = clip(ss, txt(s, font, fs, c, "center"), start, dur); set(&mut t, "x", x); set(&mut t, "y", y); set(&mut t, "opacity", o); t };
     cl.push(put(ss, &label, lx + w_of(&label) / 2.0, ty, col, 0.9)); cl.push(put(ss, "REC", rx - w_of("REC") / 2.0, ty, col, 0.9));
     // blinking red dot (1 Hz)
-    let mut dot = clip(ss, shape("ellipse", 10.0 * k, 10.0 * k, [0.95, 0.2, 0.2], 0.0, [0.0; 3]), start, dur); set(&mut dot, "x", rx - w_of("REC") - 14.0 * k); set(&mut dot, "y", ty); let mut tt = 0.0; let mut on = true; while tt <= dur { key(&mut dot, "opacity", tt, if on { 1.0 } else { 0.0 }, Ease::Hold); tt += 0.5; on = !on; } cl.push(dot);
+    let mut dot = clip(ss, shape("ellipse", 10.0 * k, 10.0 * k, [0.95, 0.2, 0.2], 0.0, [0.0; 3]), start, dur); set(&mut dot, "x", rx - w_of("REC") - 14.0 * k); set(&mut dot, "y", ty); let mut tt = 0.0; let mut on = true; while tt <= dur && tt < 600.0 { key(&mut dot, "opacity", tt, if on { 1.0 } else { 0.0 }, Ease::Hold); tt += 0.5; on = !on; } cl.push(dot);
     // running timecode and bpm/bar readout: single dynamic-text clips resolved at render time
     let tc = format!("TC {{tc:{}}}", tc0); let bar = format!("{:.0} BPM  BAR {{bar:{}:{}}}", bpm, bpm, tc0);
     cl.push(put(ss, &tc, lx + w_of("TC 00:00:00:00") / 2.0, by, col, 0.9)); cl.push(put(ss, &bar, rx - w_of("125 BPM  BAR 00.0.0") / 2.0, by, col, 0.9)); let _ = fps;
@@ -136,7 +136,7 @@ pub fn add_box_expand(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let tid = a.get("track_id").and_then(|v| v.as_str()).ok_or("missing track_id")?.to_string();
     let start = num(a, "start", 0.0); let fps = ss.project.fps; let (cw, ch) = (ss.project.width as f64, ss.project.height as f64); let k = ch / 720.0;
     let rect = |key: &str, d: [f64; 4]| -> [f64; 4] { a.get(key).and_then(|v| v.as_array()).filter(|v| v.len() >= 4).map(|v| [v[0].as_f64().unwrap_or(0.0), v[1].as_f64().unwrap_or(0.0), v[2].as_f64().unwrap_or(1.0), v[3].as_f64().unwrap_or(1.0)]).unwrap_or(d) };
-    let from = rect("from", [0.247, 0.036, 0.49, 0.925]); let to = rect("to", [-0.03, -0.03, 1.06, 1.06]); let n = num(a, "frames", 8.0).max(1.0) as usize;
+    let from = rect("from", [0.247, 0.036, 0.49, 0.925]); let to = rect("to", [-0.03, -0.03, 1.06, 1.06]); let n = num(a, "frames", 8.0).clamp(1.0, 600.0) as usize;
     let col = rgb(a, "color", [1.0, 0.55, 0.1]); let fill_o = num(a, "fill_opacity", 0.22); let flash = a.get("flash").and_then(|v| v.as_bool()).unwrap_or(true); let frame = 1.0 / fps; let sw = (3.0 * k).max(2.0);
     let label = a.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string(); let mut cl = vec![];
     for i in 0..n { let u = i as f64 / n as f64; let r: Vec<f64> = (0..4).map(|j| from[j] + (to[j] - from[j]) * u).collect(); let (pw, ph) = (r[2] * cw, r[3] * ch); let (cx, cy) = ((r[0] + r[2] / 2.0 - 0.5) * cw, (r[1] + r[3] / 2.0 - 0.5) * ch); let s0 = start + i as f64 * frame;
