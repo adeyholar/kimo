@@ -30,10 +30,12 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
     ("rgb_split", "Chromatic aberration / glitch shift", &[("amount", 6.0, "pixels")]),
     ("invert", "Invert colors", &[]),
     ("chroma_key", "Remove a key color to alpha", &[("r",0.0,"key R"),("g",1.0,"key G"),("b",0.0,"key B"),("tolerance",0.35,"0..1"),("softness",0.1,"0..1")]),
+    ("lut", "3D LUT (.cube) via strings.path", &[("intensity", 1.0, "0..1")]),
+    ("hsl", "Hue/Sat/Lum, global + per color band (red,yellow,green,cyan,blue,magenta _hue/_sat/_lum)", &[("hue",0.0,"-1..1 (x60deg)"),("sat",0.0,"-1..1"),("lum",0.0,"-1..1"),("red_sat",0.0,"band"),("blue_hue",0.0,"band")]),
     ("letterbox", "Cinematic bars", &[("ratio", 2.39, "target aspect")]),
 ];
 
-pub fn apply(kind: &str, params: &Params, f: &mut Frame, t: f64, seed: u64) -> Result<(), String> {
+pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f: &mut Frame, t: f64, seed: u64) -> Result<(), String> {
     match kind {
         "exposure" => { let g = 2f32.powf(p(params, "stops", 0.0, t)); px(f, |c| [c[0]*g, c[1]*g, c[2]*g]); }
         "contrast" => { let a = p(params, "amount", 1.0, t); px(f, |c| [(c[0]-0.5)*a+0.5, (c[1]-0.5)*a+0.5, (c[2]-0.5)*a+0.5]); }
@@ -101,6 +103,17 @@ pub fn apply(kind: &str, params: &Params, f: &mut Frame, t: f64, seed: u64) -> R
             let bar = (f.h - vis_h)/2;
             for y in 0..f.h { if y < bar || y >= f.h - bar { for x in 0..f.w { let i=(y*f.w+x)*4; f.d[i]=0.0; f.d[i+1]=0.0; f.d[i+2]=0.0; f.d[i+3]=1.0; } } }
         }
+        "lut" => { let path = strings.get("path").ok_or("lut needs strings.path (.cube)")?; let l = load_lut(path)?; let a = p(params, "intensity", 1.0, t);
+            px(f, |c| { let o = l.sample(c); [c[0]+(o[0]-c[0])*a, c[1]+(o[1]-c[1])*a, c[2]+(o[2]-c[2])*a] }); }
+        "hsl" => {
+            let g = |k: &str| p(params, k, 0.0, t);
+            const BANDS: [(&str, f32); 6] = [("red",0.0),("yellow",60.0),("green",120.0),("cyan",180.0),("blue",240.0),("magenta",300.0)];
+            px(f, |c| { let (mut h, mut s, mut l) = rgb2hsl(c);
+                let (mut dh, mut ds, mut dl) = (g("hue"), g("sat"), g("lum"));
+                for (n, c0) in BANDS { let mut d = (h - c0).abs(); if d > 180.0 { d = 360.0 - d; } let w = (1.0 - d/60.0).max(0.0);
+                    if w > 0.0 { dh += g(&format!("{n}_hue"))*w; ds += g(&format!("{n}_sat"))*w; dl += g(&format!("{n}_lum"))*w; } }
+                h = (h + dh*60.0).rem_euclid(360.0); s = (s*(1.0+ds)).clamp(0.0,1.0); l = (l + dl*0.5).clamp(0.0,1.0); hsl2rgb(h, s, l) });
+        }
         other => return Err(format!("unknown effect '{other}'")),
     }
     Ok(())
@@ -129,4 +142,34 @@ fn blur_axis(f: &mut Frame, r: usize, horiz: bool) {
             for j in 0..4 { acc[j] += add[j] - sub[j]; }
         }
     }
+}
+
+pub struct Lut { n: usize, d: Vec<[f32; 3]> }
+impl Lut { pub fn sample(&self, c: [f32; 3]) -> [f32; 3] {
+    let m = (self.n - 1) as f32; let f = |v: f32| v.clamp(0.0, 1.0) * m; let (r, g, b) = (f(c[0]), f(c[1]), f(c[2]));
+    let (r0, g0, b0) = (r.floor() as usize, g.floor() as usize, b.floor() as usize); let (r1, g1, b1) = ((r0+1).min(self.n-1), (g0+1).min(self.n-1), (b0+1).min(self.n-1));
+    let (fr, fg, fb) = (r-r0 as f32, g-g0 as f32, b-b0 as f32);
+    let at = |r: usize, g: usize, b: usize| self.d[r + g*self.n + b*self.n*self.n];
+    let mut o = [0f32; 3];
+    for j in 0..3 { let c00 = at(r0,g0,b0)[j]*(1.0-fr)+at(r1,g0,b0)[j]*fr; let c10 = at(r0,g1,b0)[j]*(1.0-fr)+at(r1,g1,b0)[j]*fr;
+        let c01 = at(r0,g0,b1)[j]*(1.0-fr)+at(r1,g0,b1)[j]*fr; let c11 = at(r0,g1,b1)[j]*(1.0-fr)+at(r1,g1,b1)[j]*fr;
+        o[j] = (c00*(1.0-fg)+c10*fg)*(1.0-fb) + (c01*(1.0-fg)+c11*fg)*fb; }
+    o } }
+static LUTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Lut>>>> = std::sync::OnceLock::new();
+fn load_lut(path: &str) -> Result<std::sync::Arc<Lut>, String> {
+    let m = LUTS.get_or_init(|| Default::default()); let mut g = m.lock().unwrap(); if let Some(l) = g.get(path) { return Ok(l.clone()); }
+    let t = std::fs::read_to_string(path).map_err(|e| format!("lut {path}: {e}"))?; let mut n = 0; let mut d = vec![];
+    for l in t.lines() { let l = l.trim(); if l.starts_with("LUT_3D_SIZE") { n = l.split_whitespace().nth(1).and_then(|x| x.parse().ok()).unwrap_or(0); }
+        else if l.chars().next().map(|c| c.is_ascii_digit() || c == '-' || c == '.').unwrap_or(false) { let v: Vec<f32> = l.split_whitespace().filter_map(|x| x.parse().ok()).collect(); if v.len() == 3 { d.push([v[0], v[1], v[2]]); } } }
+    if n == 0 || d.len() != n*n*n { return Err("bad .cube (need LUT_3D_SIZE and n^3 rows)".into()); }
+    let l = std::sync::Arc::new(Lut { n, d }); g.insert(path.into(), l.clone()); Ok(l)
+}
+fn rgb2hsl(c: [f32; 3]) -> (f32, f32, f32) {
+    let (r, g, b) = (c[0].clamp(0.0,1.0), c[1].clamp(0.0,1.0), c[2].clamp(0.0,1.0)); let mx = r.max(g).max(b); let mn = r.min(g).min(b); let l = (mx+mn)/2.0; let d = mx-mn;
+    if d < 1e-6 { return (0.0, 0.0, l); } let s = d / (1.0 - (2.0*l-1.0).abs()).max(1e-6);
+    let h = if mx == r { ((g-b)/d).rem_euclid(6.0) } else if mx == g { (b-r)/d + 2.0 } else { (r-g)/d + 4.0 }; (h*60.0, s, l)
+}
+fn hsl2rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
+    let c = (1.0 - (2.0*l-1.0).abs()) * s; let x = c * (1.0 - ((h/60.0).rem_euclid(2.0) - 1.0).abs()); let m = l - c/2.0;
+    let (r, g, b) = match (h/60.0) as u32 { 0 => (c,x,0.0), 1 => (x,c,0.0), 2 => (0.0,c,x), 3 => (0.0,x,c), 4 => (x,0.0,c), _ => (c,0.0,x) }; [r+m, g+m, b+m]
 }

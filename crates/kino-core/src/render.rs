@@ -47,6 +47,9 @@ fn source_frame(p: &Project, c: &Clip, lt: f64, cache: &Cache) -> Frame {
     match &c.source {
         Source::Solid { color } => for i in 0..w*h { f.d[i*4]=color[0] as f32; f.d[i*4+1]=color[1] as f32; f.d[i*4+2]=color[2] as f32; f.d[i*4+3]=1.0; },
         Source::Gradient { c1, c2 } => for y in 0..h { let k = y as f64 / h as f64; for x in 0..w { let i=(y*w+x)*4; for j in 0..3 { f.d[i+j] = (c1[j]*(1.0-k)+c2[j]*k) as f32; } f.d[i+3]=1.0; } },
+        Source::Text { text, font, size, color, letter_spacing, stroke_width, stroke_color, shadow, align } => {
+            let _ = crate::text::render_text(&mut f, text, font, *size, *color, *letter_spacing, *stroke_width, *stroke_color, *shadow, align, prop(c, "reveal", lt));
+        }
         Source::Media { .. } => if let Some(fr) = cache.frames.get(&c.id) {
             let idx = ((lt * p.fps) as usize).min(fr.len().saturating_sub(1));
             if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
@@ -100,7 +103,8 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
         if t < c.start || t >= c.start + c.duration { continue; }
         let lt = t - c.start;
         let mut f = source_frame(p, c, lt, cache);
-        for e in &c.effects { effects::apply(&e.kind, &e.params, &mut f, lt, seed)?; }
+        for e in &c.effects { effects::apply(&e.kind, &e.params, &e.strings, &mut f, lt, seed)?; }
+        if let Some(m) = &c.mask { apply_mask(&mut f, m, lt); }
         let mut op = prop(c, "opacity", lt) as f32;
         let (mut dx, mut dy) = (prop(c, "x", lt), prop(c, "y", lt));
         let mut mask: Option<Box<dyn Fn(usize, usize) -> f32>> = None;
@@ -145,4 +149,22 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     for i in 0..n { let f = render_frame(p, i as f64 / p.fps, &cache)?; si.write_all(&to_rgba8(&f)).map_err(|e| e.to_string())?; }
     drop(si); ch.wait().map_err(|e| e.to_string())?;
     Ok(n as f64 / p.fps)
+}
+
+fn apply_mask(f: &mut Frame, m: &Mask, t: f64) {
+    let g = |k: &str, d: f64| m.props.get(k).map(|p| p.at(t)).unwrap_or(d) as f32;
+    let (cx, cy, mw, mh, feather, rot) = (g("cx",0.5), g("cy",0.5), g("w",0.5), g("h",0.5), g("feather",0.02).max(0.0005), g("rotation",0.0).to_radians());
+    let (w, h) = (f.w as f32, f.h as f32); let (s, c) = (rot.sin(), rot.cos());
+    for y in 0..f.h { for x in 0..f.w {
+        let (nx, ny) = (x as f32 / w - cx, y as f32 / h - cy);
+        let (ux, uy) = ((nx*c + ny*s) * (w / h), (-nx*s + ny*c));
+        let (ux, uy) = (ux / (w / h), uy);
+        let d = match m.shape.as_str() {
+            "ellipse" => { let e = ((ux/(mw/2.0)).powi(2) + (uy/(mh/2.0)).powi(2)).sqrt(); (1.0 - e) * (mw.min(mh)/2.0) }
+            "linear" => -ux,
+            _ => (mw/2.0 - ux.abs()).min(mh/2.0 - uy.abs()),
+        };
+        let mut a = (d / feather + 0.5).clamp(0.0, 1.0); if m.invert { a = 1.0 - a; }
+        f.d[(y*f.w+x)*4+3] *= a;
+    }}
 }

@@ -11,6 +11,16 @@ pub enum Source {
     Solid { color: [f64; 3] },
     /// Procedural gradient generator (c1 -> c2 vertical).
     Gradient { c1: [f64; 3], c2: [f64; 3] },
+    /// Rendered text (TTF/OTF via ab_glyph). Animate with the `reveal` prop (typewriter) plus transform props.
+    Text { text: String, font: String, size: f64, color: [f64; 3], letter_spacing: f64, stroke_width: f64, stroke_color: [f64; 3], shadow: f64, align: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Mask {
+    /// rect | ellipse | linear (left-to-right gradient edge) ; coordinates normalized 0..1 of canvas.
+    pub shape: String,
+    pub props: BTreeMap<String, Prop>, // cx, cy, w, h, feather, rotation
+    pub invert: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -18,6 +28,8 @@ pub struct Effect {
     pub id: String,
     pub kind: String,
     pub params: BTreeMap<String, Prop>,
+    #[serde(default)]
+    pub strings: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,6 +45,8 @@ pub struct Clip {
     pub props: BTreeMap<String, Prop>, // opacity, x, y, scale, rotation
     pub effects: Vec<Effect>,
     pub blend: String,
+    #[serde(default)]
+    pub mask: Option<Mask>,
     /// Transition INTO this clip from the previous clip on the track.
     pub transition_in: Option<Transition>,
 }
@@ -85,5 +99,6 @@ pub fn default_props() -> BTreeMap<String, Prop> {
     m.insert("y".into(), Prop::new(0.0));
     m.insert("scale".into(), Prop::new(1.0));
     m.insert("rotation".into(), Prop::new(0.0)); // degrees
+    m.insert("reveal".into(), Prop::new(1.0)); // text typewriter 0..1
     m
 }

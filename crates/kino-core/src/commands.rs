@@ -63,9 +63,34 @@ pub fn registry() -> Vec<Command> {
                 "gradient" => Source::Gradient { c1: color(a, "color", [0.0; 3]), c2: color(a, "color2", [1.0; 3]) },
                 o => return Err(format!("bad source_type {o}")) };
             let id = ss.project.gen_id("clip");
-            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: opt_num(a, "speed", 1.0), props: default_props(), effects: vec![], blend: "normal".into(), transition_in: None };
+            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: opt_num(a, "speed", 1.0), props: default_props(), effects: vec![], blend: "normal".into(), mask: None, transition_in: None };
             let tr = ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or(format!("no track '{tid}'"))?; tr.clips.push(c);
             Ok(json!({"clip_id":id})) } },
+    Command { name: "add_text", description: "Add a text clip (rendered with a TTF/OTF font). Animate with set_keyframe on reveal (typewriter), opacity, scale, x, y, rotation. Default font is a system sans.", mutates: true,
+        schema: obj(vec![("track_id", s("track")), ("text", s("text, \\n for newlines")), ("start", n("seconds")), ("duration", n("seconds")), ("font", s("path to .ttf/.otf (optional)")), ("size", n("pixels, default 72")),
+            ("color", json!({"type":"array","items":{"type":"number"}})), ("letter_spacing", n("pixels")), ("stroke_width", n("pixels")), ("stroke_color", json!({"type":"array","items":{"type":"number"}})), ("shadow", n("shadow offset pixels")), ("align", json!({"type":"string","enum":["left","center","right"]}))], &["track_id","text","start","duration"]),
+        run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let id = ss.project.gen_id("clip");
+            let src = Source::Text { text: str_arg(a, "text")?.replace("\\n", "\n"), font: a.get("font").and_then(|v| v.as_str()).unwrap_or("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf").into(), size: opt_num(a, "size", 72.0), color: color(a, "color", [1.0; 3]),
+                letter_spacing: opt_num(a, "letter_spacing", 0.0), stroke_width: opt_num(a, "stroke_width", 0.0), stroke_color: color(a, "stroke_color", [0.0; 3]), shadow: opt_num(a, "shadow", 0.0), align: a.get("align").and_then(|v| v.as_str()).unwrap_or("center").into() };
+            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, transition_in: None };
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
+    Command { name: "set_text", description: "Edit text content/style of a text clip.", mutates: true,
+        schema: obj(vec![("clip_id", s("text clip")), ("text", s("new text")), ("size", n("pixels")), ("color", json!({"type":"array","items":{"type":"number"}}))], &["clip_id"]),
+        run: |ss, a| { let c = clip(&mut ss.project, a)?; if let Source::Text { text, size, color: col, .. } = &mut c.source {
+            if let Some(t) = a.get("text").and_then(|v| v.as_str()) { *text = t.replace("\\n", "\n"); } if let Some(v) = a.get("size").and_then(|v| v.as_f64()) { *size = v; }
+            if a.get("color").is_some() { *col = color(a, "color", *col); } Ok(json!({"ok":true})) } else { Err("not a text clip".into()) } } },
+    Command { name: "set_mask", description: "Set a mask on a clip: shape rect|ellipse|linear, normalized cx,cy,w,h (0..1), feather (0..1), rotation (deg), invert. Mask params are keyframable via set_mask_keyframe.", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("shape", json!({"type":"string","enum":["rect","ellipse","linear"]})), ("cx", n("0..1")), ("cy", n("0..1")), ("w", n("0..1")), ("h", n("0..1")), ("feather", n("0..1")), ("rotation", n("degrees")), ("invert", json!({"type":"boolean"}))], &["clip_id","shape"]),
+        run: |ss, a| { let shape = str_arg(a, "shape")?.to_string(); let mut props = std::collections::BTreeMap::new();
+            for (k, d) in [("cx",0.5),("cy",0.5),("w",0.5),("h",0.5),("feather",0.02),("rotation",0.0)] { props.insert(k.to_string(), Prop::new(opt_num(a, k, d))); }
+            let inv = a.get("invert").and_then(|v| v.as_bool()).unwrap_or(false); clip(&mut ss.project, a)?.mask = Some(Mask { shape, props, invert: inv }); Ok(json!({"ok":true})) } },
+    Command { name: "set_mask_keyframe", description: "Keyframe a mask param (cx, cy, w, h, feather, rotation) at clip-local time.", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("property", s("mask param")), ("time", n("seconds")), ("value", n("value")), ("ease", json!({"type":"string","enum":["linear","in","out","in_out","hold"]}))], &["clip_id","property","time","value"]),
+        run: |ss, a| { let k = str_arg(a, "property")?.to_string(); let t = num_arg(a, "time")?; let v = num_arg(a, "value")?; let e: Ease = serde_json::from_value(a.get("ease").cloned().unwrap_or(json!("linear"))).map_err(|e| e.to_string())?;
+            let m = clip(&mut ss.project, a)?.mask.as_mut().ok_or("clip has no mask")?; m.props.entry(k).or_insert(Prop::new(v)).set_key(t, v, e); Ok(json!({"ok":true})) } },
+    Command { name: "remove_mask", description: "Remove a clip's mask.", mutates: true,
+        schema: obj(vec![("clip_id", s("clip"))], &["clip_id"]),
+        run: |ss, a| { clip(&mut ss.project, a)?.mask = None; Ok(json!({"ok":true})) } },
     Command { name: "move_clip", description: "Move a clip to a new timeline start time.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("start", n("seconds"))], &["clip_id","start"]),
         run: |ss, a| { let st = num_arg(a, "start")?; clip(&mut ss.project, a)?.start = st; Ok(json!({"ok":true})) } },
@@ -101,11 +126,13 @@ pub fn registry() -> Vec<Command> {
         schema: obj(vec![], &[]),
         run: |_, _| Ok(json!(CATALOG.iter().map(|(k, d, ps)| json!({"kind":k,"description":d,"params":ps.iter().map(|(n,dv,dd)| json!({"name":n,"default":dv,"description":dd})).collect::<Vec<_>>()})).collect::<Vec<_>>())) },
     Command { name: "add_effect", description: "Add an effect to a clip (see list_effects). params is {name: number}. Effects run in order.", mutates: true,
-        schema: obj(vec![("clip_id", s("clip")), ("kind", json!({"type":"string","enum":eff_kinds})), ("params", json!({"type":"object","additionalProperties":{"type":"number"}}))], &["clip_id","kind"]),
+        schema: obj(vec![("clip_id", s("clip")), ("kind", json!({"type":"string","enum":eff_kinds})), ("params", json!({"type":"object","additionalProperties":{"type":"number"}})), ("strings", json!({"type":"object","additionalProperties":{"type":"string"},"description":"string params, e.g. lut: {path:\"/x.cube\"}"}))], &["clip_id","kind"]),
         run: |ss, a| { let kind = str_arg(a, "kind")?.to_string(); if !CATALOG.iter().any(|c| c.0 == kind) { return Err(format!("unknown effect '{kind}'")); }
             let eid = ss.project.gen_id("fx"); let mut params = std::collections::BTreeMap::new();
+            let mut strings = std::collections::BTreeMap::new();
+            if let Some(o) = a.get("strings").and_then(|v| v.as_object()) { for (k, v) in o { strings.insert(k.clone(), v.as_str().unwrap_or("").to_string()); } }
             if let Some(o) = a.get("params").and_then(|v| v.as_object()) { for (k, v) in o { params.insert(k.clone(), Prop::new(v.as_f64().ok_or("param must be number")?)); } }
-            clip(&mut ss.project, a)?.effects.push(Effect { id: eid.clone(), kind, params }); Ok(json!({"effect_id":eid})) } },
+            clip(&mut ss.project, a)?.effects.push(Effect { id: eid.clone(), kind, params, strings }); Ok(json!({"effect_id":eid})) } },
     Command { name: "set_effect_param", description: "Set a base effect parameter value.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("effect_id", s("effect")), ("param", s("name")), ("value", n("value"))], &["clip_id","effect_id","param","value"]),
         run: |ss, a| { let eid = str_arg(a, "effect_id")?.to_string(); let k = str_arg(a, "param")?.to_string(); let v = num_arg(a, "value")?;
