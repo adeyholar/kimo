@@ -52,6 +52,7 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     let fitf = if fit >= 1.5 { format!("scale={w}:{h}") } else if fit >= 0.5 { format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}") } else { format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0") };
     if p.color_pipeline.enabled&&path.to_lowercase().ends_with(".exr"){crate::color::interchange::validate_exr_source(path)?;}
     let float_source=p.color_pipeline.enabled&&[".exr",".pfm"].iter().any(|ext|path.to_lowercase().ends_with(ext));
+    let native_fit=float_source||(p.color_pipeline.enabled&&p.color_pipeline.linear_resample);
     let pix=if float_source{"gbrapf32le"}else if p.color_pipeline.enabled{"rgba64le"}else{"rgba"};
     let vf = format!("setpts=PTS/{},fps={},{},format={pix}", speed.max(0.01), p.fps, fitf);
     let is_img = ["png","jpg","jpeg","webp","bmp","exr","tif","tiff","pfm"].iter().any(|e| path.to_lowercase().ends_with(e));
@@ -59,19 +60,30 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     let fs = (w * h * 4) as usize;
 
 
-    let (dw,dh)=if float_source{let(q,r,_,_)=probe(path)?;(q as usize,r as usize)}else{(w as usize,h as usize)};
+    let (dw,dh)=if native_fit{let(q,r,_,_)=probe(path)?;(q as usize,r as usize)}else{(w as usize,h as usize)};
     let raw_fs=dw.checked_mul(dh).and_then(|v|v.checked_mul(4)).ok_or("source dimensions overflow")?;
     let estimate=raw_fs.max(fs).checked_mul(if p.color_pipeline.enabled{8}else{1}).ok_or("decode allocation overflow")?.checked_mul(n.max(1)).ok_or("decode allocation overflow")?;
     if estimate>decode_cache_limit(){return Err("decode request exceeds bounded cache; reduce size/duration or use windowed timing".into())}
     crate::guard::reserve(estimate);
     let exr_args:Vec<&str>=if path.to_lowercase().ends_with(".exr"){vec!["-apply_trc","linear"]}else{vec![]};
-    let vf=if float_source{format!("setpts=PTS/{},fps={},format={pix}",speed.max(0.01),p.fps)}else{vf};
+    let vf=if native_fit{format!("setpts=PTS/{},fps={},format={pix}",speed.max(0.01),p.fps)}else{vf};
     let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(&exr_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"])
         .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
-    let mut buf = Vec::with_capacity(fs * n.max(1) * if p.color_pipeline.enabled {4}else{1}); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let status=child.wait().map_err(|e|e.to_string())?;if !status.success(){return Err("media decode failed".into())}
-    let linear_buf=if p.color_pipeline.enabled {let values=if float_source{let mut values=Vec::with_capacity(buf.len()/4);if buf.len()%(raw_fs*4)!=0{return Err("truncated float decode".into())}for frame in buf.chunks_exact(raw_fs*4){let d=crate::color::interchange::unpack(frame,dw,dh)?;let mut source=Frame{w:dw,h:dh,d};crate::color::pipeline::input(p,c,&mut source)?;values.extend(crate::color::interchange::fit(&source,w as usize,h as usize,fit)?)}values}else{buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect()};buf=Vec::new();Some(values)}else{None};
+    let mut buf=Vec::new();
+    let linear_buf=if native_fit{
+        let bytes_per_frame=raw_fs.checked_mul(if float_source{4}else{2}).ok_or("native frame size overflow")?;
+        let mut stdout=child.stdout.take().ok_or("no decode output")?;let mut frame=vec![0u8;bytes_per_frame];let mut values=Vec::with_capacity(fs*n.max(1));let mut error=None;
+        for _ in 0..n.max(1){crate::guard::check();let mut have=0;while have<frame.len(){match stdout.read(&mut frame[have..]){Ok(0)=>break,Ok(k)=>have+=k,Err(e)=>{error=Some(e.to_string());break}}}if have==0{break}if have!=frame.len(){error=Some("truncated native decode".into());break}
+         let d=if float_source{crate::color::interchange::unpack(&frame,dw,dh)}else{Ok(frame.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect())};
+         let fitted=d.and_then(|d|{let mut source=Frame{w:dw,h:dh,d};crate::color::pipeline::input(p,c,&mut source)?;crate::color::interchange::fit(&source,w as usize,h as usize,fit)});match fitted{Ok(d)=>values.extend(d),Err(e)=>{error=Some(e);break}}
+        }
+        drop(stdout);if error.is_some(){let _=child.kill();}let status=child.wait().map_err(|e|e.to_string())?;if let Some(e)=error{return Err(e)}if !status.success(){return Err("native media decode failed".into())}Some(values)
+    }else{
+        child.stdout.take().ok_or("no decode output")?.read_to_end(&mut buf).map_err(|e|e.to_string())?;if !child.wait().map_err(|e|e.to_string())?.success(){return Err("media decode failed".into())}
+        if p.color_pipeline.enabled{let values=buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect();buf=Vec::new();Some(values)}else{None}
+    };
     let k = buf.len() / fs; buf.truncate(k * fs);
-    Ok(Frames { working_linear:float_source,quantized:Default::default(),linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
+    Ok(Frames { working_linear:native_fit,quantized:Default::default(),linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
 }
 
 fn decode_cache_limit()->usize{(crate::guard::limits().mem_bytes/3).min(256*1024*1024).max(1024*1024)}
@@ -95,14 +107,15 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
         let (ta, tb) = match c.time_mode { TimeMode::Normal => (t0, t1), TimeMode::Reverse => (c.start + c.duration - (t1 - c.start), c.start + c.duration - (t0 - c.start)), TimeMode::Freeze { at } => (c.start + at, c.start + at) };
         let (t0, t1) = (ta, tb);
         let (ia, ib) = if all || c.speed_curve.is_some() { (0, total - 1) } else { ((((t0 - c.start).max(0.0) * p.fps).floor() as usize).min(total - 1), (((t1 - c.start).max(0.0) * p.fps).ceil() as usize).min(total - 1)) };
-        let sig = format!("{asset}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()), p.color_pipeline,c.props.get("input_gamut"),c.props.get("input_transfer"));
-        if let Some((s, fr)) = cache.frames.get(&c.id) { if *s == sig && fr.covers(ia, ib) { continue; } }
         let a = p.assets.get(asset).ok_or(format!("asset {asset} missing"))?;
+        let stat=std::fs::metadata(&a.path).map_err(|e|format!("media stat: {e}"))?;
+        let sig = format!("{asset}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()), p.color_pipeline,c.props.get("input_gamut"),c.props.get("input_transfer"),c.props.get("fit"),a.path,stat.len(),stat.modified().ok());
+        if let Some((s, fr)) = cache.frames.get(&c.id) { if *s == sig && fr.covers(ia, ib) { continue; } }
         if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, Frames { working_linear:false,quantized:Default::default(),linear_buf: None, buf: vec![], fs: 0, first: 0 })); continue; }
         // whole-clip decode only for speed-ramped clips (index mapping is in source time); everything else is windowed
         let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(WINDOW).min(total - ia)) };
         let mut count=count;
-        if !all && c.speed_curve.is_none(){let per=(p.width as usize)*(p.height as usize)*4*if p.color_pipeline.enabled{8}else{1};count=count.min((decode_cache_limit()/per.max(1)).max(1));if count<ib-ia+1{return Err("active decode range exceeds cache budget".into())}}
+        if !all && c.speed_curve.is_none(){let native=p.color_pipeline.enabled&&p.color_pipeline.linear_resample;let pixels=if native{let(dw,dh,_,_)=probe(&a.path)?;(dw as usize*dh as usize).max(p.width as usize*p.height as usize)}else{p.width as usize*p.height as usize};let per=pixels*4*if p.color_pipeline.enabled{8}else{1};count=count.min((decode_cache_limit()/per.max(1)).max(1));if count<ib-ia+1{return Err("active decode range exceeds cache budget".into())}}
         cache.frames.remove(&c.id);
         let fr = decode(p, c, &a.path, start, count)?;
         let bytes=|fr:&Frames|fr.buf.len()+fr.linear_buf.as_ref().map(|b|b.len()*5).unwrap_or(0);

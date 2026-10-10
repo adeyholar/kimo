@@ -3,10 +3,10 @@ use serde::{Serialize,Deserialize};
 use crate::{effects::Frame,model::{Project,Clip}};
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
 #[serde(default)]pub struct Pipeline {
-    pub mastering:Option<super::metadata::Mastering>,pub enabled:bool,pub working_gamut:usize,pub input_gamut:usize,pub input_transfer:usize,
+    pub linear_resample:bool,pub mastering:Option<super::metadata::Mastering>,pub enabled:bool,pub working_gamut:usize,pub input_gamut:usize,pub input_transfer:usize,
     pub output_gamut:usize,pub output_transfer:usize,pub reference_white:f64,pub tone_map:bool,pub gamut_compress:bool,
 }
-impl Default for Pipeline{fn default()->Self{Self{mastering:None,enabled:false,working_gamut:3,input_gamut:0,input_transfer:1,output_gamut:0,output_transfer:1,reference_white:100.,tone_map:false,gamut_compress:false}}}
+impl Default for Pipeline{fn default()->Self{Self{linear_resample:false,mastering:None,enabled:false,working_gamut:3,input_gamut:0,input_transfer:1,output_gamut:0,output_transfer:1,reference_white:100.,tone_map:false,gamut_compress:false}}}
 impl Pipeline{pub fn validate(&self)->Result<(),String>{if self.working_gamut>7||self.input_gamut>7||self.output_gamut>7||self.input_transfer>8||self.output_transfer>8||!self.reference_white.is_finite()||!(1. ..=10000.).contains(&self.reference_white){return Err("invalid project color pipeline".into())}if let Some(m)=&self.mastering{m.validate()?;if !self.enabled||self.output_gamut!=1||self.output_transfer!=6{return Err("static mastering metadata requires enabled Rec2020 PQ output".into())}}Ok(())}}
 fn transform(f:&mut Frame,from:usize,to:usize,a:usize,b:usize,white:f64,tone:bool,compress:bool)->Result<(),String>{
     let mut params=crate::effects::Params::new();for(k,v)in[("from_gamut",from as f64),("to_gamut",to as f64),("from_transfer",a as f64),("to_transfer",b as f64),("reference_white",white),("tone_map",if tone{1.}else{0.}),("gamut_compress",if compress{1.}else{0.})]{params.insert(k.into(),crate::keyframe::Prop::new(v));}super::managed::apply(&params,f,0.)
