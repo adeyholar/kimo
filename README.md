@@ -19,6 +19,7 @@ Call `tools/list` to see everything. Start with `project_set`, `import_media`, `
 ## Tools (generated from the registry)
 Timeline: project_set, import_media, add_track, add_clip, move/trim/split/delete_clip, set_speed, set_speed_ramp, undo/redo, save/load_project, get_project.
 Look and motion: set_property, set_keyframe (any property or effect param, with easing), set_blend, set_mask + set_mask_keyframe, add_effect (list_effects), add_transition (list_transitions).
+Particles: add_particles (embers, sparks, snow, rain, dust). Export: export, export_gif, export_audio. Speech: transcribe (needs whisper CLI).
 Text: add_text (typewriter, stroke, shadow), set_text, import_srt (captions).
 Color: exposure, contrast, saturation, temperature, tint, color_wheels, curves, teal_orange, hsl, lut (.cube), color_isolate, get_scopes.
 Vision: track_point (pin text to a moving surface), stabilize, chroma_key.
