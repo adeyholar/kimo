@@ -27,3 +27,12 @@ pub fn tiff_frame(path:&str,budget:usize)->Result<Frame,String>{
  if values.len()!=n*channels||values.iter().any(|v|!v.is_finite()){return Err("invalid/nonfinite TIFF samples".into())}
  let mut d=Vec::with_capacity(n*4);for v in values.chunks_exact(channels){d.extend_from_slice(&v[..3]);d.push(if channels==4{v[3]}else{1.})}Ok(Frame{w:w as usize,h:h as usize,d})
 }
+/// Scene-linear RGBA with standard chromaticities and caller-declared white luminance.
+pub fn write_exr(f:&Frame,path:&str,gamut:usize,white:f64)->Result<(),String>{
+ use exr::{meta::attribute::Chromaticities,prelude::*};
+ if gamut>7||!white.is_finite()||!(1. ..=10000.).contains(&white){return Err("invalid EXR color metadata".into())}
+ if f.w.checked_mul(f.h).and_then(|v|v.checked_mul(4))!=Some(f.d.len())||f.d.iter().any(|v|!v.is_finite()){return Err("invalid EXR pixels".into())}
+ let (c,w)=super::managed::chroma(gamut);let xy=|q:[f64;2]|Vec2(q[0] as f32,q[1] as f32);
+ let mut attributes=LayerAttributes::named("scene-linear");attributes.white_luminance=Some(white as f32);attributes.adopted_neutral=Some(xy(w));attributes.comments=Some(Text::from("Scene-linear working RGB; whiteLuminance is caller-declared, not measured. No ACES output transform."));
+ let layer=Layer::new((f.w,f.h),attributes,Encoding::SMALL_FAST_LOSSLESS,SpecificChannels::rgba(|pos:Vec2<usize>|{let i=(pos.y()*f.w+pos.x())*4;(f.d[i],f.d[i+1],f.d[i+2],f.d[i+3])}));let mut image=Image::from_layer(layer);image.attributes.chromaticities=Some(Chromaticities{red:xy(c[0]),green:xy(c[1]),blue:xy(c[2]),white:xy(w)});image.write().to_file(path).map_err(|e|e.to_string())
+}

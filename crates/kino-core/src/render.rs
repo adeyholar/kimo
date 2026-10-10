@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 /// Decoded frames for media clips, keyed by clip id. Frames are RGBA8 at project size, project fps,
 /// with speed already applied.
 /// A decoded window of consecutive frames, contiguous in memory. `first` is the global frame index of buf[0].
-pub struct Frames { pub quantized: std::sync::OnceLock<Vec<u8>>, pub linear_buf: Option<Vec<f32>>, pub buf: Vec<u8>, pub fs: usize, pub first: usize }
+pub struct Frames { pub working_linear:bool, pub quantized: std::sync::OnceLock<Vec<u8>>, pub linear_buf: Option<Vec<f32>>, pub buf: Vec<u8>, pub fs: usize, pub first: usize }
 impl Frames {
     pub fn get_float(&self,g:usize)->Option<&[f32]>{let b=self.linear_buf.as_ref()?;let n=self.len();if n==0{return None}let i=g.saturating_sub(self.first).min(n-1);Some(&b[i*self.fs..(i+1)*self.fs])}
     pub fn len(&self) -> usize { if self.fs == 0 { 0 } else { self.linear_buf.as_ref().map(|b|b.len()).unwrap_or(self.buf.len()) / self.fs } }
@@ -41,10 +41,11 @@ const WINDOW: usize = 24;
 fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frames, String> {
     let (w, h) = (p.width, p.height);
     if p.color_pipeline.enabled&&[".tif",".tiff"].iter().any(|e|path.to_lowercase().ends_with(e)){
-      let src=crate::color::interchange::tiff_frame(path,decode_cache_limit())?;
+      let mut src=crate::color::interchange::tiff_frame(path,decode_cache_limit())?;
       let fit=c.props.get("fit").map(|q|q.at(0.)).unwrap_or(0.);
+      crate::color::pipeline::input(p,c,&mut src)?;
       let d=crate::color::interchange::fit(&src,w as usize,h as usize,fit)?;
-      return Ok(Frames{quantized:Default::default(),linear_buf:Some(d),buf:vec![],fs:w as usize*h as usize*4,first:0})
+      return Ok(Frames{working_linear:true,quantized:Default::default(),linear_buf:Some(d),buf:vec![],fs:w as usize*h as usize*4,first:0})
     } let is_img0 = { let l = path.to_lowercase(); ["png","jpg","jpeg","webp","bmp","exr","tif","tiff","pfm"].iter().any(|e| l.ends_with(e)) }; let (a, n) = if is_img0 { (0, 1) } else { (a, n) };
     let (in_pt, speed, span) = if c.speed_curve.is_some() { (c.in_point, 1.0, c.source_time(c.duration)) } else { (c.in_point + a as f64 / p.fps * c.speed, c.speed, n as f64 / p.fps * c.speed) };
     let fit = c.props.get("fit").map(|q| q.at(0.0)).unwrap_or(0.0);
@@ -67,9 +68,9 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(&exr_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"])
         .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
     let mut buf = Vec::with_capacity(fs * n.max(1) * if p.color_pipeline.enabled {4}else{1}); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let status=child.wait().map_err(|e|e.to_string())?;if !status.success(){return Err("media decode failed".into())}
-    let linear_buf=if p.color_pipeline.enabled {let values=if float_source{let mut values=Vec::with_capacity(buf.len()/4);if buf.len()%(raw_fs*4)!=0{return Err("truncated float decode".into())}for frame in buf.chunks_exact(raw_fs*4){let d=crate::color::interchange::unpack(frame,dw,dh)?;values.extend(crate::color::interchange::fit(&Frame{w:dw,h:dh,d},w as usize,h as usize,fit)?)}values}else{buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect()};buf=Vec::new();Some(values)}else{None};
+    let linear_buf=if p.color_pipeline.enabled {let values=if float_source{let mut values=Vec::with_capacity(buf.len()/4);if buf.len()%(raw_fs*4)!=0{return Err("truncated float decode".into())}for frame in buf.chunks_exact(raw_fs*4){let d=crate::color::interchange::unpack(frame,dw,dh)?;let mut source=Frame{w:dw,h:dh,d};crate::color::pipeline::input(p,c,&mut source)?;values.extend(crate::color::interchange::fit(&source,w as usize,h as usize,fit)?)}values}else{buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect()};buf=Vec::new();Some(values)}else{None};
     let k = buf.len() / fs; buf.truncate(k * fs);
-    Ok(Frames { quantized:Default::default(),linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
+    Ok(Frames { working_linear:float_source,quantized:Default::default(),linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
 }
 
 fn decode_cache_limit()->usize{(crate::guard::limits().mem_bytes/3).min(256*1024*1024).max(1024*1024)}
@@ -93,10 +94,10 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
         let (ta, tb) = match c.time_mode { TimeMode::Normal => (t0, t1), TimeMode::Reverse => (c.start + c.duration - (t1 - c.start), c.start + c.duration - (t0 - c.start)), TimeMode::Freeze { at } => (c.start + at, c.start + at) };
         let (t0, t1) = (ta, tb);
         let (ia, ib) = if all || c.speed_curve.is_some() { (0, total - 1) } else { ((((t0 - c.start).max(0.0) * p.fps).floor() as usize).min(total - 1), (((t1 - c.start).max(0.0) * p.fps).ceil() as usize).min(total - 1)) };
-        let sig = format!("{asset}|{}|{}|{}|{:?}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()), p.color_pipeline);
+        let sig = format!("{asset}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()), p.color_pipeline,c.props.get("input_gamut"),c.props.get("input_transfer"));
         if let Some((s, fr)) = cache.frames.get(&c.id) { if *s == sig && fr.covers(ia, ib) { continue; } }
         let a = p.assets.get(asset).ok_or(format!("asset {asset} missing"))?;
-        if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, Frames { quantized:Default::default(),linear_buf: None, buf: vec![], fs: 0, first: 0 })); continue; }
+        if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, Frames { working_linear:false,quantized:Default::default(),linear_buf: None, buf: vec![], fs: 0, first: 0 })); continue; }
         // whole-clip decode only for speed-ramped clips (index mapping is in source time); everything else is windowed
         let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(WINDOW).min(total - ia)) };
         let mut count=count;
@@ -163,13 +164,14 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
             let _ = crate::text::render_text(&mut f, text, font, *size, *color, *letter_spacing, *stroke_width, *stroke_color, *shadow, align, prop(c, "reveal", lt), c.text_fx.as_ref(), lt);
         }
         Source::Media { .. } => if let Some(fr) = cache.frames_of(&c.id) {
+            source_linear=fr.working_linear;
             let idx = if c.speed_curve.is_some() { (c.source_time(lt) * p.fps) as usize } else { (lt * p.fps) as usize };
             if let Some(b)=fr.get_float(idx){f.d.copy_from_slice(b)}else if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
             let fb = prop(c, "flow_blur", lt) as f32;
             if fb > 0.0 { let nxt=if fr.len()>0 {Some(idx+1)}else{None};
                 if let Some(next_idx) = nxt { let mut g2 = Frame::new(w, h);
                     if let Some(b)=fr.get_float(next_idx){g2.d.copy_from_slice(b)}else if let Some(nb)=fr.get(next_idx){for (i,v) in nb.iter().enumerate(){g2.d[i]=*v as f32/255.;}}
-                    if p.color_pipeline.enabled {let a=crate::color::pipeline::input(p,c,&mut f);let b=crate::color::pipeline::input(p,c,&mut g2);source_linear=true;if a.is_err()||b.is_err(){f.d.fill(f32::NAN);}}
+                    if p.color_pipeline.enabled && !source_linear {let a=crate::color::pipeline::input(p,c,&mut f);let b=crate::color::pipeline::input(p,c,&mut g2);source_linear=true;if a.is_err()||b.is_err(){f.d.fill(f32::NAN);}}
                     let q = (prop(c, "flow_quality", lt) as usize).clamp(3,6);
                     let src = Frame { w, h, d: f.d.clone() }; f = crate::flow::flow_blur(&src, &g2, fb.clamp(0.,2.), q); } }
         },
