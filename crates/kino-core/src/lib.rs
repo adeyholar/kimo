@@ -4,6 +4,7 @@
 pub mod keyframe;
 pub mod hud;
 pub mod flow;
+pub mod planar;
 pub mod motion;
 pub mod masks;
 pub mod confetti;

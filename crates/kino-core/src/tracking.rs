@@ -25,6 +25,7 @@ fn clip_gray(p: &Project, cache: &mut Cache, c: &Clip, i: usize) -> Result<Vec<f
     let t = c.start + i as f64 / p.fps + 1e-4; crate::render::prepare_range(p, cache, t, t)?;
     let fr = cache.frames_of(&c.id).ok_or("clip is not a media clip")?; let b = fr.get(i).ok_or("no frame")?; Ok(gray(b, p.width as usize, p.height as usize))
 }
+pub fn clip_gray_pub(p: &Project, cache: &mut Cache, c: &Clip, i: usize) -> Result<Vec<f32>, String> { clip_gray(p, cache, c, i) }
 fn nframes(p: &Project, c: &Clip) -> usize { ((c.duration * p.fps).ceil() as usize).max(1) }
 
 /// Similarity transform (scale, rotation, translation) mapping points a -> b, least squares (Umeyama) with iterative outlier rejection.

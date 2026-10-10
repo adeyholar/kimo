@@ -247,7 +247,7 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
             mask = None; tplan = Some(pl);
         }}
         let mut f = f; if let Some(pl) = tplan.as_mut() { mask = pl.mask.take(); if let Some(po) = &pl.post { po(&mut f); } }
-        let f = if let Some(cs) = &c.corners { corner_pin(&f, cs) } else { f };
+        let f = if let Some(pf) = crate::planar::pin_render(c, &f, lt, p.fps) { pf } else if let Some(cs) = &c.corners { corner_pin(&f, cs) } else { f };
         let (rxv, ryv, pzv) = (prop(c, "rot_x", lt), prop(c, "rot_y", lt), prop(c, "pos_z", lt));
         if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 {
             let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(c, "rotation", lt) + rot_extra], scale: sc };
