@@ -22,7 +22,7 @@ fn d_rest() -> f64 { 0.35 } fn d_fric() -> f64 { 0.5 } fn d_tr() -> bool { true 
 fn h(a: u64, i: u64, k: u64) -> f64 { let mut x = a.wrapping_mul(0x9E3779B97F4A7C15) ^ i.wrapping_mul(0xBF58476D1CE4E5B9) ^ k.wrapping_mul(0x94D049BB133111EB); x ^= x >> 30; x = x.wrapping_mul(0xBF58476D1CE4E5B9); x ^= x >> 27; x = x.wrapping_mul(0x94D049BB133111EB); x ^= x >> 31; (x >> 11) as f64 / (1u64 << 53) as f64 }
 fn sstep(x: f64) -> f64 { let t = x.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) }
 
-struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64 }
+struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64, n3: [f64; 3] }
 
 pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
     let (w, hh) = (f.w, f.h); let cv = CamView::new(w, hh, cam); let fl = cv.focal(); let k = w.min(hh) as f64 / 720.0;
@@ -56,8 +56,8 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             { let (fp, bp) = (shard[0].0, shard[1].0); for v in 0..nv { let w2 = (v + 1) % nv; let (ex, ey) = (loc[w2].0 - loc[v].0, loc[w2].1 - loc[v].1); let l = (ex * ex + ey * ey).sqrt().max(1e-9); let nl = [ey / l, -ex / l, 0.0];
                 let nw = [rm[0][0] * nl[0] + rm[0][1] * nl[1], rm[1][0] * nl[0] + rm[1][1] * nl[1], rm[2][0] * nl[0] + rm[2][1] * nl[1]]; let nd = nw[0] * lg[0] + nw[1] * lg[1] + nw[2] * lg[2]; let rf = [lg[0] - 2.0 * nd * nw[0], lg[1] - 2.0 * nd * nw[1], lg[2] - 2.0 * nd * nw[2]];
                 let sp2 = rf[2].max(0.0).powi(14) + 0.4 * (-rf[2]).max(0.0).powi(14); let mut q = [(0.0, 0.0); 6]; q[0] = fp[v]; q[1] = fp[w2]; q[2] = bp[w2]; q[3] = bp[v];
-                prims.push(Prim { depth: (shard[0].1 + shard[1].1) / 2.0 - 0.01, pts: q, n: 4, nz: nw[2].abs(), spec: sp2 + 0.12, rim_c: coc, blur: coc, alpha: al * 0.8, face: 2, u: r(15), tx: nw[0] * thick * 1.6, ty: nw[1] * thick * 1.6 }); } }
-            for (fi, (pts, dz, _, _, _)) in shard.into_iter().enumerate() { prims.push(Prim { depth: dz, pts, n: nv, nz: nrm[2].abs(), spec, rim_c: fres, blur: coc, alpha: al, face: fi, u: r(15), tx: nrm[0] * thick, ty: nrm[1] * thick }); }
+                prims.push(Prim { depth: (shard[0].1 + shard[1].1) / 2.0 - 0.01, pts: q, n: 4, nz: nw[2].abs(), spec: sp2 + 0.12, rim_c: coc, blur: coc, alpha: al * 0.8, face: 2, u: r(15), tx: nw[0] * thick * 1.6, ty: nw[1] * thick * 1.6, n3: nw }); } }
+            for (fi, (pts, dz, _, _, _)) in shard.into_iter().enumerate() { prims.push(Prim { depth: dz, pts, n: nv, nz: nrm[2].abs(), spec, rim_c: fres, blur: coc, alpha: al, face: fi, u: r(15), tx: nrm[0] * thick, ty: nrm[1] * thick, n3: nrm }); }
         }
         prims.sort_by(|a, b| b.depth.partial_cmp(&a.depth).unwrap());
         for pr in &prims {
@@ -73,8 +73,11 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                 let face_a = (e.fresnel * 1.3 * pr.rim_c * (0.6 + 0.8 * grad) + 0.17 + 0.2 * (1.0 - pr.nz) + 0.1 * grad + 1.0 * pr.spec * if pr.face == 0 { 1.0 } else { 0.6 }) * if pr.face == 1 { 0.7 } else { 1.0 };
                 let face_a = if rf { face_a * 0.45 } else { face_a }; let face_a = face_a * (1.0 - 0.5 * gl); let a = ((face_a + 0.5 * rim * (1.0 - 0.8 * gl) * (0.5 + 0.5 * pr.face as f64 * 0.0 + 0.5)) * cov * pr.alpha).min(0.95); if a <= 0.002 { continue; }
                 let br = e.brightness; let base = [e.tint[0], e.tint[1], e.tint[2]]; let sp = pr.spec * 0.8; let o = y * w + x;
-                let rw = |c: f64, t: f64| c * (1.0 - 0.6 * gl) + c * t * 0.6 * gl; let glint = gl * pr.spec * pr.spec * 1.2 * rim; let cr = ((base[0] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rr, base[0]) + glint) * br; let cg = ((base[1] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rg, base[1]) + glint) * br; let cb = ((base[2] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rb, base[2]) + glint) * br;
-                let (ca, aa) = (a as f32, acca[o]); // over (premultiplied accumulation)
+                let envl = if gl > 0.0 { let (n0, n1, n2) = (pr.n3[0], pr.n3[1], pr.n3[2]); let sg = if n2 < 0.0 { -1.0 } else { 1.0 }; let (n0, n1, n2) = (n0 * sg, n1 * sg, n2 * sg); let (lx, ly) = ((px - cxm) / size_px, (py - cym) / size_px);
+                    let rx = 2.0 * n2 * n0 + lx * 0.9; let ry = 2.0 * n2 * n1 + ly * 0.9; let ang = pr.u * 6.2831; let ax = rx * ang.cos() + ry * ang.sin(); let c0 = 0.15 + 0.5 * (pr.u * 7.0).fract();
+                    let strip = (-((ax - c0) / 0.16).powi(2)).exp(); let strip2 = (-((ax + 0.55 - 0.3 * c0) / 0.07).powi(2)).exp(); let sky = 0.1 + 0.3 * (ry * 0.5 + 0.5).clamp(0.0, 1.0); (sky + 1.3 * strip + 0.9 * strip2) * (0.5 + 0.5 * (1.0 - n2.abs() * 0.6)) } else { 0.0 };
+                let rw = |c: f64, t: f64| c * (1.0 - 0.6 * gl) + c * t * 0.6 * gl; let glint = gl * pr.spec * pr.spec * 1.2 * rim + gl * envl * 0.55; let cr = ((base[0] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rr, base[0]) + glint) * br; let cg = ((base[1] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rg, base[1]) + glint) * br; let cb = ((base[2] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rb, base[2]) + glint) * br;
+                let a = (a + gl * envl * 0.3 * cov * pr.alpha).min(0.95); let (ca, aa) = (a as f32, acca[o]); // over (premultiplied accumulation)
                 accc[o * 3] = accc[o * 3] * (1.0 - ca) + cr as f32 * ca; accc[o * 3 + 1] = accc[o * 3 + 1] * (1.0 - ca) + cg as f32 * ca; accc[o * 3 + 2] = accc[o * 3 + 2] * (1.0 - ca) + cb as f32 * ca; acca[o] = ca + aa * (1.0 - ca); if rf { let k2 = e.refract as f32 * k as f32 * (1.0 + 0.5 * rim as f32); dacc[o * 2] = dacc[o * 2] * (1.0 - ca) + (pr.tx as f32 * k2) * ca; dacc[o * 2 + 1] = dacc[o * 2 + 1] * (1.0 - ca) + (pr.ty as f32 * k2) * ca; } } } }
         // fold sub-frame into frame accumulators happens after all subs; keep running average via scaling below
         if sub + 1 < nsub { // store partial: normalise at the end using per-sub snapshots
