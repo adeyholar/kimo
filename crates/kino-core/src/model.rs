@@ -42,14 +42,23 @@ pub struct Clip {
     /// Offset into the source media, seconds.
     pub in_point: f64,
     pub speed: f64,
+    /// Optional speed ramp (multiplier over clip-local time); overrides `speed` for video.
+    #[serde(default)]
+    pub speed_curve: Option<Prop>,
     pub props: BTreeMap<String, Prop>, // opacity, x, y, scale, rotation
     pub effects: Vec<Effect>,
     pub blend: String,
     #[serde(default)]
     pub mask: Option<Mask>,
+    #[serde(default)]
+    pub audio: Audio,
     /// Transition INTO this clip from the previous clip on the track.
     pub transition_in: Option<Transition>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Audio { pub mute: bool, pub volume: Prop, pub fade_in: f64, pub fade_out: f64, pub pitch: f64, pub highpass: f64, pub lowpass: f64, pub denoise: f64, pub compress: bool, pub echo: f64, pub reverse: bool }
+impl Default for Audio { fn default() -> Self { Audio { mute: false, volume: Prop::new(1.0), fade_in: 0.0, fade_out: 0.0, pitch: 0.0, highpass: 0.0, lowpass: 0.0, denoise: 0.0, compress: false, echo: 0.0, reverse: false } } }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transition { pub kind: String, pub duration: f64 }
@@ -76,6 +85,13 @@ pub struct Project {
 impl Default for Project {
     fn default() -> Self {
         Project { name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1 }
+    }
+}
+
+impl Clip {
+    /// Source-media time consumed after `lt` seconds of clip time.
+    pub fn source_time(&self, lt: f64) -> f64 {
+        match &self.speed_curve { None => lt * self.speed, Some(p) => { let n = (lt * 240.0).ceil().max(1.0) as usize; let dt = lt / n as f64; (0..n).map(|i| p.at((i as f64 + 0.5) * dt).max(0.0) * dt).sum() } }
     }
 }
 

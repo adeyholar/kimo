@@ -22,8 +22,9 @@ pub fn probe(path: &str) -> Result<(u32, u32, f64, f64), String> {
 
 fn decode(p: &Project, c: &Clip, path: &str) -> Result<Vec<Vec<u8>>, String> {
     let (w, h) = (p.width, p.height);
-    let vf = format!("setpts=PTS/{},fps={},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0,format=rgba", c.speed.max(0.01), p.fps);
-    let mut child = Command::new("ffmpeg").args(["-v","error","-ss",&format!("{}", c.in_point),"-t",&format!("{}", c.duration*c.speed),"-i",path,"-vf",&vf,"-f","rawvideo","-pix_fmt","rgba","-"])
+    let (speed, span) = if let Some(_) = c.speed_curve { (1.0, c.source_time(c.duration)) } else { (c.speed, c.duration * c.speed) };
+    let vf = format!("setpts=PTS/{},fps={},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0,format=rgba", speed.max(0.01), p.fps);
+    let mut child = Command::new("ffmpeg").args(["-v","error","-ss",&format!("{}", c.in_point),"-t",&format!("{}", span),"-i",path,"-vf",&vf,"-f","rawvideo","-pix_fmt","rgba","-"])
         .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
     let mut buf = Vec::new(); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let _ = child.wait();
     let fs = (w*h*4) as usize;
@@ -51,7 +52,8 @@ fn source_frame(p: &Project, c: &Clip, lt: f64, cache: &Cache) -> Frame {
             let _ = crate::text::render_text(&mut f, text, font, *size, *color, *letter_spacing, *stroke_width, *stroke_color, *shadow, align, prop(c, "reveal", lt));
         }
         Source::Media { .. } => if let Some(fr) = cache.frames.get(&c.id) {
-            let idx = ((lt * p.fps) as usize).min(fr.len().saturating_sub(1));
+            let idx = if c.speed_curve.is_some() { (c.source_time(lt) * p.fps) as usize } else { (lt * p.fps) as usize };
+            let idx = idx.min(fr.len().saturating_sub(1));
             if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
         },
     }
@@ -146,8 +148,24 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", p.width, p.height),"-r",&format!("{}", p.fps),"-i","-","-c:v","libx264","-pix_fmt","yuv420p","-crf",&crf.to_string(),path])
         .stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
     let mut si = ch.stdin.take().unwrap();
-    for i in 0..n { let f = render_frame(p, i as f64 / p.fps, &cache)?; si.write_all(&to_rgba8(&f)).map_err(|e| e.to_string())?; }
+    let nt = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1);
+    let mut i = 0;
+    while i < n {
+        let end = (i + nt * 2).min(n);
+        let frames: Vec<Result<Vec<u8>, String>> = std::thread::scope(|sc| {
+            let hs: Vec<_> = (i..end).map(|k| { let cache = &cache; sc.spawn(move || render_frame(p, k as f64 / p.fps, cache).map(|f| to_rgba8(&f))) }).collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect() });
+        for f in frames { si.write_all(&f?).map_err(|e| e.to_string())?; }
+        i = end;
+    }
     drop(si); ch.wait().map_err(|e| e.to_string())?;
+    // mux mixed audio
+    let pcm = crate::audio::mix(p);
+    if pcm.iter().any(|v| v.abs() > 1e-6) {
+        let wav = format!("{path}.tmp.wav"); let vid = format!("{path}.tmp.mp4"); crate::audio::write_wav(&wav, &pcm)?; std::fs::rename(path, &vid).map_err(|e| e.to_string())?;
+        let st = Command::new("ffmpeg").args(["-v","error","-y","-i",&vid,"-i",&wav,"-c:v","copy","-c:a","aac","-b:a","192k","-shortest",path]).status().map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&wav); let _ = std::fs::remove_file(&vid); if !st.success() { return Err("audio mux failed".into()); }
+    }
     Ok(n as f64 / p.fps)
 }
 

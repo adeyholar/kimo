@@ -63,7 +63,7 @@ pub fn registry() -> Vec<Command> {
                 "gradient" => Source::Gradient { c1: color(a, "color", [0.0; 3]), c2: color(a, "color2", [1.0; 3]) },
                 o => return Err(format!("bad source_type {o}")) };
             let id = ss.project.gen_id("clip");
-            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: opt_num(a, "speed", 1.0), props: default_props(), effects: vec![], blend: "normal".into(), mask: None, transition_in: None };
+            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: opt_num(a, "speed", 1.0), speed_curve: None, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, audio: Audio::default(), transition_in: None };
             let tr = ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or(format!("no track '{tid}'"))?; tr.clips.push(c);
             Ok(json!({"clip_id":id})) } },
     Command { name: "add_text", description: "Add a text clip (rendered with a TTF/OTF font). Animate with set_keyframe on reveal (typewriter), opacity, scale, x, y, rotation. Default font is a system sans.", mutates: true,
@@ -72,7 +72,7 @@ pub fn registry() -> Vec<Command> {
         run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let id = ss.project.gen_id("clip");
             let src = Source::Text { text: str_arg(a, "text")?.replace("\\n", "\n"), font: a.get("font").and_then(|v| v.as_str()).unwrap_or("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf").into(), size: opt_num(a, "size", 72.0), color: color(a, "color", [1.0; 3]),
                 letter_spacing: opt_num(a, "letter_spacing", 0.0), stroke_width: opt_num(a, "stroke_width", 0.0), stroke_color: color(a, "stroke_color", [0.0; 3]), shadow: opt_num(a, "shadow", 0.0), align: a.get("align").and_then(|v| v.as_str()).unwrap_or("center").into() };
-            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, transition_in: None };
+            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, audio: Audio::default(), transition_in: None };
             ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
     Command { name: "set_text", description: "Edit text content/style of a text clip.", mutates: true,
         schema: obj(vec![("clip_id", s("text clip")), ("text", s("new text")), ("size", n("pixels")), ("color", json!({"type":"array","items":{"type":"number"}}))], &["clip_id"]),
@@ -91,6 +91,29 @@ pub fn registry() -> Vec<Command> {
     Command { name: "remove_mask", description: "Remove a clip's mask.", mutates: true,
         schema: obj(vec![("clip_id", s("clip"))], &["clip_id"]),
         run: |ss, a| { clip(&mut ss.project, a)?.mask = None; Ok(json!({"ok":true})) } },
+    Command { name: "set_audio", description: "Audio settings for a media clip: mute, volume (base), fade_in/fade_out seconds, pitch (semitones), highpass/lowpass Hz, denoise (dB, 0=off), compress, echo (seconds delay), reverse. Volume is keyframable via set_audio_volume_key.", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("mute", json!({"type":"boolean"})), ("volume", n("0..4")), ("fade_in", n("s")), ("fade_out", n("s")), ("pitch", n("semitones")), ("highpass", n("Hz")), ("lowpass", n("Hz")), ("denoise", n("dB")), ("compress", json!({"type":"boolean"})), ("echo", n("s")), ("reverse", json!({"type":"boolean"}))], &["clip_id"]),
+        run: |ss, a| { let c = clip(&mut ss.project, a)?; let au = &mut c.audio;
+            if let Some(v) = a.get("mute").and_then(|v| v.as_bool()) { au.mute = v; } if let Some(v) = a.get("volume").and_then(|v| v.as_f64()) { au.volume.base = v; }
+            for (k, r) in [("fade_in", &mut au.fade_in), ("fade_out", &mut au.fade_out), ("pitch", &mut au.pitch), ("highpass", &mut au.highpass), ("lowpass", &mut au.lowpass), ("denoise", &mut au.denoise), ("echo", &mut au.echo)] { if let Some(v) = a.get(k).and_then(|v| v.as_f64()) { *r = v; } }
+            if let Some(v) = a.get("compress").and_then(|v| v.as_bool()) { au.compress = v; } if let Some(v) = a.get("reverse").and_then(|v| v.as_bool()) { au.reverse = v; }
+            Ok(serde_json::to_value(&*au).unwrap()) } },
+    Command { name: "set_audio_volume_key", description: "Keyframe clip volume at clip-local time (ducking, swells).", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("time", n("s")), ("value", n("gain")), ("ease", json!({"type":"string","enum":["linear","in","out","in_out","hold"]}))], &["clip_id","time","value"]),
+        run: |ss, a| { let e: Ease = serde_json::from_value(a.get("ease").cloned().unwrap_or(json!("linear"))).map_err(|e| e.to_string())?; let (t, v) = (num_arg(a, "time")?, num_arg(a, "value")?); clip(&mut ss.project, a)?.audio.volume.set_key(t, v, e); Ok(json!({"ok":true})) } },
+    Command { name: "detect_beats", description: "Detect beat/onset times (seconds) in an audio or video file, for cutting on the beat. Returns times plus tempo estimate.", mutates: false,
+        schema: obj(vec![("path", s("media path")), ("min_gap", n("min seconds between beats, default 0.25"))], &["path"]),
+        run: |_, a| { let b = crate::audio::detect_beats(str_arg(a, "path")?, opt_num(a, "min_gap", 0.25)); let bpm = if b.len() > 3 { let mut d: Vec<f64> = b.windows(2).map(|w| w[1] - w[0]).collect(); d.sort_by(|x, y| x.partial_cmp(y).unwrap()); 60.0 / d[d.len() / 2] } else { 0.0 }; Ok(json!({"beats":b,"bpm":bpm})) } },
+    Command { name: "export_audio", description: "Mix all clip audio to a 16-bit 48k stereo WAV.", mutates: false,
+        schema: obj(vec![("path", s("output .wav"))], &["path"]),
+        run: |ss, a| { let p = str_arg(a, "path")?; crate::audio::write_wav(p, &crate::audio::mix(&ss.project))?; Ok(json!({"path":p})) } },
+    Command { name: "set_speed_ramp", description: "Speed ramp: keyframed playback speed over clip-local time (e.g. [[0,1],[1,0.2],[2,3]]). Replaces constant speed for video. Pass empty keys to clear.", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("keys", json!({"type":"array","items":{"type":"array","items":{"type":"number"},"description":"[time, speed]"}})), ("ease", json!({"type":"string","enum":["linear","in","out","in_out","hold"]}))], &["clip_id","keys"]),
+        run: |ss, a| { let e: Ease = serde_json::from_value(a.get("ease").cloned().unwrap_or(json!("in_out"))).map_err(|e| e.to_string())?;
+            let ks: Vec<(f64, f64)> = a.get("keys").and_then(|v| v.as_array()).ok_or("keys required")?.iter().filter_map(|k| { let k = k.as_array()?; Some((k.get(0)?.as_f64()?, k.get(1)?.as_f64()?)) }).collect();
+            let c = clip(&mut ss.project, a)?; if ks.is_empty() { c.speed_curve = None; return Ok(json!({"cleared":true})); }
+            let mut p = Prop::new(ks[0].1); for (t, v) in &ks { if !(0.0..=100.0).contains(v) { return Err("speed must be 0..100".into()); } p.set_key(*t, *v, e); } c.speed_curve = Some(p);
+            Ok(json!({"source_seconds": c.source_time(c.duration)})) } },
     Command { name: "move_clip", description: "Move a clip to a new timeline start time.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("start", n("seconds"))], &["clip_id","start"]),
         run: |ss, a| { let st = num_arg(a, "start")?; clip(&mut ss.project, a)?.start = st; Ok(json!({"ok":true})) } },
