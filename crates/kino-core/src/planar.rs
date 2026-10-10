@@ -312,6 +312,14 @@ fn build_seq(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f64) -> Op
             if wgt > 0.0 { for k in 0..pw * ph { let d = (rc[j][k] - mx[k]).max(mn[k] - rc[j][k]).max(0.0).min(1.0) * wgt; if j == 0 || j == 3 { diff[k] += 0.0; } diff[k] = diff[k].max(d); } } }
         let mut t1 = vec![0f32; pw * ph]; let mut t2 = vec![0f32; pw * ph]; crate::masks::box_pass(&diff, &mut t1, pw, ph, 2, true); crate::masks::box_pass(&t1, &mut t2, pw, ph, 2, false);
         let occ: Vec<f32> = t2.iter().map(|&d| { let x = ((d - lo) / (hi - lo)).clamp(0.0, 1.0); x * x * (3.0 - 2.0 * x) }).collect();
+        let mut occ = occ; if sp.min_area > 0.0 { let lim = (sp.min_area * (pw * ph) as f32).max(1.0) as usize;
+            // two passes: drop small occluder islands (value -> 0), then fill small visible holes (value -> 1)
+            for pass in 0..2 { let mut seen = vec![false; pw * ph]; let inside = |v: f32| if pass == 0 { v > 0.3 } else { v < 0.7 };
+                for st in 0..pw * ph { if seen[st] || !inside(occ[st]) { continue; } let mut comp = vec![st]; seen[st] = true; let mut qi = 0; let mut border = false;
+                    while qi < comp.len() { let k = comp[qi]; qi += 1; let (x, y) = (k % pw, k / pw); if x == 0 || y == 0 || x == pw - 1 || y == ph - 1 { border = true; }
+                        for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] { if nx < pw && ny < ph { let nk = ny * pw + nx; if !seen[nk] && inside(occ[nk]) { seen[nk] = true; comp.push(nk); } } } }
+                    // a visible hole touching the plane border is the plane edge, not a hole; an occluder touching it is the real thing entering, but only large ones are kept
+                    if comp.len() < lim && (pass == 0 || !border) { let v = if pass == 0 { 0.0 } else { 1.0 }; for k in comp { occ[k] = v; } } } } }
         // dilate the occluder by 2 plane px before deciding what may update the model, so soft finger edges never leak into it
         let mut upd = vec![0f32; pw * ph]; for y in 0..ph { for x in 0..pw { let mut mx = 0f32; for dy in -2i32..=2 { for dx in -2i32..=2 { let (xx, yy) = ((x as i32 + dx).clamp(0, pw as i32 - 1) as usize, (y as i32 + dy).clamp(0, ph as i32 - 1) as usize); mx = mx.max(occ[yy * pw + xx]); } } upd[y * pw + x] = mx; } }
         for k in 0..pw * ph { let a = (1.0 - 0.65f32.powf(sp.speed.clamp(0.01, 4.0) as f32)) * (1.0 - upd[k]); for j in 0..3 { model[k * 3 + j] += (rect[k * 3 + j] - model[k * 3 + j]) * a; } }
