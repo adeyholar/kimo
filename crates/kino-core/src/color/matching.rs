@@ -34,11 +34,11 @@ pub fn transport(src:&Stats,dst:&Stats,regularization:f64)->Result<Mat,String>{
     let reg=|a:Mat|std::array::from_fn(|i|std::array::from_fn(|j|a[i][j]+if i==j{regularization}else{0.}));let cs=reg(src.cov);let ct=reg(dst.cov);let root=spd_power(cs,0.5);let ir=spd_power(cs,-0.5);
     let a=mm(ir,mm(spd_power(mm(root,mm(ct,root)),0.5),ir));if a.iter().flatten().any(|v|!v.is_finite()||v.abs()>100.){return Err("unstable match; use a richer sample or stronger regularization".into())}Ok(a)
 }
-pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String>{
+pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String>{super::frame::validate(f)?;
     if f.w==0||f.h==0||f.w.checked_mul(f.h).and_then(|n|n.checked_mul(4))!=Some(f.d.len())||f.d.iter().any(|v|!v.is_finite()){return Err("invalid Lab effect frame".into())}let g=|k:&str,d:f64|p(pr,k,d,t) as f64;let a=std::array::from_fn(|i|std::array::from_fn(|j|g(&format!("a{i}{j}"),if i==j{1.}else{0.})));
     let sm:[f64;3]=std::array::from_fn(|j|g(&format!("s{j}"),0.));let tm:[f64;3]=std::array::from_fn(|j|g(&format!("t{j}"),0.));let strength=g("strength",1.).clamp(0.,1.);let compress=g("gamut_compress",1.)>0.5;
     if a.iter().flatten().chain(sm.iter()).chain(tm.iter()).any(|v|!v.is_finite()||v.abs()>100.){return Err("invalid match transform".into())}
-    for px in f.d.chunks_exact_mut(4){let c=[px[0] as f64,px[1] as f64,px[2] as f64];let lab=to_lab(c);let delta=std::array::from_fn(|j|lab[j]-sm[j]);let mut out=mv(a,delta);for j in 0..3{out[j]=lab[j]+(out[j]+tm[j]-lab[j])*strength}let mut rgb=from_lab(out);
+    for(i,px) in f.d.chunks_exact_mut(4).enumerate(){if i%65536==0{crate::guard::check()}let c=[px[0] as f64,px[1] as f64,px[2] as f64];let lab=to_lab(c);let delta=std::array::from_fn(|j|lab[j]-sm[j]);let mut out=mv(a,delta);for j in 0..3{out[j]=lab[j]+(out[j]+tm[j]-lab[j])*strength}let mut rgb=from_lab(out);
         if compress {let lin=rgb.map(|v|super::managed::decode(1,v,100.));rgb=super::managed::gamut_compress(lin).map(|v|super::managed::encode(1,v,100.))}
         for j in 0..3{if !rgb[j].is_finite()||rgb[j].abs()>f32::MAX as f64{return Err("match overflow".into())}px[j]=rgb[j] as f32}
     }Ok(())

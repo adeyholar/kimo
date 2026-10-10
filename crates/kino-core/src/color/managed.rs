@@ -76,7 +76,7 @@ pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String> {super::frame::va
     let from=id("from_gamut",7)?;let to=id("to_gamut",7)?;let m=conversion(from,to);let weights=luma_weights(to);let a=id("from_transfer",8)?;let b=id("to_transfer",8)?;
     let white=get("reference_white",100.)?;if !(1. ..=10000.).contains(&white){return Err("reference_white outside 1..10000".into())}
     let e=2f64.powf(get("exposure",0.)?.clamp(-20.,20.));let tone=get("tone_map",0.)?>0.5;let compress=get("gamut_compress",0.)?>0.5;
-    for px in f.d.chunks_exact_mut(4) {
+    for(i,px) in f.d.chunks_exact_mut(4).enumerate() {if i%65536==0{crate::guard::check()}
         let mut c=mv(m,[decode(a,px[0] as f64,white),decode(a,px[1] as f64,white),decode(a,px[2] as f64,white)]).map(|v|v*e);
         if tone {let y=(weights[0]*c[0]+weights[1]*c[1]+weights[2]*c[2]).max(0.);c=c.map(|v|v/(1.+y));}
         if compress {c=compress_with(c,weights)}

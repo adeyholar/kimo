@@ -6,11 +6,11 @@ impl Lut{
     pub fn parse(text:&str)->Result<Self,String>{
         if text.len()>32*1024*1024{return Err("LUT exceeds 32 MiB".into())}
         let(mut n,mut data,mut min,mut max)=(0usize,Vec::new(),[0.;3],[1.;3]);let(mut seen_min,mut seen_max)=(false,false);
-        for line in text.lines(){let line=line.split('#').next().unwrap_or("").trim();if line.is_empty(){continue}let tok:Vec<_>=line.split_whitespace().collect();
+        for(i,line) in text.lines().enumerate(){if i%4096==0{crate::guard::check()}let line=line.split('#').next().unwrap_or("").trim();if line.is_empty(){continue}let tok:Vec<_>=line.split_whitespace().take(5).collect();
             match tok[0]{
                 "TITLE"=>continue,
                 "LUT_1D_SIZE"=>return Err("1D .cube not supported by this 3D parser".into()),
-                "LUT_3D_SIZE"=>{if n!=0||tok.len()!=2{return Err("invalid/duplicate LUT size".into())}n=tok[1].parse().map_err(|_|"invalid LUT size")?;if !(2..=65).contains(&n){return Err("LUT size must be 2..65".into())}},
+                "LUT_3D_SIZE"=>{if n!=0||tok.len()!=2{return Err("invalid/duplicate LUT size".into())}n=tok[1].parse().map_err(|_|"invalid LUT size")?;if !(2..=65).contains(&n){return Err("LUT size must be 2..65".into())}crate::guard::reserve(n*n*n*std::mem::size_of::<[f32;3]>());data=Vec::with_capacity(n*n*n)},
                 "DOMAIN_MIN"|"DOMAIN_MAX"=>{if !data.is_empty(){return Err("LUT domain must precede data".into())}let v=parse3(&tok[1..])?;if tok[0]=="DOMAIN_MIN"{if seen_min{return Err("duplicate LUT domain minimum".into())}seen_min=true;min=v}else{if seen_max{return Err("duplicate LUT domain maximum".into())}seen_max=true;max=v}},
                 _=>{if n==0{return Err("LUT size must precede data".into())}if data.len()>=n*n*n{return Err("too many LUT rows".into())}data.push(parse3(&tok)?)}
             }
@@ -33,7 +33,7 @@ pub fn apply(pr:&Params,strings:&BTreeMap<String,String>,f:&mut Frame,t:f64)->Re
     let key=format!("{path}:{}:{:?}",meta.len(),meta.modified().ok());let cache=CACHE.get_or_init(Default::default);let l={let mut cache=cache.lock().map_err(|_|"LUT cache poisoned")?;
         if let Some(l)=cache.get(&key){l.clone()}else{let l=Arc::new(Lut::parse(&read_bounded(path)?)?);if cache.len()>=8{cache.clear()}cache.insert(key,l.clone());l}};
     let amount=p(pr,"intensity",1.,t);if !amount.is_finite(){return Err("invalid LUT intensity".into())}let amount=amount.clamp(0.,1.);
-    for px in f.d.chunks_exact_mut(4){if px[..3].iter().any(|v|!v.is_finite()){return Err("nonfinite LUT input".into())}let out=l.sample([px[0],px[1],px[2]]);for j in 0..3{let v=px[j] as f64*(1.-amount as f64)+out[j] as f64*amount as f64;if !v.is_finite()||v.abs()>f32::MAX as f64{return Err("LUT interpolation overflow".into())}px[j]=v as f32}}
+    for(i,px) in f.d.chunks_exact_mut(4).enumerate(){if i%65536==0{crate::guard::check()}if px[..3].iter().any(|v|!v.is_finite()){return Err("nonfinite LUT input".into())}let out=l.sample([px[0],px[1],px[2]]);for j in 0..3{let v=px[j] as f64*(1.-amount as f64)+out[j] as f64*amount as f64;if !v.is_finite()||v.abs()>f32::MAX as f64{return Err("LUT interpolation overflow".into())}px[j]=v as f32}}
     Ok(())
 }
 

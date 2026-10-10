@@ -313,3 +313,15 @@ Lab transport checks normalized2x2principal minors and determinant, rejecting cl
 
 ## Quantitative scope finite accounting
 Scope arrays preflight memory and loops check cancellation. Invalid alpha and scaled/accumulation overflow are excluded with separate counters rather than contaminating JSON min/mean with infinities. Finite range width required, preventing [-MAX,+MAX] width overflow. Three scope and16interchange tests pass; ordinary scope bins/values unchanged. Overflow counter is evidence of an unusable declared numeric domain, not clipping or mastering measurement.
+
+### CDL direct-API frame integrity
+`cdl::apply` validates the complete RGBA shape, finite samples and alpha in 0..1 before changing any samples. Signed/HDR finite RGB remains accepted and follows the documented clamped SOP behavior; alpha is preserved. The pixel loop checks cooperative cancellation every 65536 pixels. Regression coverage includes malformed shape, late NaN/Inf (no partial mutation), invalid alpha and extended-range input. This is input safety, not ASC conformance certification.
+
+### Audit and overlay allocation/cancellation
+Output audits preflight their full-frame temporary allocation before cloning. SDR gamut overlays preflight both full-frame temporaries and reject malformed/nonfinite/invalid-alpha input before allocating them. Diagnostic range and overlay pixel loops check cancellation every 65536 pixels. Empty audit compatibility is unchanged. Five focused audit/overlay tests pass; these checks do not make range evidence broadcast certification.
+
+### Cooperative cancellation in color effects
+Shared frame preflight now checks the call guard before scanning input. Linear grade, managed conversion, point curves, white adaptation, gamut-ray compression, luminance shoulder and Lab transport check cancellation every 65536 pixels, as CDL already does. Lab transport also uses the shared finite/alpha frame contract. A dedicated isolated test sets cancellation, invokes all eight effects and verifies no mutation before the cancellation panic. This does not close native decoder streaming or encoder write timeout gaps.
+
+### LUT parser bounded token memory
+The .cube parser takes at most five tokens from each row before enforcing the existing row grammar, avoiding a huge temporary token vector on a single hostile line. Valid size declarations preflight and reserve the exact 3D table capacity. Parsing checks cancellation every 4096 lines and applying a LUT checks every 65536 pixels. Seven focused LUT tests cover valid vertices/domains, invalid headers, huge token rows and extended finite mix. TITLE remains ignored, not interpreted as executable content.
