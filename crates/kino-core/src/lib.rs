@@ -9,3 +9,5 @@ pub mod effects;
 pub mod text;
 pub mod audio;
 pub mod tracking;
+pub mod edit;
+pub mod effects2;

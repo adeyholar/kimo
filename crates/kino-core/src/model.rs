@@ -79,7 +79,7 @@ impl Default for Audio { fn default() -> Self { Audio { mute: false, volume: Pro
 pub struct Transition { pub kind: String, pub duration: f64 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Track { pub id: String, pub clips: Vec<Clip> }
+pub struct Track { pub id: String, pub clips: Vec<Clip>, #[serde(default)] pub locked: bool, #[serde(default)] pub muted: bool, #[serde(default)] pub name: String }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Asset { pub id: String, pub path: String, pub width: u32, pub height: u32, pub duration: f64, pub fps: f64 }
@@ -95,11 +95,13 @@ pub struct Project {
     pub tracks: Vec<Track>,
     #[serde(skip)]
     pub next_id: u64,
+    #[serde(default)]
+    pub markers: Vec<Marker>,
 }
 
 impl Default for Project {
     fn default() -> Self {
-        Project { name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1 }
+        Project { name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![] }
     }
 }
 
@@ -135,3 +137,6 @@ pub fn default_props() -> BTreeMap<String, Prop> {
     m.insert("reveal".into(), Prop::new(1.0)); // text typewriter 0..1
     m
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Marker { pub id: String, pub time: f64, pub duration: f64, pub name: String, pub color: String }

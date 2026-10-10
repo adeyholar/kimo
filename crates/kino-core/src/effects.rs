@@ -8,7 +8,7 @@ impl Frame {
 }
 
 pub type Params = BTreeMap<String, Prop>;
-fn p(m: &Params, k: &str, def: f64, t: f64) -> f32 { m.get(k).map(|x| x.at(t)).unwrap_or(def) as f32 }
+pub(crate) fn p(m: &Params, k: &str, def: f64, t: f64) -> f32 { m.get(k).map(|x| x.at(t)).unwrap_or(def) as f32 }
 
 /// (kind, description, [(param, default, description)]) - drives list_effects and tool schemas.
 pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
@@ -188,16 +188,16 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
             let mut ed = Frame::new(w, h); for y in 1..h-1 { for x in 1..w-1 { let g = |xx: usize, yy: usize| { let i = (yy*w+xx)*4; lum([src[i], src[i+1], src[i+2]]) };
                 let gx = g(x+1, y) - g(x-1, y); let gy = g(x, y+1) - g(x, y-1); let m = ((gx*gx + gy*gy).sqrt() * 3.0).min(1.0); let o = (y*w+x)*4; ed.d[o] = col[0]*m; ed.d[o+1] = col[1]*m; ed.d[o+2] = col[2]*m; ed.d[o+3] = 1.0; } }
             let mut bl = Frame { w, h, d: ed.d.clone() }; box_blur3(&mut bl, 6); for i in 0..w*h { for j in 0..3 { f.d[i*4+j] = f.d[i*4+j] * 0.35 + (ed.d[i*4+j] + bl.d[i*4+j]) * a; } } }
-        other => return Err(format!("unknown effect '{other}'")),
+        other => return crate::effects2::apply2(other, params, f, t, seed),
     }
     Ok(())
 }
 
-fn lum(c: [f32; 3]) -> f32 { 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2] }
-fn px(f: &mut Frame, op: impl Fn([f32; 3]) -> [f32; 3]) {
+pub(crate) fn lum(c: [f32; 3]) -> f32 { 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2] }
+pub(crate) fn px(f: &mut Frame, op: impl Fn([f32; 3]) -> [f32; 3]) {
     for i in 0..f.w*f.h { let o = op([f.d[i*4], f.d[i*4+1], f.d[i*4+2]]); f.d[i*4]=o[0]; f.d[i*4+1]=o[1]; f.d[i*4+2]=o[2]; }
 }
-fn box_blur3(f: &mut Frame, r: usize) {
+pub(crate) fn box_blur3(f: &mut Frame, r: usize) {
     if r == 0 { return; }
     let r = (r / 2).max(1);
     for _ in 0..3 { blur_axis(f, r, true); blur_axis(f, r, false); }
