@@ -31,6 +31,8 @@ pub struct Plane {
     #[serde(default)] pub quad: Option<[[f64; 2]; 4]>, #[serde(default)] pub impact_uv: Option<[f64; 2]>,
     /// Image carried on the facets (UV = plane coordinates). `opaque` 0..1 mixes it over the glass shading.
     /// Foreground occluder matte (white = in front of the plane, cells hidden there). A path; `%d`/`%04d` style is replaced by the frame index round(t*fps). Any ffmpeg-readable image, sized to the canvas.
+    /// Preload dimple: before a cell is released the plane sinks away from the camera by `preload_depth` (720p px, strongest at the impact, falling off with distance) over `preload_time` s, so the pressure builds before the break.
+    #[serde(default)] pub preload_depth: f64, #[serde(default)] pub preload_time: f64,
     #[serde(default)] pub occlusion: Option<String>, #[serde(default)] pub texture: Option<String>, #[serde(default = "d_one")] pub opaque: f64,
 }
 fn d_region() -> [f64; 2] { [1280.0, 720.0] } fn d_cells() -> u32 { 120 } fn d_pr() -> f64 { 140.0 } fn d_wave() -> f64 { 2400.0 } fn d_imp() -> f64 { 1100.0 } fn d_lift() -> f64 { 0.9 } fn d_grade() -> f64 { 3.0 } fn d_maxd() -> f64 { 0.25 }
@@ -96,7 +98,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             let os = e.origin_spread * k; let pos = [e.origin[0] * k + (r(50) - 0.5) * 2.0 * os + dir[0] * sp * travel, e.origin[1] * k + (r(51) - 0.5) * 2.0 * os * 0.6 + dir[1] * sp * travel + 0.5 * e.gravity * k * age * age, e.origin[2] + (r(52) - 0.5) * 2.0 * os + vz * travel];
             let pos = if let (Some((p, c)), Some(d)) = (pc, pdist) { let (_, (ix, iy)) = plane_impact(p, k); let (dx, dy) = (c.c.0 - ix, c.c.1 - iy); let m = (dx * dx + dy * dy).sqrt().max(1e-6); let (ux, uy) = if d < 1e-3 { let a = r(60) * std::f64::consts::TAU; (a.cos(), a.sin()) } else { (dx / m, dy / m) };
                 let v0 = p.impulse * k * (-d / (p.radius * k * 3.0)).exp().max(0.12) * (0.6 + 0.8 * r(4)) / (0.7 + size / (40.0 * k)).sqrt(); let vz = -p.lift * v0 * (0.6 + 0.8 * r(5));
-                [c.c.0 + ux * v0 * travel, c.c.1 + uy * v0 * travel + 0.5 * e.gravity * k * age * age, p.under_depth * k + vz * travel] } else { pos };
+                [c.c.0 + ux * v0 * travel, c.c.1 + uy * v0 * travel + 0.5 * e.gravity * k * age * age, p.under_depth * k + vz * travel + pre_dep(p, d, k, ts, birth)] } else { pos };
             let phys = traj.as_ref().map(|(tj, _): &(std::sync::Arc<crate::physics::Traj>, i32)| tj.at(i as usize, ts));
             let ang = if pc.is_some() { [(r(7) - 0.5) * 2.0 * e.spin * age, (r(9) - 0.5) * 2.0 * e.spin * age, (r(11) - 0.5) * e.spin * age] } else { [r(6) * 360.0 + (r(7) - 0.5) * 2.0 * e.spin * age, r(8) * 360.0 + (r(9) - 0.5) * 2.0 * e.spin * age, r(10) * 360.0 + (r(11) - 0.5) * 2.0 * e.spin * age] };
             let (pos, rm) = match &phys { Some((p, q)) => (*p, crate::physics::quat_matrix(*q)), None => (pos, rot_matrix(ang)) }; let nv = pc.map(|(_, c)| c.poly.len()).unwrap_or(4 + (r(12) * 2.99) as usize); let aspect = if pc.is_some() { 1.0 } else { let a = e.aspect.unwrap_or([0.62, 1.22]); a[0] + (a[1] - a[0]) * r(13) }; let thick = ({ let t = e.thickness.unwrap_or([0.3, 0.9]); t[0] + (t[1] - t[0]) * r(14) }) * size;
@@ -167,7 +169,7 @@ fn bake_cached(e: &ShardBurst, k: f64, total: f64, hh: usize) -> std::sync::Arc<
             let size = (c.area.sqrt() / 1.8).max(1.0); let (dx, dy) = (c.c.0 - ix, c.c.1 - iy); let mg = (dx * dx + dy * dy).sqrt().max(1e-6); let (ux, uy) = if d < 1e-3 { let a = r(60) * std::f64::consts::TAU; (a.cos(), a.sin()) } else { (dx / mg, dy / mg) };
             let v0 = p.impulse * k * (-d / (p.radius * k * 3.0)).exp().max(0.12) * (0.6 + 0.8 * r(4)) / (0.7 + size / (40.0 * k)).sqrt(); let vz = -p.lift * v0 * (0.6 + 0.8 * r(5));
             let sd = e.spin.to_radians(); let thick = ({ let t = e.thickness.unwrap_or([0.3, 0.9]); t[0] + (t[1] - t[0]) * r(14) }) * size;
-            bodies.push(crate::physics::Body { p: [c.c.0, c.c.1, p.under_depth * k], v: [ux * v0, uy * v0, vz], q: [1.0, 0.0, 0.0, 0.0], w: [(r(7) - 0.5) * 2.0 * sd, (r(9) - 0.5) * 2.0 * sd, (r(11) - 0.5) * sd], r: size * 0.55, m: size * size * thick * 1e-3 + 1e-3, birth }); }
+            bodies.push(crate::physics::Body { p: [c.c.0, c.c.1, p.under_depth * k + pre_dep(p, d, k, birth, birth)], v: [ux * v0, uy * v0, vz], q: [1.0, 0.0, 0.0, 0.0], w: [(r(7) - 0.5) * 2.0 * sd, (r(9) - 0.5) * 2.0 * sd, (r(11) - 0.5) * sd], r: size * 0.55, m: size * size * thick * 1e-3 + 1e-3, birth }); }
         let par = crate::physics::Params { gravity: [0.0, e.gravity * k, 0.0], drag: e.drag, ang_drag: e.ang_drag, restitution: e.restitution, friction: e.friction, floor_y: e.floor.map(|f| f * k), collide: false };
         let tj = Arc::new(crate::physics::bake(bodies, &par, total + 0.1)); m.lock().unwrap().insert(key, tj.clone()); return tj; }
     for i in 0..e.count as u64 { let r = |kk: u64| h(e.seed, i, kk);
@@ -228,3 +230,6 @@ pub struct ProbeShard { pub id: u64, pub cx: f64, pub cy: f64, pub bbox: [f64; 4
 thread_local! { static PROBE: std::cell::RefCell<Vec<ProbeShard>> = std::cell::RefCell::new(Vec::new()); }
 /// Per-shard screen-space centre, bounding box, depth and alpha of the last shard render (front face, last motion sub-sample). Pixels, canvas space.
 pub fn take_probe() -> Vec<ProbeShard> { PROBE.with(|p| std::mem::take(&mut *p.borrow_mut())) }
+
+/// Depth sink of a not-yet-released cell: ramps over `preload_time`, strongest at the impact, held until the cell's birth.
+fn pre_dep(p: &Plane, d: f64, k: f64, ts: f64, birth: f64) -> f64 { if p.preload_depth <= 0.0 || ts >= birth { return 0.0; } let r = sstep(ts / p.preload_time.max(1e-3)); p.preload_depth * k * r * (-(d / (p.radius * k * 5.0)).powi(2)).exp() }

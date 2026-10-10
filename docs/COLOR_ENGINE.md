@@ -370,3 +370,9 @@ An isolated test sets budget one byte below an audit clone and one byte below bo
 
 ### Scope count conservation
 A seeded signed/HDR/partly-transparent frame regression checks bins16/257/4096: every counted pixel belongs to exactly one histogram/under/over category per channel; waveform sum equals in-range luminance histogram sum; vectorscope sum equals counted visible pixels. This is count integrity for the declared BT709 display-domain fixture, not a vectorscope calibration claim or HDR chromaticity scope.
+
+### Native streaming decode bounded reader
+Native integer16/float decode reads raw frames on a joined worker with a rendezvous channel. At most two raw frames are held (main + worker); their memory is reserved on the main thread before spawning. Main polls with100ms cancellation checks under the existing frame-derived window deadline, fits/converts one source frame at a time, and checks process exit under that same deadline. Receiver drop, child kill/reap and worker join handle errors/cancellation; partial frames fail. Additional peak preflight includes raw/source/fitted/accumulated buffers. Actual native500frame320x180RGB16 output matches the pre-worker decoded bytes exactly (230400000bytes, SHA25603337a49cfe54e6dfdcd596becc06e9c12e0077b3c6c2ee4a881d146f0611d15); short50frameproof also exact. Large-source/small-output prefix re-decode can take minutes; this is blocked-read safety, not a speedup.16library/phase/lookahead/cache/interchange tests and164fullsuite tests passed with optionalOCIOenabled. Encoder writes remain the independent blocked-IO gap.
+
+### Native stream exit-state regressions
+A decoder that emits a complete frame then stalls at process exit must hit the same deadline and be killed/reaped. A decoder that emits complete bytes then exits unsuccessfully must return an error rather than counting raw-byte receipt as success. Both real-process tests pass; eighteen library tests run with the optional OCIO gate enabled.
