@@ -36,3 +36,21 @@ pub fn write_exr(f:&Frame,path:&str,gamut:usize,white:f64)->Result<(),String>{
  let mut attributes=LayerAttributes::named("scene-linear");attributes.white_luminance=Some(white as f32);attributes.adopted_neutral=Some(xy(w));attributes.comments=Some(Text::from("Scene-linear working RGB; whiteLuminance is caller-declared, not measured. No ACES output transform."));
  let layer=Layer::new((f.w,f.h),attributes,Encoding::SMALL_FAST_LOSSLESS,SpecificChannels::rgba(|pos:Vec2<usize>|{let i=(pos.y()*f.w+pos.x())*4;(f.d[i],f.d[i+1],f.d[i+2],f.d[i+3])}));let mut image=Image::from_layer(layer);image.attributes.chromaticities=Some(Chromaticities{red:xy(c[0]),green:xy(c[1]),blue:xy(c[2]),white:xy(w)});image.write().to_file(path).map_err(|e|e.to_string())
 }
+/// Bounded header-only inspection, does not select an input transform.
+pub fn exr_info(path:&str)->Result<serde_json::Value,String>{
+ use std::io::Read;use exr::meta::MetaData;use serde_json::json;
+ let file=std::fs::File::open(path).map_err(|e|e.to_string())?;let meta=MetaData::read_from_unbuffered(file.take(1024*1024),true).map_err(|e|format!("EXR header (max1MiB): {e}"))?;
+ let mut layers=Vec::new();for h in &meta.headers{
+ let chroma=h.shared_attributes.chromaticities.as_ref().map(|c|[[c.red.x(),c.red.y()],[c.green.x(),c.green.y()],[c.blue.x(),c.blue.y()],[c.white.x(),c.white.y()]]);
+ let matches=chroma.map(|q|(0..8).filter(|&g|{let(p,w)=super::managed::chroma(g);let target=[p[0],p[1],p[2],w];(0..4).all(|i|(0..2).all(|j|(q[i][j] as f64-target[i][j]).abs()<1e-5))}).collect::<Vec<_>>());
+ let channels:Vec<_>=h.channels.list.iter().map(|c|json!({"name":c.name.to_string(),"sample_type":format!("{:?}",c.sample_type),"sampling":[c.sampling.x(),c.sampling.y()]})).collect();
+ let standard=h.channels.list.iter().all(|c|["R","G","B","A"].contains(&c.name.to_string().as_str())&&c.sampling.x()==1&&c.sampling.y()==1&&c.sample_type!=exr::meta::attribute::SampleType::U32)&&["R","G","B"].iter().all(|name|h.channels.list.iter().any(|c|c.name.to_string()==*name));
+ layers.push(json!({"size":[h.layer_size.x(),h.layer_size.y()],"data_origin":[h.own_attributes.layer_position.x(),h.own_attributes.layer_position.y()],"deep":h.deep,"channels":channels,"standard_rgb_channels":standard,"chromaticities_xy":chroma,"matching_gamut_ids":matches,"declared_white_luminance":h.own_attributes.white_luminance,"compression":format!("{:?}",h.compression)}));}
+ Ok(json!({"format":"EXR","layers":layers,"transfer":"not inferred from chromaticities","note":"Metadata is file-declared. Matching gamut is only a suggestion, never applied automatically; confirm encoding before set_clip_input_color."}))
+}
+pub fn validate_exr_source(path:&str)->Result<(),String>{let v=exr_info(path)?;let layers=v["layers"].as_array().ok_or("invalid EXR metadata")?;if layers.len()!=1||layers[0]["deep"]==true||layers[0]["standard_rgb_channels"]!=true{return Err("EXR decode supports single flat RGB(A) layer with unit sampling only".into())}if layers[0]["data_origin"]!=serde_json::json!([0,0]){return Err("EXR nonzero data-window origin unsupported".into())}Ok(())}
+pub fn tiff_info(path:&str)->Result<serde_json::Value,String>{
+ use serde_json::json;use tiff::{decoder::Decoder,tags::Tag};let mut d=Decoder::new(std::io::BufReader::new(std::fs::File::open(path).map_err(|e|e.to_string())?)).map_err(|e|e.to_string())?;
+ let(w,h)=d.dimensions().map_err(|e|e.to_string())?;let color=format!("{:?}",d.colortype().map_err(|e|e.to_string())?);let sample=d.get_tag_u16_vec(Tag::SampleFormat).ok();let extras=d.get_tag_u16_vec(Tag::ExtraSamples).ok();let orientation=d.get_tag_u32(Tag::Orientation).unwrap_or(1);
+ Ok(json!({"format":"TIFF","size":[w,h],"color_type":color,"sample_format":sample,"extra_samples":extras,"orientation":orientation,"more_pages":d.more_images(),"note":"First-page header inspection only. Gamut/transfer not inferred, ICC not applied. Associated alpha and non-top-left orientation are rejected in managed decode."}))
+}
