@@ -644,6 +644,8 @@ pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, Str
     let before = ss.project.clone();
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (c.run)(ss, args)));
     let r = match r { Ok(r) => r, Err(e) => { ss.project = before; let m = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "internal error".into()); return Err(format!("tool '{name}' failed safely (project rolled back): {m}")); } };
-    if c.mutates && r.is_ok() { if let Err(e) = crate::guard::check_project(&ss.project, l) { ss.project = before; return Err(format!("rejected by sandbox (project rolled back): {e}")); } ss.undo.push(before); ss.redo.clear(); }
+    if c.mutates && r.is_ok() { if let Err(e) = crate::guard::check_project(&ss.project, l) { ss.project = before; return Err(format!("rejected by sandbox (project rolled back): {e}")); } let sz = serde_json::to_vec(&before).map(|v| v.len()).unwrap_or(1 << 20).max(1); ss.undo.push(before); ss.redo.clear();
+        // bounded history: at most 100 steps and roughly 256 MB of snapshots, so a 200-layer timeline cannot grow until the OS kills the engine
+        let cap = ((256usize << 20) / sz).clamp(8, 100); if ss.undo.len() > cap { let drop = ss.undo.len() - cap; ss.undo.drain(0..drop); } }
     r
 }
