@@ -175,7 +175,7 @@ User bar: every feature best in class. Tiers: **PRO** = matches or beats the pro
 | Tracking (ring of 9 patches, translation + rotation + scale, windowed decode, refit from frame 0 each frame) | V2 | no planar/homography tracker, no re-acquire after occlusion, no per-patch confidence UI, SAD matching (no ZNCC / optical flow refinement) |
 | Motion blur (`set_motion_blur`: shutter-angle multi-sample of x/y/scale/rotation, 4-16 samples) | V2 | no per-effect/param blur, no optical-flow blur for source footage, adjustment layers/text animators not covered |
 | Renderer | V1 | alpha-correct bilinear + 2x2..4x4 supersampling on transforms (done); still CPU f32, no mipmaps/Lanczos for large downscales, no GPU |
-| Transitions | V1 | 16 basic; no eased/curved variants, alignment options |
+| Transitions | V2 | 29 kinds, 10 easings, soft angled wipes, clock, split, iris, noise dissolve, dips, light leak, glitch, whip pan, zoom blur. Missing: outgoing-clip push/slide-out, luma-matte wipes from image, GPU-shader transitions |
 | Particles | V1 | procedural 5 types, no forces/collisions/emitter shapes/textures |
 | Text | V2 | kerned layout, word wrap, AE-style char/word/line animators with range selectors (6 shapes, keyframable) + 9 presets, stroke, blurred shadow, glow, gradient, rounded bg box. Missing: per-span rich text, text on path, variable fonts, emoji |
 | Masks | V2 | no bezier paths with per-vertex keyframes, mask expansion |
