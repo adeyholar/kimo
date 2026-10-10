@@ -29,7 +29,7 @@ else:
     a=C("import_media",path="/tmp/overtake_plate.mp4")["asset_id"]; t=C("add_track")["track_id"]
     m=C("add_clip",track_id=t,source_type="media",asset_id=a,start=0,duration=D)["clip_id"]
     t2=C("add_track")["track_id"]; tx=C("add_text",track_id=t2,text="LOCKED",start=0,duration=D,size=330,color=[0.85,0.05,0.35],stroke_width=14)["clip_id"]
-    q0=quad(SIGN,0); r=C("track_planar",clip_id=m,corners=[v/s for p in q0 for v,s in zip(p,(W,H))],target_clip_id=tx,return_quads=True)
+    q0=quad(SIGN,0); r=C("track_planar",clip_id=m,corners=[v/s for p in q0 for v,s in zip(p,(W,H))],target_clip_id=tx,reanchor=bool(__import__("os").environ.get("RA")),return_quads=True)
     print("track s",round(r["seconds"],2),"lost frames",r["lost_frames"],r["lost_ranges"])
     print("frame  sign_w_px  vis_area%  corner_err_px  conf")
     for i,qd in enumerate(r["quads"]):

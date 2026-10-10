@@ -2,16 +2,20 @@
 use crate::effects::Frame;
 pub fn unpack(bytes:&[u8],w:usize,h:usize)->Result<Vec<f32>,String>{let n=w.checked_mul(h).ok_or("float dimensions overflow")?;if bytes.len()!=n.checked_mul(16).ok_or("float length overflow")?{return Err("invalid planar float frame length".into())}let mut out=vec![0.;n*4];for (plane,ch)in [1,2,0,3].iter().enumerate(){for i in 0..n{let k=(plane*n+i)*4;let v=f32::from_le_bytes(bytes[k..k+4].try_into().unwrap());if !v.is_finite(){return Err("nonfinite float source".into())}out[i*4+ch]=v;}}Ok(out)}
 pub fn pack(f:&Frame)->Result<Vec<u8>,String>{let n=f.w.checked_mul(f.h).ok_or("float dimensions overflow")?;if n.checked_mul(4)!=Some(f.d.len()){return Err("invalid float frame shape".into())}let len=n.checked_mul(16).ok_or("float allocation overflow")?;crate::guard::reserve(len);let mut b=Vec::with_capacity(len);for ch in [1,2,0,3]{for i in 0..n{let v=f.d[i*4+ch];if !v.is_finite(){return Err("nonfinite float output".into())}b.extend_from_slice(&v.to_le_bytes());}}Ok(b)}
-/// Bilinear, alpha-correct fit in float. Unlike swscale this does not clip float HDR.
+/// Alpha-correct float fit: exact area integration when shrinking, bilinear when enlarging.
+/// Preserves signed HDR samples without clipping. No ringing from negative-lobe kernels.
 pub fn fit(f:&Frame,w:usize,h:usize,mode:f64)->Result<Vec<f32>,String>{
- if !mode.is_finite()||f.w.checked_mul(f.h).and_then(|n|n.checked_mul(4))!=Some(f.d.len())||f.w==0||f.h==0||w==0||h==0{return Err("zero float dimensions".into())}
+ if !mode.is_finite()||f.w.checked_mul(f.h).and_then(|n|n.checked_mul(4))!=Some(f.d.len())||f.w==0||f.h==0||w==0||h==0{return Err("invalid float dimensions".into())}
+ if f.d.iter().any(|v|!v.is_finite()){return Err("nonfinite float fit source".into())}
  let sx=w as f64/f.w as f64;let sy=h as f64/f.h as f64;
- let (sx,sy)=if mode>=1.5{(sx,sy)}else{let k=if mode>=0.5{sx.max(sy)}else{sx.min(sy)};(k,k)};
+ let(sx,sy)=if mode>=1.5{(sx,sy)}else{let k=if mode>=0.5{sx.max(sy)}else{sx.min(sy)};(k,k)};
  let ox=(w as f64-f.w as f64*sx)/2.;let oy=(h as f64-f.h as f64*sy)/2.;
- let len=w.checked_mul(h).and_then(|n|n.checked_mul(4)).ok_or("float fit size overflow")?;crate::guard::reserve(len.checked_mul(4).ok_or("float fit allocation overflow")?);let mut out=vec![0.;len];for y in 0..h{for x in 0..w{let u=(x as f64+0.5-ox)/sx-0.5;let v=(y as f64+0.5-oy)/sy-0.5;if u < -0.5||v < -0.5||u>=f.w as f64-0.5||v>=f.h as f64-0.5{continue}
- let u=u.clamp(0.,(f.w-1) as f64);let v=v.clamp(0.,(f.h-1) as f64);let a=u.floor() as usize;let b=v.floor() as usize;let c=(a+1).min(f.w-1);let d=(b+1).min(f.h-1);let tx=(u-a as f64) as f32;let ty=(v-b as f64) as f32;
- let points=[(a,b,(1.-tx)*(1.-ty)),(c,b,tx*(1.-ty)),(a,d,(1.-tx)*ty),(c,d,tx*ty)];let alpha:f32=points.iter().map(|&(xx,yy,k)|f.d[(yy*f.w+xx)*4+3]*k).sum();out[(y*w+x)*4+3]=alpha;for ch in 0..3{let sum:f32=points.iter().map(|&(xx,yy,k)|{let i=(yy*f.w+xx)*4;f.d[i+ch]*f.d[i+3]*k}).sum();out[(y*w+x)*4+ch]=if alpha.abs()>1e-8{sum/alpha}else{0.};}}
- }Ok(out)
+ let len=w.checked_mul(h).and_then(|n|n.checked_mul(4)).ok_or("float fit size overflow")?;crate::guard::reserve(len.checked_mul(4).ok_or("float fit allocation overflow")?);
+ let xs=axis_weights(f.w,w,sx,ox);let ys=axis_weights(f.h,h,sy,oy);let mut out=vec![0.;len];
+ for(y,yw)in ys.iter().enumerate(){for(x,xw)in xs.iter().enumerate(){let mut c=[0f64;4];for &(yy,wy)in yw{for &(xx,wx)in xw{let i=(yy*f.w+xx)*4;let a=f.d[i+3] as f64;let k=wy*wx;c[3]+=a*k;for j in 0..3{c[j]+=f.d[i+j] as f64*a*k;}}}let i=(y*w+x)*4;out[i+3]=c[3] as f32;for j in 0..3{out[i+j]=if c[3].abs()>1e-8{(c[j]/c[3]) as f32}else{0.};}}}Ok(out)
+}
+fn axis_weights(src:usize,dst:usize,scale:f64,offset:f64)->Vec<Vec<(usize,f64)>>{
+ (0..dst).map(|x|{let center=(x as f64+0.5-offset)/scale;if scale<1.{let lo=(x as f64-offset)/scale;let hi=(x as f64+1.-offset)/scale;let mut v=Vec::new();let a=lo.floor().max(0.) as usize;let b=(hi.ceil().max(0.) as usize).min(src);for i in a..b{let k=(hi.min(i as f64+1.)-lo.max(i as f64)).max(0.)/(hi-lo);if k>0.{v.push((i,k));}}v}else if center<0.||center>=src as f64{vec![]}else{let u=(center-0.5).clamp(0.,(src-1) as f64);let a=u.floor() as usize;let b=(a+1).min(src-1);let t=u-a as f64;if a==b{vec![(a,1.)]}else{vec![(a,1.-t),(b,t)]}}}).collect()
 }
 pub fn tiff_size(path:&str)->Result<(u32,u32),String>{let f=std::fs::File::open(path).map_err(|e|e.to_string())?;tiff::decoder::Decoder::new(std::io::BufReader::new(f)).and_then(|mut d|d.dimensions()).map_err(|e|e.to_string())}
 pub fn tiff_frame(path:&str,budget:usize)->Result<Frame,String>{

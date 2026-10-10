@@ -130,11 +130,13 @@ pub fn pose_predict(hist: &[Quad], w: usize, h: usize) -> Option<Quad> {
 pub struct Track { pub quads: Vec<Quad>, pub conf: Vec<f64>, pub gain: Vec<f64>, pub lost: Vec<bool> }
 
 /// Track the quad `q0` (pixel coords) through frames `[f0, f1]` of a media clip.
-pub fn track(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels: usize) -> Result<Track, String> {
+pub fn track(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels: usize) -> Result<Track, String> { track_opts(p, clip_id, q0, f0, f1, levels, false) }
+/// `reanchor`: segment mode. When the frame-to-frame fit is confident but the original anchor no longer matches (lighting or appearance change), the anchor is refreshed from the current frame so the track restarts a new drift-free segment instead of dropping.
+pub fn track_opts(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels: usize, reanchor: bool) -> Result<Track, String> {
     let c = p.find_clip(clip_id).ok_or("no such clip")?.clone(); let mut cache = crate::render::Cache::new(); let (w, h) = (p.width as usize, p.height as usize);
     let levels = levels.clamp(2, 5); let iters = [6usize, 8, 10, 12, 12];
     let get = |cache: &mut crate::render::Cache, i: usize| -> Result<Vec<Img>, String> { let g = crate::tracking::clip_gray_pub(p, cache, &c, i)?; Ok(pyramid(g, w, h, levels)) };
-    let p0 = get(&mut cache, f0)?; let anchor = make_tmpl(&p0, &q0);
+    let p0 = get(&mut cache, f0)?; let mut anchor = make_tmpl(&p0, &q0);
     let mut out = Track { quads: vec![q0], conf: vec![1.0], gain: vec![1.0], lost: vec![false] };
     let mut prev_pyr = p0; let (mut q, mut vel) = (q0, [[0f64; 2]; 4]); let mut lost = false; let mut prevq: Option<Quad> = None; let mut hist: Vec<f64> = vec![]; let mut qh: Vec<Quad> = vec![q0];
     for i in f0 + 1..=f1 {
@@ -154,6 +156,7 @@ pub fn track(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels:
         let near = |fq: &Quad| (0..4).map(|k| (fq[k][0] - pred[k][0]).hypot(fq[k][1] - pred[k][1])).fold(0.0, f64::max) < 0.06 * szq + 12.0;
         let mc = if hist.is_empty() { 0.0 } else { hist.iter().sum::<f64>() / hist.len() as f64 };
         let fa_ok = fa.conf >= 0.55 && quad_valid(&q, &fa.q) && (fa.conf >= 0.8 * mc || (near(&fa.q) && fa.conf >= 0.68 * mc)); let be_ok = !lost && best.conf >= 0.5 && quad_valid(&q, &best.q) && (best.conf >= 0.8 * mc || (near(&best.q) && best.conf >= 0.68 * mc));
+        if reanchor && !lost && !fa_ok && best.conf >= 0.85 && quad_valid(&q, &best.q) { anchor = make_tmpl(&cur, &best.q); }
         let (chosen, ok) = if fa_ok { (fa, true) } else if be_ok { (best, true) } else { (Fit { q: pred, conf: fa.conf.max(best.conf), gain: 1.0 }, false) };
         if ok { let nv: Quad = { let mut v = [[0f64; 2]; 4]; for k in 0..4 { v[k] = [chosen.q[k][0] - q[k][0], chosen.q[k][1] - q[k][1]]; } v }; for k in 0..4 { vel[k] = [0.6 * nv[k][0] + 0.4 * vel[k][0], 0.6 * nv[k][1] + 0.4 * vel[k][1]]; } prevq = Some(q); q = chosen.q; qh.push(q); if qh.len() > 8 { qh.remove(0); } lost = false; hist.push(chosen.conf); if hist.len() > 6 { hist.remove(0); } }
         else { for k in 0..4 { vel[k] = [vel[k][0] * 0.85, vel[k][1] * 0.85]; } q = if lost { pose_pred.unwrap_or(pred) } else { pred }; qh.push(q); if qh.len() > 8 { qh.remove(0); } lost = true; }
