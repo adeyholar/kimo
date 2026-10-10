@@ -133,33 +133,80 @@ pub fn pin_quad(c: &Clip, lt: f64) -> Option<Quad> { if c.props.get("pin_on").ma
     for i in 0..4 { q[i] = [c.props.get(&format!("pin{i}x"))?.at(lt), c.props.get(&format!("pin{i}y"))?.at(lt)]; } Some(q) }
 
 /// Perspective-correct pin of the whole layer onto `to`, 3x3 supersampled: anti-aliased edges, minification-safe, premultiplied interpolation.
-pub fn pin_frame(src: &Frame, to: &Quad, gain: f32) -> Frame {
-    let (w, h) = (src.w, src.h); let from: Quad = [[0.0, 0.0], [w as f64, 0.0], [w as f64, h as f64], [0.0, h as f64]]; let mut o = Frame::new(w, h);
-    let Some(hm) = solve_h(to, &from) else { return o };
+pub fn pin_frame(src: &Frame, to: &Quad, gain: f32) -> Frame { let mut o = Frame::new(src.w, src.h); pin_rect(src, [0.0, 0.0, src.w as f64, src.h as f64], to, gain, &mut o); o }
+
+/// Pin the source rectangle `rect` = [x0,y0,x1,y1] (pixels) onto quad `to`, compositing premultiplied over `o`.
+pub fn pin_rect(src: &Frame, rect: [f64; 4], to: &Quad, gain: f32, o: &mut Frame) {
+    let (w, h) = (src.w, src.h); let from: Quad = [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]];
+    let Some(hm) = solve_h(to, &from) else { return };
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN); for p in to { x0 = x0.min(p[0]); y0 = y0.min(p[1]); x1 = x1.max(p[0]); y1 = y1.max(p[1]); }
-    let (bx0, by0, bx1, by1) = ((x0.floor().max(0.0)) as usize, (y0.floor().max(0.0)) as usize, (x1.ceil().min(w as f64 - 1.0)) as usize, (y1.ceil().min(h as f64 - 1.0)) as usize); if x1 < 0.0 || y1 < 0.0 { return o; }
-    // minification: scale of dest relative to source -> more samples when shrinking
+    if x1 < 0.0 || y1 < 0.0 || x0 > w as f64 || y0 > h as f64 { return; }
+    let (bx0, by0, bx1, by1) = ((x0.floor().max(0.0)) as usize, (y0.floor().max(0.0)) as usize, (x1.ceil().min(w as f64 - 1.0)) as usize, (y1.ceil().min(h as f64 - 1.0)) as usize);
     let area = |q: &Quad| 0.5 * ((q[0][0] * q[1][1] - q[1][0] * q[0][1]) + (q[1][0] * q[2][1] - q[2][0] * q[1][1]) + (q[2][0] * q[3][1] - q[3][0] * q[2][1]) + (q[3][0] * q[0][1] - q[0][0] * q[3][1])).abs();
     let ratio = (area(&from) / area(to).max(1.0)).sqrt(); let ss_edge = (ratio.ceil() as usize + 1).clamp(3, 6); let ss_in = if ratio > 1.3 { (ratio.ceil() as usize).clamp(2, 5) } else { 1 };
+    let (rw, rh) = (rect[2] - rect[0], rect[3] - rect[1]);
     for y in by0..=by1.min(h - 1) { for x in bx0..=bx1.min(w - 1) { let mut acc = [0f32; 4];
-        let (cu, cv) = ap(&hm, x as f64 + 0.5, y as f64 + 0.5); let mg = 2.5 * ratio.max(1.0) + 1.0; let interior = cu > mg && cv > mg && cu < w as f64 - mg && cv < h as f64 - mg; let ss = if interior { ss_in } else { ss_edge }; let inv = 1.0 / (ss * ss) as f32;
+        let (cu, cv) = ap(&hm, x as f64 + 0.5, y as f64 + 0.5); let mg = 2.5 * ratio.max(1.0) + 1.0; let interior = cu > rect[0] + mg && cv > rect[1] + mg && cu < rect[2] - mg && cv < rect[3] - mg; let ss = if interior { ss_in } else { ss_edge }; let inv = 1.0 / (ss * ss) as f32;
         for sy in 0..ss { for sx in 0..ss { let (xf, yf) = (x as f64 + (sx as f64 + 0.5) / ss as f64, y as f64 + (sy as f64 + 0.5) / ss as f64); let (u, v) = ap(&hm, xf, yf);
-            if u < 0.0 || v < 0.0 || u > w as f64 || v > h as f64 { continue; } let (uu, vv) = ((u - 0.5).clamp(0.0, w as f64 - 1.001), (v - 0.5).clamp(0.0, h as f64 - 1.001)); let (ix, iy) = (uu as usize, vv as usize); let (fx, fy) = ((uu - ix as f64) as f32, (vv - iy as f64) as f32);
+            if u < rect[0] || v < rect[1] || u > rect[2] || v > rect[3] { continue; } let (uu, vv) = ((u - 0.5).clamp(0.0, w as f64 - 1.001), (v - 0.5).clamp(0.0, h as f64 - 1.001)); let (ix, iy) = (uu as usize, vv as usize); let (fx, fy) = ((uu - ix as f64) as f32, (vv - iy as f64) as f32);
             let g = |xx: usize, yy: usize| -> [f32; 4] { let i = (yy * w + xx) * 4; let a = src.d[i + 3]; [src.d[i] * a, src.d[i + 1] * a, src.d[i + 2] * a, a] };
             let (a, b, c, d) = (g(ix, iy), g((ix + 1).min(w - 1), iy), g(ix, (iy + 1).min(h - 1)), g((ix + 1).min(w - 1), (iy + 1).min(h - 1)));
             for j in 0..4 { acc[j] += a[j] * (1.0 - fx) * (1.0 - fy) + b[j] * fx * (1.0 - fy) + c[j] * (1.0 - fx) * fy + d[j] * fx * fy; } } }
-        let a = acc[3] * inv; let i = (y * w + x) * 4; if a > 1e-6 { for j in 0..3 { o.d[i + j] = (acc[j] * inv / a * gain).min(4.0); } o.d[i + 3] = a; } } }
-    o
+        let a = acc[3] * inv; let i = (y * w + x) * 4; if a > 1e-6 { let (nr, ng, nb) = ((acc[0] * inv * gain).min(4.0 * a), (acc[1] * inv * gain).min(4.0 * a), (acc[2] * inv * gain).min(4.0 * a));
+            let (or, og, ob, oa) = (o.d[i] * o.d[i + 3], o.d[i + 1] * o.d[i + 3], o.d[i + 2] * o.d[i + 3], o.d[i + 3]); let na = a + oa * (1.0 - a); let k = 1.0 / na.max(1e-6);
+            o.d[i] = (nr + or * (1.0 - a)) * k; o.d[i + 1] = (ng + og * (1.0 - a)) * k; o.d[i + 2] = (nb + ob * (1.0 - a)) * k; o.d[i + 3] = na; } } }
+    let _ = (rw, rh);
 }
+
+/// Mesh pin: the layer canvas is cut into (nx-1)*(ny-1) cells, each pinned onto its own tracked quad.
+pub fn pin_mesh(src: &Frame, verts: &[[f64; 2]], nx: usize, ny: usize, gain: f32) -> Frame {
+    let mut o = Frame::new(src.w, src.h); let (w, h) = (src.w as f64, src.h as f64);
+    for j in 0..ny - 1 { for i in 0..nx - 1 { let rect = [w * i as f64 / (nx - 1) as f64, h * j as f64 / (ny - 1) as f64, w * (i + 1) as f64 / (nx - 1) as f64, h * (j + 1) as f64 / (ny - 1) as f64];
+        let mut q = [verts[j * nx + i], verts[j * nx + i + 1], verts[(j + 1) * nx + i + 1], verts[(j + 1) * nx + i]]; let c = [(q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4.0, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4.0];
+        for p in q.iter_mut() { let (dx, dy) = (p[0] - c[0], p[1] - c[1]); let l = dx.hypot(dy).max(1e-6); p[0] += dx / l * 0.7; p[1] += dy / l * 0.7; }
+        let mut rr = rect; rr[0] -= 0.0; rr[1] -= 0.0; pin_rect(src, rr, &q, gain, &mut o); } } o
+}
+pub fn mesh_verts(c: &Clip, lt: f64) -> Option<(usize, usize, Vec<[f64; 2]>)> { let nx = c.props.get("mesh_nx")?.base as usize; let ny = c.props.get("mesh_ny")?.base as usize; if nx < 2 || ny < 2 { return None; }
+    let mut v = Vec::with_capacity(nx * ny); for k in 0..nx * ny { v.push([c.props.get(&format!("mx{k}"))?.at(lt), c.props.get(&format!("my{k}"))?.at(lt)]); } Some((nx, ny, v)) }
 
 /// Render a pinned layer with optional motion blur (shutter in degrees) by averaging pinned samples across the shutter interval.
 pub fn pin_render(c: &Clip, f: &Frame, lt: f64, fps: f64) -> Option<Frame> {
-    pin_quad(c, lt)?; let light = c.props.get("pin_light").map(|p| p.at(lt)).unwrap_or(0.0) as f32; let n = if c.motion_blur > 0.0 { ((c.motion_blur / 22.5).ceil() as usize).clamp(2, 16) } else { 1 }; let sh = c.motion_blur / 360.0 / fps;
+    let is_mesh = c.props.get("pin_on").map(|p| p.at(lt)).unwrap_or(0.0) >= 0.5 && c.props.contains_key("mesh_nx"); if !is_mesh { pin_quad(c, lt)?; } else if mesh_verts(c, lt).is_none() { return None; }
+    let light = c.props.get("pin_light").map(|p| p.at(lt)).unwrap_or(0.0) as f32; let n = if c.motion_blur > 0.0 { ((c.motion_blur / 22.5).ceil() as usize).clamp(2, 16) } else { 1 }; let sh = c.motion_blur / 360.0 / fps;
     let gain_at = |t: f64| -> f32 { 1.0 + (c.props.get("pin_gain").map(|p| p.at(t)).unwrap_or(1.0) as f32 - 1.0) * light };
-    if n == 1 { return Some(pin_frame(f, &pin_quad(c, lt)?, gain_at(lt))); }
-    let mut acc = Frame::new(f.w, f.h); for k in 0..n { let t2 = lt + ((k as f64 + 0.5) / n as f64 - 0.5) * sh; let Some(q) = pin_quad(c, t2) else { continue }; let g = pin_frame(f, &q, gain_at(t2));
+    let one = |t: f64| -> Option<Frame> { if is_mesh { let (nx, ny, v) = mesh_verts(c, t)?; Some(pin_mesh(f, &v, nx, ny, gain_at(t))) } else { Some(pin_frame(f, &pin_quad(c, t)?, gain_at(t))) } };
+    if n == 1 { return one(lt); }
+    let mut acc = Frame::new(f.w, f.h); for k in 0..n { let t2 = lt + ((k as f64 + 0.5) / n as f64 - 0.5) * sh; let Some(g) = one(t2) else { continue };
         for i in 0..f.w * f.h { let a = g.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += g.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; } } }
     for i in 0..f.w * f.h { let a = acc.d[i * 4 + 3]; if a > 1e-6 { for j in 0..3 { acc.d[i * 4 + j] /= a; } acc.d[i * 4 + 3] = a / n as f32; } } Some(acc)
+}
+
+/// Track a nx*ny mesh inside quad `q0`: global homography track, then per-vertex local refinement against the frame-f0 patch warped by the local Jacobian, neighbour-regularised.
+pub fn track_mesh(p: &Project, clip_id: &str, q0: Quad, nx: usize, ny: usize, f0: usize, f1: usize, init: Option<Vec<(f64, f64)>>) -> Result<(Vec<Vec<[f64; 2]>>, Vec<f64>), String> {
+    let g = track(p, clip_id, q0, f0, f1, 3)?; let c = p.find_clip(clip_id).ok_or("no such clip")?.clone(); let mut cache = crate::render::Cache::new(); let (w, h) = (p.width as usize, p.height as usize);
+    let hq0 = solve_h(&UNIT, &q0).ok_or("degenerate quad")?; let v0: Vec<(f64, f64)> = init.filter(|v| v.len() == nx * ny).unwrap_or_else(|| (0..nx * ny).map(|k| ap(&hq0, (k % nx) as f64 / (nx - 1) as f64, (k / nx) as f64 / (ny - 1) as f64)).collect());
+    let ref_img: Img = { let gr = crate::tracking::clip_gray_pub(p, &mut cache, &c, f0)?; (gr, w, h) }; let r = 14i32;
+    let mut out = vec![]; let mut conf = vec![]; let mut prev = v0.clone(); let mut prev2 = v0.clone();
+    for (fi, qt) in g.quads.iter().enumerate() { let cur_img: Img = if fi == 0 { ref_img.clone() } else { (crate::tracking::clip_gray_pub(p, &mut cache, &c, f0 + fi)?, w, h) };
+        let rel = if fi == 0 || std::env::var("KINO_REL").is_err() { [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0] } else { solve_h(&g.quads[fi - 1], qt).unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]) };
+        let base: Vec<(f64, f64)> = prev.iter().zip(prev2.iter()).map(|(v, v2)| { let a = ap(&rel, v.0, v.1); (a.0 + (v.0 - v2.0) * 0.85, a.1 + (v.1 - v2.1) * 0.85) }).collect(); let mut d = vec![(0f64, 0f64); nx * ny]; let mut cf = vec![0f64; nx * ny];
+        if fi > 0 { for k in 0..nx * ny { let (vx, vy) = v0[k]; let (bx, by) = base[k]; let (i, j) = (k % nx, k / nx);
+            let (il, ir, jl, jr) = (i.saturating_sub(1), (i + 1).min(nx - 1), j.saturating_sub(1), (j + 1).min(ny - 1));
+            let (rx, ry) = ((v0[j * nx + ir].0 - v0[j * nx + il].0, v0[j * nx + ir].1 - v0[j * nx + il].1), (v0[jr * nx + i].0 - v0[jl * nx + i].0, v0[jr * nx + i].1 - v0[jl * nx + i].1));
+            let (ex, ey) = ((base[j * nx + ir].0 - base[j * nx + il].0, base[j * nx + ir].1 - base[j * nx + il].1), (base[jr * nx + i].0 - base[jl * nx + i].0, base[jr * nx + i].1 - base[jl * nx + i].1));
+            let dr = rx.0 * ry.1 - ry.0 * rx.1; if dr.abs() < 1e-6 { continue; } let (i00, i01, i10, i11) = (ry.1 / dr, -ry.0 / dr, -rx.1 / dr, rx.0 / dr);
+            let jac = [[ex.0 * i00 + ey.0 * i10, ex.0 * i01 + ey.0 * i11], [ex.1 * i00 + ey.1 * i10, ex.1 * i01 + ey.1 * i11]];
+            let mut tp = vec![]; let mut cnt = 0; for dy in -r..=r { for dx in -r..=r { if let Some(v) = bil(&ref_img, vx + dx as f64, vy + dy as f64) { tp.push((dx as f64, dy as f64, v)); cnt += 1; } } } if cnt < 100 { continue; }
+            let mt = tp.iter().map(|t| t.2).sum::<f32>() / tp.len() as f32; let st = (tp.iter().map(|t| (t.2 - mt).powi(2)).sum::<f32>() / tp.len() as f32).sqrt().max(1e-3); let (mut ox, mut oy) = (0f64, 0f64);
+            for _ in 0..14 { let (mut a11, mut a12, mut a22, mut b1, mut b2, mut sw) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64); let mut vals = vec![]; for t in &tp { let px = bx + ox + jac[0][0] * t.0 + jac[0][1] * t.1; let py = by + oy + jac[1][0] * t.0 + jac[1][1] * t.1; match (bil(&cur_img, px, py), bil(&cur_img, px + 1.0, py), bil(&cur_img, px - 1.0, py), bil(&cur_img, px, py + 1.0), bil(&cur_img, px, py - 1.0)) { (Some(i0), Some(a), Some(b), Some(c2), Some(d2)) => vals.push((i0, (a - b) * 0.5, (c2 - d2) * 0.5, t.2)), _ => {} } }
+                if vals.len() < 60 { break; } let mi = vals.iter().map(|v| v.0).sum::<f32>() / vals.len() as f32; let si = (vals.iter().map(|v| (v.0 - mi).powi(2)).sum::<f32>() / vals.len() as f32).sqrt().max(1e-3);
+                let mut ssum = 0f64; for v in &vals { let res = ((v.0 - mi) / si - (v.3 - mt) / st) as f64; let wgt = if res.abs() < 0.9 { 1.0 } else { 0.1 }; let (gx, gy) = (v.1 as f64 / si as f64, v.2 as f64 / si as f64); a11 += wgt * gx * gx; a12 += wgt * gx * gy; a22 += wgt * gy * gy; b1 -= wgt * gx * res; b2 -= wgt * gy * res; sw += wgt; ssum += wgt * res * res; }
+                let l = 1e-2 * (a11 + a22) + 1e-6; let det = (a11 + l) * (a22 + l) - a12 * a12; if det.abs() < 1e-12 { break; } let (dx, dy) = (((a22 + l) * b1 - a12 * b2) / det, ((a11 + l) * b2 - a12 * b1) / det); ox += dx.clamp(-3.0, 3.0); oy += dy.clamp(-3.0, 3.0); cf[k] = (1.0 - 0.5 * ssum / sw.max(1.0)).max(0.0); if dx.abs() + dy.abs() < 0.01 { break; } if ox.abs() > 24.0 || oy.abs() > 24.0 { ox = ox.clamp(-24.0, 24.0); oy = oy.clamp(-24.0, 24.0); } }
+            d[k] = (ox, oy); }
+            // neighbour regularisation: low-confidence vertices pull toward the neighbours' mean offset
+            let dd = d.clone(); for k in 0..nx * ny { let (i, j) = (k % nx, k / nx); let mut sx = 0.0; let mut sy = 0.0; let mut sw = 0.0; for (ii, jj) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] { if ii < nx && jj < ny { let kk = jj * nx + ii; let wgt = cf[kk].max(0.05); sx += dd[kk].0 * wgt; sy += dd[kk].1 * wgt; sw += wgt; } } if sw > 0.0 { let a = cf[k].clamp(0.0, 1.0).powi(2); d[k] = (dd[k].0 * a + sx / sw * (1.0 - a), dd[k].1 * a + sy / sw * (1.0 - a)); } } }
+        let cur: Vec<[f64; 2]> = (0..nx * ny).map(|k| [base[k].0 + d[k].0, base[k].1 + d[k].1]).collect(); prev2 = std::mem::replace(&mut prev, cur.iter().map(|v| (v[0], v[1])).collect()); out.push(cur); conf.push(if fi == 0 { 1.0 } else { cf.iter().sum::<f64>() / cf.len() as f64 * g.conf[fi].max(0.0).min(1.0).sqrt() }); }
+    Ok((out, conf))
 }
 
 // ---- occluder auto-matte -------------------------------------------------------------------------------------------------------------
