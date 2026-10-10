@@ -3,7 +3,7 @@
 use crate::effects::Frame;
 use crate::model::Transition;
 
-pub const KINDS: &[&str] = &["crossfade", "wipe", "wipe_left", "wipe_right", "wipe_up", "wipe_down", "diagonal", "blinds", "checker", "iris", "clock", "split_h", "split_v", "noise_dissolve", "slide_left", "slide_right", "slide_up", "slide_down", "zoom", "zoom_blur", "spin", "flash", "dip_black", "dip_white", "dip_color", "light_leak", "glitch", "whip_left", "whip_right", "shatter"];
+pub const KINDS: &[&str] = &["crossfade", "wipe", "wipe_left", "wipe_right", "wipe_up", "wipe_down", "diagonal", "blinds", "checker", "iris", "clock", "split_h", "split_v", "noise_dissolve", "slide_left", "slide_right", "slide_up", "slide_down", "zoom", "zoom_blur", "spin", "flash", "dip_black", "dip_white", "dip_color", "light_leak", "glitch", "whip_left", "whip_right", "shatter", "shatter_cells"];
 pub const EASES: &[&str] = &["linear", "in", "out", "in_out", "in_cubic", "out_cubic", "in_out_cubic", "in_out_expo", "out_back", "out_bounce"];
 
 pub fn ease(name: &str, t: f64) -> f64 {
@@ -28,7 +28,7 @@ fn voro(x: f32, y: f32, cs: f32, seed: u32) -> (f32, f32, f32, f32, f32) { // (c
     (hash(best.0, best.1, seed ^ 0x51ed), d1, d2, bc.0, bc.1) }
 pub type Mask = Box<dyn Fn(usize, usize) -> f32>;
 pub struct Plan { pub op: f32, pub mask: Option<Mask>, pub dx: f64, pub dy: f64, pub scale: f64, pub rot: f64,
-    pub dip: Option<([f32; 3], f32)>, pub post: Option<Box<dyn Fn(&mut Frame)>>, pub overlay: Option<Box<dyn Fn(&mut Frame)>> }
+    pub dip: Option<([f32; 3], f32)>, pub post: Option<Box<dyn Fn(&mut Frame)>>, pub overlay: Option<Box<dyn Fn(&mut Frame)>>, pub compose: Option<Box<dyn Fn(&Frame, &Frame) -> Frame>> }
 
 fn dir_blur(f: &mut Frame, dx: f32, dy: f32, n: usize) { if dx.abs() + dy.abs() < 0.5 { return; } let (w, h) = (f.w, f.h); let src = f.d.clone();
     for y in 0..h { for x in 0..w { let mut acc = [0f32; 4]; for k in 0..n { let o = k as f32 / (n - 1) as f32 - 0.5; let sx = ((x as f32 + dx * o).round() as i32).clamp(0, w as i32 - 1) as usize; let sy = ((y as f32 + dy * o).round() as i32).clamp(0, h as i32 - 1) as usize; let i = (sy * w + sx) * 4; let a = src[i + 3]; for j in 0..3 { acc[j] += src[i + j] * a; } acc[3] += a; }
@@ -39,7 +39,7 @@ fn radial_blur(f: &mut Frame, amount: f32, n: usize) { if amount < 0.002 { retur
 
 pub fn plan(tr: &Transition, lt: f64, w: usize, h: usize) -> Plan {
     let kr = (lt / tr.duration).clamp(0.0, 1.0); let k = ease(&tr.ease, kr) as f32; let (wf, hf) = (w as f32, h as f32); let soft = tr.softness.max(0.0) as f32; let seed = tr.seed;
-    let mut p = Plan { op: 1.0, mask: None, dx: 0.0, dy: 0.0, scale: 1.0, rot: 0.0, dip: None, post: None, overlay: None };
+    let mut p = Plan { op: 1.0, mask: None, dx: 0.0, dy: 0.0, scale: 1.0, rot: 0.0, dip: None, post: None, overlay: None, compose: None };
     let wipe = |ang_deg: f32, k: f32| -> Mask { let (c, s) = (ang_deg.to_radians().cos(), ang_deg.to_radians().sin()); let half = (wf * c.abs() + hf * s.abs()) / 2.0; let sw = (soft * half * 2.0).max(1.0); let edge = -half + k * (2.0 * half + sw);
         Box::new(move |x, y| { let pr = (x as f32 - wf / 2.0) * c + (y as f32 - hf / 2.0) * s; sstep((edge - pr) / sw) }) };
     match tr.kind.as_str() {
@@ -67,7 +67,8 @@ pub fn plan(tr: &Transition, lt: f64, w: usize, h: usize) -> Plan {
             p.mask = Some(Box::new(move |_, y| { let b = (y as f32 / bh) as i32; if hash(b, step as i32, seed) < k * 1.4 - 0.1 { 1.0 } else { 0.0 } }));
             p.post = Some(Box::new(move |f| { let (w, h) = (f.w, f.h); let src = f.d.clone(); for y in 0..h { let b = (y as f32 / bh) as i32; let off = ((hash(b, step as i32 + 5, seed) - 0.5) * 2.0 * sev * w as f32 * 0.25) as i32; let rs = (sev * 14.0) as i32;
                 for x in 0..w { let o = (y * w + x) * 4; for (j, d) in [(0usize, -rs), (1, 0), (2, rs)] { let sx = (x as i32 + off + d).rem_euclid(w as i32) as usize; f.d[o + j] = src[(y * w + sx) * 4 + j]; } } } })); }
-        "shatter" => { // incoming frame revealed through Voronoi shards, shockwave from an impact point; cracks glow ahead of the wave
+        "shatter" => { let (uu, sd, dn, it) = (kr as f32, seed, (tr.count / 9.0).max(0.4) as f32, tr.intensity as f32); p.compose = Some(Box::new(move |below, inc| crate::glass::compose(below, inc, uu, sd, dn, it))); }
+        "shatter_cells" => { // incoming frame revealed through Voronoi shards, shockwave from an impact point; cracks glow ahead of the wave
             let cs = (wf / tr.count.clamp(3.0, 40.0) as f32).max(8.0); let (ix, iy) = (wf * (0.3 + 0.4 * hash(5, 6, seed)), hf * (0.3 + 0.4 * hash(7, 8, seed))); let maxd = (wf * wf + hf * hf).sqrt();
             let lag = move |cx: f32, cy: f32, hs: f32| -> f32 { (((cx - ix).powi(2) + (cy - iy).powi(2)).sqrt() / maxd) * 0.55 + hs * 0.2 };
             p.mask = Some(Box::new(move |x, y| { let (hs, _d1, _d2, cx, cy) = voro(x as f32, y as f32, cs, seed); sstep((k - 0.18 - lag(cx, cy, hs)) / 0.12) }));

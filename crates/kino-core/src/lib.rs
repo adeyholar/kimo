@@ -3,6 +3,8 @@
 //! is generated from the registry, so nothing can exist without a tool.
 pub mod keyframe;
 pub mod hud;
+pub mod three_d;
+pub mod glass;
 pub mod model;
 pub mod commands;
 pub mod render;

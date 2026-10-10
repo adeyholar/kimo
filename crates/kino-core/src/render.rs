@@ -199,12 +199,19 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
         }}
         let mut f = f; if let Some(pl) = tplan.as_mut() { mask = pl.mask.take(); if let Some(po) = &pl.post { po(&mut f); } }
         let f = if let Some(cs) = &c.corners { corner_pin(&f, cs) } else { f };
+        let (rxv, ryv, pzv) = (prop(c, "rot_x", lt), prop(c, "rot_y", lt), prop(c, "pos_z", lt));
+        if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 {
+            let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(c, "rotation", lt) + rot_extra], scale: sc };
+            let f3 = crate::three_d::render_layer(&f, &cam, &pose, prop(c, "backface", lt) != 0.0);
+            blend(&mut out, &f3, op, &c.blend, mask.as_deref()); if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } } continue;
+        }
         let f = if c.motion_blur > 0.0 { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h];
             for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (prop(c, "x", lt2), prop(c, "y", lt2)); dx2 += dx - prop(c, "x", lt); dy2 += dy - prop(c, "y", lt);
                 let mut sc2 = prop(c, "scale", lt2); if sc != prop(c, "scale", lt) { sc2 *= sc / prop(c, "scale", lt).max(1e-9); } let tf = transform(&f, sc2, prop(c, "rotation", lt2) + rot_extra, dx2, dy2);
                 for i in 0..w * h { let a = tf.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += tf.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; wsum[i] += a; } } }
             for i in 0..w * h { if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } acc }
             else { transform(&f, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
+        if let Some(cf) = tplan.as_ref().and_then(|pl| pl.compose.as_ref()) { out = cf(&out, &f); continue; }
         blend(&mut out, &f, op, &c.blend, mask.as_deref());
         if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } }
     }}
