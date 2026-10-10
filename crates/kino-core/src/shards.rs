@@ -73,7 +73,7 @@ struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, ri
 
 pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
     let (w, hh) = (f.w, f.h); let cv = CamView::new(w, hh, cam); let fl = cv.focal(); let k = w.min(hh) as f64 / 720.0;
-    let nsub = 4usize; let shutter = 0.5 / fps.max(1.0); let mut accc = vec![0f32; w * hh * 3]; let mut acca = vec![0f32; w * hh]; let rf = e.refract > 0.0; let mut dacc = vec![0f32; if rf { w * hh * 2 } else { 0 }]; let mut dsum = vec![0f32; if rf { w * hh * 2 } else { 0 }];
+    let nsub = if e.plane.as_ref().map(|p| p.texture.is_some()).unwrap_or(false) { 8usize } else { 4usize }; let shutter = 0.5 / fps.max(1.0); let mut accc = vec![0f32; w * hh * 3]; let mut acca = vec![0f32; w * hh]; let rf = e.refract > 0.0; let mut dacc = vec![0f32; if rf { w * hh * 2 } else { 0 }]; let mut dsum = vec![0f32; if rf { w * hh * 2 } else { 0 }];
     let lg = { let l = e.light; let m = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt().max(1e-9); [l[0] / m, l[1] / m, l[2] / m] };
     let focus = if e.focus > 0.0 { e.focus } else { fl };
     let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));
@@ -137,7 +137,8 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                 let (cr, cg, cb, a) = match (&pr.tex, &tex) { (Some(m), Some(t)) => { let (u, v) = (m[0] * px + m[1] * py + m[2], m[3] * px + m[4] * py + m[5]); let s = t.sample(u, v); let mo = e.plane.as_ref().map(|p| p.opaque).unwrap_or(1.0).clamp(0.0, 1.0);
                         let sh = (0.62 + 0.38 * grad) * if pr.face == 1 { 0.7 } else { 1.0 }; let hl = sp * 0.35 + rim * 0.22;
                         let (tr, tg, tb) = ((s[0] * sh + hl) * br, (s[1] * sh + hl) * br, (s[2] * sh + hl) * br); let oa = (cov * pr.alpha * 0.985).min(0.985);
-                        (cr * (1.0 - mo) + tr * mo, cg * (1.0 - mo) + tg * mo, cb * (1.0 - mo) + tb * mo, a * (1.0 - mo) + oa * mo) } _ => (cr, cg, cb, a) }; if a <= 0.002 { continue; }
+                        (cr * (1.0 - mo) + tr * mo, cg * (1.0 - mo) + tg * mo, cb * (1.0 - mo) + tb * mo, a * (1.0 - mo) + oa * mo) } (None, Some(t)) if pr.face == 2 => { let mo = e.plane.as_ref().map(|p| p.opaque).unwrap_or(1.0).clamp(0.0, 1.0); let sd = 0.16 + 0.5 * sp + 0.1 * grad; let m = t.mean; let oa = (cov * pr.alpha * 0.985).min(0.985);
+                        (cr * (1.0 - mo) + (m[0] * sd) * br * mo, cg * (1.0 - mo) + (m[1] * sd) * br * mo, cb * (1.0 - mo) + (m[2] * sd) * br * mo, a * (1.0 - mo) + oa * mo) } _ => (cr, cg, cb, a) }; if a <= 0.002 { continue; }
                 let (ca, aa) = (a as f32, acca[o]); // over (premultiplied accumulation)
                 accc[o * 3] = accc[o * 3] * (1.0 - ca) + cr as f32 * ca; accc[o * 3 + 1] = accc[o * 3 + 1] * (1.0 - ca) + cg as f32 * ca; accc[o * 3 + 2] = accc[o * 3 + 2] * (1.0 - ca) + cb as f32 * ca; acca[o] = ca + aa * (1.0 - ca); if rf { let k2 = e.refract as f32 * k as f32 * (1.0 + 0.5 * rim as f32); dacc[o * 2] = dacc[o * 2] * (1.0 - ca) + (pr.tx as f32 * k2) * ca; dacc[o * 2 + 1] = dacc[o * 2 + 1] * (1.0 - ca) + (pr.ty as f32 * k2) * ca; } } } }
         // fold sub-frame into frame accumulators happens after all subs; keep running average via scaling below
@@ -178,7 +179,7 @@ pub fn refract_canvas(out: &mut Frame, disp: &(usize, usize, Vec<f32>), layer: &
         let wgt = a.min(1.0); for j in 0..3 { let v = |xx: usize, yy: usize| src[(yy * w + xx) * 4 + j]; let s = v(x0, y0) * (1.0 - fx) * (1.0 - fy) + v(x0 + 1, y0) * fx * (1.0 - fy) + v(x0, y0 + 1) * (1.0 - fx) * fy + v(x0 + 1, y0 + 1) * fx * fy; out.d[o * 4 + j] = src[o * 4 + j] * (1.0 - wgt) + s * wgt; } } }
 }
 
-struct Tex { w: usize, h: usize, d: Vec<f32> }
+struct Tex { w: usize, h: usize, d: Vec<f32>, mean: [f64; 3] }
 impl Tex { fn sample(&self, u: f64, v: f64) -> [f64; 3] { let x = (u * self.w as f64 - 0.5).clamp(0.0, self.w as f64 - 1.001); let y = (v * self.h as f64 - 0.5).clamp(0.0, self.h as f64 - 1.001); let (x0, y0) = (x as usize, y as usize); let (fx, fy) = (x - x0 as f64, y - y0 as f64);
     let g = |xx: usize, yy: usize, c: usize| self.d[(yy * self.w + xx) * 3 + c] as f64; let mut o = [0.0; 3]; for c in 0..3 { o[c] = g(x0, y0, c) * (1.0 - fx) * (1.0 - fy) + g(x0 + 1, y0, c) * fx * (1.0 - fy) + g(x0, y0 + 1, c) * (1.0 - fx) * fy + g(x0 + 1, y0 + 1, c) * fx * fy; } o } }
 thread_local! { static TEX: std::cell::RefCell<Option<(String, std::sync::Arc<Tex>)>> = std::cell::RefCell::new(None); }
@@ -189,7 +190,7 @@ fn load_tex(path: &str, region: [f64; 2]) -> Option<std::sync::Arc<Tex>> {
     let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", path, "-vf", &format!("scale={}:{}", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
     if out.stdout.len() != w * hh * 3 { return None; }
     let lin = |b: u8| { let c = b as f32 / 255.0; if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) } }; let lut: Vec<f32> = (0..256).map(|i| lin(i as u8)).collect();
-    let t = std::sync::Arc::new(Tex { w, h: hh, d: out.stdout.iter().map(|&b| lut[b as usize]).collect() }); TEX.with(|c| *c.borrow_mut() = Some((key, t.clone()))); Some(t)
+    let d: Vec<f32> = out.stdout.iter().map(|&b| lut[b as usize]).collect(); let mut mean = [0.0f64; 3]; for (i, v) in d.iter().enumerate() { mean[i % 3] += *v as f64; } for m in mean.iter_mut() { *m /= (w * hh) as f64; } let t = std::sync::Arc::new(Tex { w, h: hh, d, mean }); TEX.with(|c| *c.borrow_mut() = Some((key, t.clone()))); Some(t)
 }
 /// Affine screen->uv from the first three vertices of a face (cells are small, so perspective error inside a facet is negligible).
 fn uv_affine(pts: &[(f64, f64); 6], uv: &[(f64, f64)]) -> Option<[f64; 6]> {

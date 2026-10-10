@@ -352,3 +352,21 @@ Planar pack/unpack preserves signed/HDR finite RGB and tiny positive alpha, but 
 
 ### Ordinary decoder bounded read deadline
 Ordinary project-sized integer ffmpeg decode uses concurrent joined stdout capture with a separate256MiB hard ceiling and the checked requested frame-window byte count. Header capture retains its16MiB generic ceiling (delivery calls still use1MiB). Decode deadline is30s+2s/requestedframe capped at the call timeout; cancellation checks occur at most100ms apart while waiting. Partial frame output fails explicitly instead of truncating. Native-fit/float streaming and encoder writes remain separate blocked-IO gaps. Actual500frame320x180 output decodedRGBA hash matches the phase-fixed baseline exactly; measured export4.274s, not a speedup claim. Twelve library/five cache/four phase/fifteen pipeline tests pass, including normal ffmpeg byte/hash parity and a stalled decode child timeout/reap regression.
+
+### Seeded numeric conversion matrix
+A deterministic stress regression covers all64gamut pairs with4096signed/HDRRGB samples and86016scene-transfer roundtrips (linear/sRGB/gamma2.4/ACEScct/LogC3/SLog3/BT709). A separate monotonicity/roundtrip sweep covers PQ/sceneHLG at five declared white scales and4097code steps. PQ black checks the formula's nonzero encoded black floor separately rather than demanding exact zero roundtrip. Both tests pass. Self-consistency evidence does not prove independent colorimetric accuracy, manufacturer conformance, HLG display rendering or certification.
+
+### Persistent reference per-frame allocation
+Optional OCIO apply preflights its serialized input buffer each time rather than relying only on construction-time memory availability, and checks cancellation during packing. Common-domain reference comparison preflights its configured-output clone. With the explicit live-test gate enabled, an isolated budget test rejects before queueing a frame and verifies the processor remains usable after the budget is restored. Pinned dependency remains optional and never installed automatically.
+
+### Contract smoke assertions
+The real-footage smoke now fails on wrong pipeline domains, RGB16 dimensions/format/precision, missing/incorrect SDR/PQ/HLG primaries/transfer/identity-matrix/full-range tags, missing PCM audio or color-tag gaps. It still records full evidence/timings. Explicit optional OCIO comparison/render remains selected by `--ocio`; no dependency install. Fresh320x18010frame runs passed these assertions on the current engine.
+
+### Planar destination budget regression
+An isolated regression places the memory budget one byte below the full planar destination allocation. Both pack/unpack must fail before allocating it; after restoring the budget, the same bytes roundtrip exactly. This tests the preflight boundary independently of the allocator's hard backstop and does not model every decoder-library allocation.
+
+### Audit temporary budget regression
+An isolated test sets budget one byte below an audit clone and one byte below both overlay clones. Each must fail before its temporary allocation; after restoring budget, both valid operations succeed. This covers the explicit temporary buffers, not every serializer/library allocation.
+
+### Scope count conservation
+A seeded signed/HDR/partly-transparent frame regression checks bins16/257/4096: every counted pixel belongs to exactly one histogram/under/over category per channel; waveform sum equals in-range luminance histogram sum; vectorscope sum equals counted visible pixels. This is count integrity for the declared BT709 display-domain fixture, not a vectorscope calibration claim or HDR chromaticity scope.
