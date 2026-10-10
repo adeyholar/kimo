@@ -204,6 +204,7 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
     let seed = (t * p.fps).round() as u64;
     for tr in &p.tracks { for c in &tr.clips {
         if t < c.start || t >= c.start + c.duration { continue; }
+        crate::guard::check();
         let lt = t - c.start;
         if let Source::Adjustment = c.source {
             let mut adj = Frame { w, h, d: out.d.clone() };
@@ -267,6 +268,7 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     let nt = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1);
     let mut i = 0;
     while i < n {
+        crate::guard::check();
         let end = (i + nt * 4).min(n);
         prepare_range(p, &mut cache, i as f64 / p.fps, end as f64 / p.fps)?;
         // work queue: nt workers pull frame indices, so one slow frame (shards) no longer idles the other cores

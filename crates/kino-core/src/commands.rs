@@ -396,8 +396,10 @@ pub fn registry() -> Vec<Command> {
 pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
     let reg = registry();
     let c = reg.iter().find(|c| c.name == name).ok_or(format!("unknown tool '{name}'"))?;
+    let l = crate::guard::limits(); crate::guard::sanitize(args, l, 0).map_err(|e| format!("rejected by sandbox: {e}"))?;
     let before = ss.project.clone();
-    let r = (c.run)(ss, args);
-    if c.mutates && r.is_ok() { ss.undo.push(before); ss.redo.clear(); }
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (c.run)(ss, args)));
+    let r = match r { Ok(r) => r, Err(e) => { ss.project = before; let m = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "internal error".into()); return Err(format!("tool '{name}' failed safely (project rolled back): {m}")); } };
+    if c.mutates && r.is_ok() { if let Err(e) = crate::guard::check_project(&ss.project, l) { ss.project = before; return Err(format!("rejected by sandbox (project rolled back): {e}")); } ss.undo.push(before); ss.redo.clear(); }
     r
 }

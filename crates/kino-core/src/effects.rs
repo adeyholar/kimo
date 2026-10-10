@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 pub struct Frame { pub w: usize, pub h: usize, pub d: Vec<f32> }
 impl Frame {
-    pub fn new(w: usize, h: usize) -> Self { Frame { w, h, d: vec![0.0; w * h * 4] } }
+    pub fn new(w: usize, h: usize) -> Self { crate::guard::reserve(w.saturating_mul(h).saturating_mul(16)); Frame { w, h, d: vec![0.0; w * h * 4] } }
 }
 
 pub type Params = BTreeMap<String, Prop>;

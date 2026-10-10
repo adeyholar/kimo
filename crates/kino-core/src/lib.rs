@@ -23,3 +23,5 @@ pub mod effects2;
 pub mod color;
 pub mod keying;
 pub mod colortools;
+
+pub mod guard;
