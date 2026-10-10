@@ -38,6 +38,7 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
     ("sepia", "Sepia tone", &[("amount", 1.0, "0..1")]),
     ("color_isolate", "Black & white except one hue (keep gun/scope color)", &[("hue", 190.0, "degrees 0..360"), ("range", 40.0, "degrees"), ("softness", 25.0, "degrees"), ("bw_amount", 1.0, "0..1")]),
     ("shake", "Camera shake / impact (translation jitter)", &[("amount", 8.0, "px"), ("speed", 24.0, "Hz")]),
+    ("impact_shake", "Beat/impact camera shake: damped spring kicks at hit times (strings.hits=\"t1,t2,..\" clip-local seconds), x/y/rotation/zoom; measured from the SCUMBLE reference", &[("amount", 29.0, "px @720p, x kick"), ("amount_y", 9.0, "px @720p, y kick"), ("decay", 27.0, "1/s, exp decay (0.34/frame at 25fps)"), ("frequency", 12.5, "Hz, 12.5 flips sign every frame at 25fps"), ("rotation", 0.0, "deg kick"), ("zoom", 0.0, "scale kick, e.g. 0.03")]),
     ("mirror", "Mirror half of frame", &[("axis", 0.0, "0=horizontal(left->right), 1=vertical(top->bottom)")]),
     ("scanlines", "CRT scanlines", &[("amount", 0.3, "0..1"), ("spacing", 3.0, "px")]),
     ("wave", "Sine wave distortion", &[("amplitude", 10.0, "px"), ("wavelength", 80.0, "px"), ("speed", 3.0, "cycles/s")]),
@@ -147,6 +148,19 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
         "shake" => { let a = p(params, "amount", 8.0, t); let sp = p(params, "speed", 24.0, t); let n = |k: f32| (((k * 12.9898).sin() * 43758.545).fract()) * 2.0 - 1.0; let step = (t as f32 * sp).floor();
             let (dx, dy) = ((n(step) * a) as isize, (n(step + 7.0) * a) as isize); let src = f.d.clone(); let (w, h) = (f.w as isize, f.h as isize);
             for y in 0..h { for x in 0..w { let (sx, sy) = ((x - dx).clamp(0, w-1), (y - dy).clamp(0, h-1)); for j in 0..4 { f.d[((y*w+x)*4) as usize+j] = src[((sy*w+sx)*4) as usize+j]; } } } }
+        "impact_shake" => {
+            let hits: Vec<f64> = strings.get("hits").map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
+            let k = f.h as f32 / 720.0; let (ax, ay) = (p(params, "amount", 29.0, t) * k, p(params, "amount_y", 9.0, t) * k); let (dec, fr) = (p(params, "decay", 27.0, t), p(params, "frequency", 12.5, t));
+            let (rot, zm) = (p(params, "rotation", 0.0, t), p(params, "zoom", 0.0, t));
+            let (mut dx, mut dy, mut dr, mut dz) = (0f32, 0f32, 0f32, 0f32);
+            for (n, h) in hits.iter().enumerate() { let dt = (t - h) as f32; if dt < 0.0 || dt > 1.5 { continue; }
+                let env = (-dec * dt).exp(); let osc = (std::f32::consts::TAU * fr * dt).cos(); let sg: f32 = if n % 2 == 0 { 1.0 } else { -1.0 } * if (n / 2) % 2 == 0 { 1.0 } else { 0.7 };
+                dx += ax * env * osc; dy -= ay * env; dr += rot * env * osc * sg; dz += zm * env; }
+            if dx.abs() < 1e-3 && dy.abs() < 1e-3 && dr.abs() < 1e-4 && dz.abs() < 1e-5 { return Ok(()); }
+            let src = f.d.clone(); let (w, h) = (f.w, f.h); let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0); let (s_, c_) = (dr.to_radians().sin(), dr.to_radians().cos()); let inv = 1.0 / (1.0 + dz);
+            for y in 0..h { for x in 0..w { let (px, py) = (x as f32 - cx - dx, y as f32 - cy - dy); let sx = ((px * c_ + py * s_) * inv + cx).clamp(0.0, w as f32 - 1.0); let sy = ((-px * s_ + py * c_) * inv + cy).clamp(0.0, h as f32 - 1.0);
+                let (x0, y0) = (sx.floor() as usize, sy.floor() as usize); let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1)); let (fx, fy) = (sx - x0 as f32, sy - y0 as f32);
+                for j in 0..4 { let g = |xx: usize, yy: usize| src[(yy * w + xx) * 4 + j]; f.d[(y * w + x) * 4 + j] = g(x0, y0) * (1.0 - fx) * (1.0 - fy) + g(x1, y0) * fx * (1.0 - fy) + g(x0, y1) * (1.0 - fx) * fy + g(x1, y1) * fx * fy; } } } }
         "mirror" => { let v = p(params, "axis", 0.0, t) > 0.5; for y in 0..f.h { for x in 0..f.w { let (sx, sy) = if v { (x, if y >= f.h/2 { f.h-1-y } else { y }) } else { (if x >= f.w/2 { f.w-1-x } else { x }, y) };
             for j in 0..4 { f.d[(y*f.w+x)*4+j] = f.d[(sy*f.w+sx)*4+j]; } } } }
         "scanlines" => { let (a, s) = (p(params, "amount", 0.3, t), (p(params, "spacing", 3.0, t) as usize).max(2)); for y in 0..f.h { if y % s == 0 { for x in 0..f.w { for j in 0..3 { f.d[(y*f.w+x)*4+j] *= 1.0 - a; } } } } }

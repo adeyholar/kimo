@@ -25,31 +25,43 @@ pub fn add_detection_box(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let (pw, ph) = (bw * cw, bh * ch); let (cx, cy) = ((bx + bw / 2.0 - 0.5) * cw, (by + bh / 2.0 - 0.5) * ch);
     let tw = tag.chars().count() as f64 * fsz * 0.6 + 16.0 * k; let th = fsz * 1.5;
     let sw = (2.0 * k).max(1.5); let fill_alpha_box = num(a, "fill_opacity", 0.08);
+    let imp0 = a.get("impact").and_then(|v| v.as_bool()).unwrap_or(false); let lag = if imp0 { 0.44 } else { 0.0 };
     let e = Ease::OutExpo; let tin = 0.35; let mut cl = vec![];
     // soft fill
     let mut f = clip(ss, shape("rect", pw, ph, col, 0.0, col), start, dur); set(&mut f, "x", cx); set(&mut f, "y", cy); f.props.get_mut("opacity").unwrap().base = 0.0; key(&mut f, "opacity", 0.0, 0.0, e); key(&mut f, "opacity", tin, fill_alpha_box, e); key(&mut f, "opacity", dur - 0.15, fill_alpha_box, Ease::In); key(&mut f, "opacity", dur, 0.0, Ease::In); cl.push(f);
+    // impact landing (measured from the SCUMBLE reference, 25 fps): box arrives oversized and shrinks in on an expo-out,
+    // 4 lagging ghost outlines trail it (frame-delayed echo), one bright flash fill peaks at ~0.36 s and decays in 4 frames.
+    if a.get("impact").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let s0 = num(a, "impact_scale", 3.0); let tl = 0.44; let flash = num(a, "flash", 0.8);
+        if let Some(fc) = cl.get_mut(0) { let pr = fc.props.get_mut("scale").unwrap(); pr.base = 1.0; pr.set_key(0.0, s0, Ease::Out); pr.set_key(tl, 1.0, Ease::Out);
+            let op = fc.props.get_mut("opacity").unwrap(); *op = Prop::new(0.0); op.set_key(0.0, 0.0, Ease::Linear); op.set_key(0.36, 0.2, Ease::Linear); op.set_key(0.44, flash, Ease::Linear); op.set_key(0.56, fill_alpha_box, Ease::Out); op.set_key(dur - 0.15, fill_alpha_box, Ease::In); op.set_key(dur, 0.0, Ease::In); fc.motion_blur = 0.0;
+            if let Source::Shape { fill, .. } = &mut fc.source { *fill = [col[0] * 0.3 + 0.7, col[1] * 0.3 + 0.7, col[2] * 0.3 + 0.7]; } }
+        for g in 1..=4 { let dl = g as f64 * 0.04; let mut o = clip(ss, shape("rect", pw, ph, [-1.0, 0.0, 0.0], sw, col), start + dl, tl + 0.1); set(&mut o, "x", cx); set(&mut o, "y", cy);
+            let pr = o.props.get_mut("scale").unwrap(); pr.base = 1.0; pr.set_key(0.0, s0 * 0.97, Ease::Out); pr.set_key(tl - dl, 1.0, Ease::Out);
+            key(&mut o, "opacity", 0.0, 0.75 / g as f64, Ease::Linear); key(&mut o, "opacity", tl - dl, 0.5 / g as f64, Ease::In); key(&mut o, "opacity", tl + 0.1 - dl, 0.0, Ease::In); cl.push(o); }
+    }
     // outline
     let mut o = clip(ss, shape("rect", pw, ph, [-1.0, 0.0, 0.0], sw, col), start, dur); set(&mut o, "x", cx); set(&mut o, "y", cy);
-    for (p, v0) in [("scale", 1.12)] { let pr = o.props.get_mut(p).unwrap(); pr.base = 1.0; pr.set_key(0.0, v0, e); pr.set_key(tin, 1.0, e); }
+    { let imp = a.get("impact").and_then(|v| v.as_bool()).unwrap_or(false); let (v0, tt) = if imp { (num(a, "impact_scale", 3.0), 0.44) } else { (1.12, tin) }; let ez = if imp { Ease::Out } else { e }; let pr = o.props.get_mut("scale").unwrap(); pr.base = 1.0; pr.set_key(0.0, v0, ez); pr.set_key(tt, 1.0, ez); }
     key(&mut o, "opacity", 0.0, 0.0, e); key(&mut o, "opacity", 0.15, 1.0, e); key(&mut o, "opacity", dur - 0.15, 1.0, Ease::In); key(&mut o, "opacity", dur, 0.0, Ease::In); o.motion_blur = 180.0; cl.push(o);
     // corner ticks (thick short bars at four corners)
     let tl = (pw.min(ph) * 0.14).clamp(8.0 * k, 36.0 * k); let tk = sw * 2.2;
     for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
         for horiz in [true, false] {
             let (w, h) = if horiz { (tl, tk) } else { (tk, tl) };
-            let mut t = clip(ss, shape("rect", w, h, col, 0.0, col), start, dur);
+            let mut t = clip(ss, shape("rect", w, h, col, 0.0, col), start + lag, dur - lag);
             set(&mut t, "x", cx + sx * (pw / 2.0 - if horiz { tl / 2.0 } else { tk / 2.0 })); set(&mut t, "y", cy + sy * (ph / 2.0 - if horiz { tk / 2.0 } else { tl / 2.0 }));
-            key(&mut t, "opacity", 0.0, 0.0, e); key(&mut t, "opacity", 0.2, 1.0, e); key(&mut t, "opacity", dur - 0.15, 1.0, Ease::In); key(&mut t, "opacity", dur, 0.0, Ease::In); cl.push(t);
+            key(&mut t, "opacity", 0.0, 0.0, e); key(&mut t, "opacity", 0.2, 1.0, e); key(&mut t, "opacity", dur - lag - 0.15, 1.0, Ease::In); key(&mut t, "opacity", dur - lag, 0.0, Ease::In); cl.push(t);
         }
     }
     // label tag: filled plate sitting on the top-left corner, then text; wipes open from the left
-    let (tx, ty) = (cx - pw / 2.0 + tw / 2.0, cy - ph / 2.0 - th / 2.0 - 1.0); let d0 = 0.18;
+    let (tx, ty) = (cx - pw / 2.0 + tw / 2.0, cy - ph / 2.0 - th / 2.0 - 1.0); let d0 = 0.18 + lag;
     let mut plate = clip(ss, shape("rect", tw, th, col, 0.0, col), start + d0, dur - d0); set(&mut plate, "x", tx); set(&mut plate, "y", ty);
     key(&mut plate, "scale", 0.0, 0.0, e); key(&mut plate, "scale", 0.3, 1.0, e); key(&mut plate, "opacity", dur - d0 - 0.15, 1.0, Ease::In); key(&mut plate, "opacity", dur - d0, 0.0, Ease::In); cl.push(plate);
     let lum = 0.2126 * col[0] + 0.7152 * col[1] + 0.0722 * col[2]; let ink = if lum > 0.45 { [0.04, 0.05, 0.05] } else { [1.0; 3] };
     let mut tt = clip(ss, txt(&tag, font, fsz, ink, "center"), start + d0, dur - d0); set(&mut tt, "x", tx); set(&mut tt, "y", ty);
     key(&mut tt, "reveal", 0.05, 0.0, Ease::Linear); key(&mut tt, "reveal", 0.35, 1.0, Ease::Out); key(&mut tt, "opacity", dur - d0 - 0.15, 1.0, Ease::In); key(&mut tt, "opacity", dur - d0, 0.0, Ease::In); cl.push(tt);
-    if let Some(cap) = a.get("caption").and_then(|v| v.as_str()) { let cs = 19.0 * k; let mut ct = clip(ss, txt(cap, "Inter", cs, [1.0; 3], "left"), start + 0.3, dur - 0.3); set(&mut ct, "x", cx - pw / 2.0 + 12.0 * k + cap.chars().count() as f64 * cs * 0.28); set(&mut ct, "y", cy - ph / 2.0 + 26.0 * k);
+    if let Some(cap) = a.get("caption").and_then(|v| v.as_str()) { let cs = 19.0 * k; let mut ct = clip(ss, txt(cap, "Inter", cs, [1.0; 3], "left"), start + 0.3 + lag, dur - 0.3 - lag); set(&mut ct, "x", cx - pw / 2.0 + 12.0 * k + cap.chars().count() as f64 * cs * 0.28); set(&mut ct, "y", cy - ph / 2.0 + 26.0 * k);
         key(&mut ct, "reveal", 0.0, 0.0, Ease::Linear); key(&mut ct, "reveal", 0.35, 1.0, Ease::Out); key(&mut ct, "opacity", dur - 0.45, 1.0, Ease::In); key(&mut ct, "opacity", dur - 0.3, 0.0, Ease::In); cl.push(ct); }
     let ids = push(ss, &tid, cl)?; Ok(json!({"clip_ids": ids}))
 }

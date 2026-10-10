@@ -172,16 +172,21 @@ fn transform(src: &Frame, scale: f64, rot_deg: f64, dx: f64, dy: f64) -> Frame {
 }
 
 fn blend(dst: &mut Frame, src: &Frame, opacity: f32, mode: &str, mask: Option<&dyn Fn(usize, usize) -> f32>) {
-    for y in 0..dst.h { for x in 0..dst.w { let i = (y*dst.w+x)*4;
-        let m = mask.map(|m| m(x, y)).unwrap_or(1.0);
-        let a = src.d[i+3] * opacity * m; if a <= 0.0 { continue; }
-        for j in 0..3 {
-            let (b, s) = (dst.d[i+j], src.d[i+j]);
-            let r = match mode { "add" => b + s, "multiply" => b*s, "screen" => 1.0-(1.0-b)*(1.0-s), "overlay" => if b<0.5 {2.0*b*s} else {1.0-2.0*(1.0-b)*(1.0-s)}, _ => s };
-            dst.d[i+j] = b*(1.0-a) + r*a;
+    let w = dst.w; let m_id = match mode { "add" => 1, "multiply" => 2, "screen" => 3, "overlay" => 4, _ => 0 };
+    for y in 0..dst.h {
+        let srow = &src.d[y * w * 4..(y + 1) * w * 4];
+        // skip the transparent margins of the row (most layers are small)
+        let (mut x0, mut x1) = (0usize, w); while x0 < w && srow[x0 * 4 + 3] <= 0.0 { x0 += 1; } if x0 == w { continue; } while x1 > x0 && srow[(x1 - 1) * 4 + 3] <= 0.0 { x1 -= 1; }
+        for x in x0..x1 { let i = (y * w + x) * 4;
+            let a = srow[x * 4 + 3] * opacity * if let Some(m) = mask { m(x, y) } else { 1.0 }; if a <= 0.0 { continue; }
+            for j in 0..3 {
+                let (b, s) = (dst.d[i + j], srow[x * 4 + j]);
+                let r = match m_id { 1 => b + s, 2 => b * s, 3 => 1.0 - (1.0 - b) * (1.0 - s), 4 => if b < 0.5 { 2.0 * b * s } else { 1.0 - 2.0 * (1.0 - b) * (1.0 - s) }, _ => s };
+                dst.d[i + j] = b * (1.0 - a) + r * a;
+            }
+            dst.d[i + 3] = dst.d[i + 3] + a * (1.0 - dst.d[i + 3]);
         }
-        dst.d[i+3] = dst.d[i+3] + a*(1.0-dst.d[i+3]);
-    }}
+    }
 }
 
 pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String> {
