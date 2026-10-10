@@ -1,0 +1,12 @@
+[package]
+name = "kino-mcp"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "kino-mcp"
+path = "src/main.rs"
+
+[dependencies]
+kino-core = { path = "../kino-core" }
+serde_json = "1"
