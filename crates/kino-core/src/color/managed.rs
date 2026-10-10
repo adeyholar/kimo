@@ -23,7 +23,7 @@ pub fn chroma(g:usize)->([[f64;2];3],[f64;2]) {
         _=>([[0.640,0.330],[0.300,0.600],[0.150,0.060]],[0.3127,0.3290])
     }
 }
-fn rgb_xyz(g:usize)->Mat { let(c,w)=chroma(g);let cols=c.map(xyz);let a=std::array::from_fn(|i|std::array::from_fn(|j|cols[j][i]));let scale=mv(inv(a),xyz(w));std::array::from_fn(|i|std::array::from_fn(|j|a[i][j]*scale[j])) }
+pub fn rgb_xyz(g:usize)->Mat { let(c,w)=chroma(g);let cols=c.map(xyz);let a=std::array::from_fn(|i|std::array::from_fn(|j|cols[j][i]));let scale=mv(inv(a),xyz(w));std::array::from_fn(|i|std::array::from_fn(|j|a[i][j]*scale[j])) }
 pub fn conversion(from:usize,to:usize)->Mat {
     if from==to{return ID}
     let (_,wf)=chroma(from);let(_,wt)=chroma(to);let a=mv(BRADFORD,xyz(wf));let b=mv(BRADFORD,xyz(wt));
@@ -83,3 +83,6 @@ pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String> {
         for j in 0..3 {let out=encode(b,c[j],white);if !out.is_finite()||out.abs()>f32::MAX as f64{return Err("color conversion overflow".into())}px[j]=out as f32}
     }Ok(())
 }
+
+/// Explicit Bradford adaptation in one linear RGB gamut, source and target xy declared.
+pub fn white_adaptation(g:usize,source:[f64;2],target:[f64;2])->Result<Mat,String>{if g>7||[source,target].iter().any(|p|p.iter().any(|v|!v.is_finite())||p[0]<=0.||p[1]<=0.||p[0]+p[1]>=1.){return Err("physical white xy requires x>0,y>0,x+y<1".into())}let a=mv(BRADFORD,xyz(source));let b=mv(BRADFORD,xyz(target));if a.iter().any(|v|v.abs()<1e-8){return Err("singular white adaptation".into())}let diag=std::array::from_fn(|i|std::array::from_fn(|j|if i==j{b[i]/a[i]}else{0.}));Ok(mm(inv(rgb_xyz(g)),mm(mm(inv(BRADFORD),mm(diag,BRADFORD)),rgb_xyz(g))))}
