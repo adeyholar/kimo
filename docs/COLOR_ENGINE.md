@@ -254,3 +254,14 @@ Header inspection now captures stdout on a joined reader, retains at most1MiB an
 
 ## Mastering setter precision preflight
 Quantized min/max distinction is now checked by mastering validation itself, so `set_hdr_mastering` rejects unrepresentable pairs before changing project state rather than waiting for x265 export. Four metadata tests pass, including no-mutation setter regression.
+
+## Decode window phase determinism
+Decode windows now seek only to the clip's declared in_point, run the same speed/fps resampling timebase, then trim by absolute output-frame index. Seeking independently to each window start reset fps cadence, so source30fps/project25fps could choose different pixels for frame19 depending on prior spot renders. Synthetic moving fixture reproduced meanchannel difference5.48/max255; corrected cold/sequential difference0. Exact transferred tandem960x540 cold.76 versus.24/.52/.76 sequence is byte-identical after correction. Regression also compares fullclip cache, nonzero in_point.13, speeds1/0.7/1.2 and legacy/managed-nativefloat.
+
+Correctness tradeoff: later windows decode/resample from clip in_point, adding CPU work proportional to elapsed clip time. Returned frame buffers remain bounded, but this is not a performance optimization or fastseek guarantee. A future stable-timestamp seek optimization must preserve these exact frame tests. Same source-frame phase now holds for spot renders and full export.
+
+## Window trim before spatial conversion
+Absolute output-frame trim now runs immediately after stable fps resampling, before scale/pad and output pixel-format conversion. Skipped earlier frames still decode for cadence correctness but no longer need project-resolution conversion. Phase regression remains exact for legacy/nativefloat and speed/inpoint variants;5cache+16interchange tests pass. No quantitative speedup claim yet.
+
+## Fractional/VFR phase regression
+Stable-window tests now also use30000/1001fps and variable-rate selected-frame fixtures, comparing cold spot windows against the full decoded timeline at four times with nonzero in_point. Both phase tests pass. These confirm deterministic sampling for these fixtures, not every demuxer/camera timestamp condition.
