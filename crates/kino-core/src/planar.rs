@@ -42,7 +42,7 @@ pub struct Fit { pub q: Quad, pub conf: f64, pub gain: f64 }
 fn tukey(r: f32, c: f32) -> f32 { let a = r.abs() / c; if a >= 1.0 { 0.0 } else { let t = 1.0 - a * a; t * t } }
 
 /// Align template level data to image pyramid, coarse to fine, starting from quad `q0` (full-res pixel coords).
-pub fn align(pyr: &[Img], t: &Tmpl, q0: &Quad, iters: &[usize]) -> Fit {
+pub fn align(pyr: &[Img], t: &Tmpl, q0: &Quad, iters: &[usize], prior: Option<&Quad>) -> Fit {
     let nl = pyr.len().min(t.n.len()); let mut q = *q0; let mut conf = 0.0; let mut gain = 1.0;
     for l in (0..nl).rev() { let s = 1.0 / (1u32 << l) as f64; let mut ql = quad_scale(&q, s); let im = &pyr[l]; let tv = &t.v[l]; let us = &t.us[l];
         let valid: Vec<usize> = (0..tv.len()).filter(|&k| tv[k].is_finite()).collect(); if valid.len() < 30 { continue; }
@@ -61,10 +61,11 @@ pub fn align(pyr: &[Img], t: &Tmpl, q0: &Quad, iters: &[usize]) -> Fit {
             let res: Vec<f32> = idx.iter().map(|&n| (ii[n] - m) / sd - (tv[valid[n]] - mt) / sdt).collect();
             let mut ar: Vec<f32> = res.iter().map(|r| r.abs()).collect(); ar.sort_by(|a, b| a.partial_cmp(b).unwrap()); let mad = ar[ar.len() / 2].max(0.02); let cst = (mad * 1.4826 * 4.685).max(0.15);
             let ws: Vec<f32> = res.iter().map(|&r| tukey(r, cst)).collect(); let wsum: f32 = ws.iter().sum::<f32>().max(1e-6);
-            conf = (1.0 - 0.5 * res.iter().zip(&ws).map(|(r, w)| w * r * r).sum::<f32>() / wsum) as f64; let inl = ws.iter().filter(|&&w| w > 0.5).count() as f64 / valid.len() as f64; conf = conf.max(0.0) * inl.min(1.0).sqrt();
+            conf = (1.0 - 0.5 * res.iter().zip(&ws).map(|(r, w)| w * r * r).sum::<f32>() / wsum) as f64; let vis = idx.len() as f64 / valid.len() as f64; let inl = ws.iter().filter(|&&w| w > 0.5).count() as f64 / idx.len() as f64; conf = conf.max(0.0) * inl.min(1.0).sqrt() * (0.5 + vis).min(1.0);
             gain = (m / mt.max(1e-3)) as f64;
             let mut a = [[0f64; 8]; 8]; let mut b = [0f64; 8];
             for (e, &n) in idx.iter().enumerate() { let w = ws[e] as f64; if w <= 0.0 { continue; } let j = &jac[n].map(|x| (x / sd) as f64); for p in 0..8 { b[p] -= w * j[p] * res[e] as f64; for qn in 0..8 { a[p][qn] += w * j[p] * j[qn]; } } }
+            if let Some(pq) = prior { let tr: f64 = (0..8).map(|p| a[p][p]).sum::<f64>() / 8.0; let st = tr * 0.4 * (1.0 - vis).powi(3) + 1e-6; let pl = quad_scale(pq, s); for p in 0..8 { a[p][p] += st; b[p] -= st * (ql[p / 2][p % 2] - pl[p / 2][p % 2]); } }
             for p in 0..8 { a[p][p] += lam * (a[p][p] + 1e-3); }
             // solve 8x8
             let mut mtx = [[0f64; 9]; 8]; for p in 0..8 { for qn in 0..8 { mtx[p][qn] = a[p][qn]; } mtx[p][8] = b[p]; }
@@ -93,20 +94,21 @@ pub fn track(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels:
     let get = |cache: &mut crate::render::Cache, i: usize| -> Result<Vec<Img>, String> { let g = crate::tracking::clip_gray_pub(p, cache, &c, i)?; Ok(pyramid(g, w, h, levels)) };
     let p0 = get(&mut cache, f0)?; let anchor = make_tmpl(&p0, &q0);
     let mut out = Track { quads: vec![q0], conf: vec![1.0], gain: vec![1.0], lost: vec![false] };
-    let mut prev_pyr = p0; let (mut q, mut vel) = (q0, [[0f64; 2]; 4]); let mut lost = false;
+    let mut prev_pyr = p0; let (mut q, mut vel) = (q0, [[0f64; 2]; 4]); let mut lost = false; let mut prevq: Option<Quad> = None;
     for i in f0 + 1..=f1 {
         let cur = get(&mut cache, i)?; let mut pred = q; for k in 0..4 { pred[k][0] += vel[k][0]; pred[k][1] += vel[k][1]; }
+        if let (Some(pq), false) = (prevq, lost) { if let Some(g) = solve_h(&pq, &q) { let mut hp = q; let mut okh = true; for k in 0..4 { let (x, y) = ap(&g, q[k][0], q[k][1]); if !x.is_finite() || !y.is_finite() || (x - q[k][0]).abs() > 400.0 || (y - q[k][1]).abs() > 400.0 { okh = false; } hp[k] = [x, y]; } if okh { pred = hp; } } }
         let recent = make_tmpl(&prev_pyr, &q);
         let mut best = Fit { q: pred, conf: 0.0, gain: 1.0 };
-        if !lost { let fr = align(&cur, &recent, &pred, &iters); best = fr; }
+        if !lost { let fr = align(&cur, &recent, &pred, &iters, Some(&pred)); best = fr; }
         // anchor refinement (drift-free); from lost state do a coarse search first
         let start = if lost || best.conf < 0.45 { let l = (levels - 1).min(2); let s = 1.0 / (1u32 << l) as f64; let r = (60.0 * s) as i32; let (mut bs, mut bd) = (-2.0, (0.0, 0.0));
             let base = quad_scale(&pred, s); for dy in (-r..=r).step_by(2.max((r / 8) as usize)) { for dx in (-r..=r).step_by(2.max((r / 8) as usize)) { let mut qq = base; for k in 0..4 { qq[k][0] += dx as f64; qq[k][1] += dy as f64; }
                 let sc = ncc_at(&cur[l], &anchor, l, &qq); if sc > bs { bs = sc; bd = (dx as f64, dy as f64); } } }
             let mut qq = pred; for k in 0..4 { qq[k][0] += bd.0 / s; qq[k][1] += bd.1 / s; } qq } else { best.q };
-        let fa = align(&cur, &anchor, &start, &iters);
+        let fa = align(&cur, &anchor, &start, &iters, Some(&pred));
         let (chosen, ok) = if fa.conf >= 0.55 { (fa, true) } else if !lost && best.conf >= 0.5 { (best, true) } else { (Fit { q: pred, conf: fa.conf.max(best.conf), gain: 1.0 }, false) };
-        if ok { let nv: Quad = { let mut v = [[0f64; 2]; 4]; for k in 0..4 { v[k] = [chosen.q[k][0] - q[k][0], chosen.q[k][1] - q[k][1]]; } v }; for k in 0..4 { vel[k] = [0.6 * nv[k][0] + 0.4 * vel[k][0], 0.6 * nv[k][1] + 0.4 * vel[k][1]]; } q = chosen.q; lost = false; }
+        if ok { let nv: Quad = { let mut v = [[0f64; 2]; 4]; for k in 0..4 { v[k] = [chosen.q[k][0] - q[k][0], chosen.q[k][1] - q[k][1]]; } v }; for k in 0..4 { vel[k] = [0.6 * nv[k][0] + 0.4 * vel[k][0], 0.6 * nv[k][1] + 0.4 * vel[k][1]]; } prevq = Some(q); q = chosen.q; lost = false; }
         else { for k in 0..4 { vel[k] = [vel[k][0] * 0.85, vel[k][1] * 0.85]; } q = pred; lost = true; }
         out.quads.push(q); out.conf.push(chosen.conf); out.gain.push(if ok { chosen.gain } else { *out.gain.last().unwrap() }); out.lost.push(lost); prev_pyr = cur;
     }
