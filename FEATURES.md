@@ -187,3 +187,9 @@ User bar: every feature best in class. Tiers: **PRO** = matches or beats the pro
 
 ## Tests
 `python3 tests/tool_fuzz.py` calls every MCP tool with empty, null, wrong-type, negative, huge and real-id arguments (about 2400 calls) and fails on crash, hang or malformed reply. export/render tools are skipped (slow).
+
+## Shard burst (add_shard_burst) - V2
+3D glass-shard cloud generator: hundreds of prism shards, project-camera projection, internal depth sort, DOF softness, rim glints with dispersion, 4-sample motion blur. Gaps: no true refraction of the background, no shadows/lights, not GPU.
+
+## 3D suite status
+Done: layer transforms, camera, shard-internal depth sort/DOF/motion blur. Todo: layer depth sorting, DOF and motion blur on 3D layers, materials, lights, shadows, nulls/parenting, extrusion, camera rigs (orbit, look-at).

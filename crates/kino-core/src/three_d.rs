@@ -21,7 +21,7 @@ type M = [[f64; 3]; 3];
 fn mul(a: &M, b: &M) -> M { let mut r = [[0.0; 3]; 3]; for i in 0..3 { for j in 0..3 { for k in 0..3 { r[i][j] += a[i][k] * b[k][j]; } } } r }
 fn tr(a: &M) -> M { let mut r = [[0.0; 3]; 3]; for i in 0..3 { for j in 0..3 { r[i][j] = a[j][i]; } } r }
 fn app(a: &M, v: [f64; 3]) -> [f64; 3] { [a[0][0] * v[0] + a[0][1] * v[1] + a[0][2] * v[2], a[1][0] * v[0] + a[1][1] * v[1] + a[1][2] * v[2], a[2][0] * v[0] + a[2][1] * v[1] + a[2][2] * v[2]] }
-fn rx(d: f64) -> M { let (s, c) = d.to_radians().sin_cos(); [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]] }
+pub fn rx(d: f64) -> M { let (s, c) = d.to_radians().sin_cos(); [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]] }
 fn ry(d: f64) -> M { let (s, c) = d.to_radians().sin_cos(); [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]] }
 fn rz(d: f64) -> M { let (s, c) = d.to_radians().sin_cos(); [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]] }
 /// Rotation order: Z then Y then X applied to the local plane (R = Rx * Ry * Rz).
@@ -56,4 +56,13 @@ pub fn render_layer(src: &Frame, cam: &Camera, pose: &Pose, backface: bool) -> F
             for (dx, dy, wt) in [(0, 0, (1.0 - ax) * (1.0 - ay)), (1, 0, ax * (1.0 - ay)), (0, 1, (1.0 - ax) * ay), (1, 1, ax * ay)] { let (px, py) = ((x0 + dx).clamp(0, w as i64 - 1) as usize, (y0 + dy).clamp(0, h as i64 - 1) as usize); let i = (py * w + px) * 4; let a = src.d[i + 3] * wt; acc[0] += src.d[i] * a; acc[1] += src.d[i + 1] * a; acc[2] += src.d[i + 2] * a; acc[3] += a; } } } }
         let i = (y * w + x) * 4; if acc[3] > 0.0 { for j in 0..3 { o.d[i + j] = acc[j] / acc[3]; } o.d[i + 3] = acc[3] / 4.0; } } }
     o
+}
+
+/// World point -> screen projection through a camera (for particle-like 3D objects).
+pub struct CamView { w: usize, h: usize, f: f64, c: [f64; 3], rct: M }
+impl CamView {
+    pub fn new(w: usize, h: usize, cam: &Camera) -> CamView { let f = (h as f64 / 2.0) / (cam.fov.to_radians() / 2.0).tan(); let rc = mul(&ry(cam.pan), &mul(&rx(cam.tilt), &rz(cam.roll))); CamView { w, h, f, c: [cam.pos[0], cam.pos[1], cam.pos[2] - f], rct: tr(&rc) } }
+    /// (screen x, screen y, view depth). None when behind the camera.
+    pub fn project(&self, p: [f64; 3]) -> Option<(f64, f64, f64)> { let v = app(&self.rct, [p[0] - self.c[0], p[1] - self.c[1], p[2] - self.c[2]]); if v[2] < 1.0 { return None; } Some((self.w as f64 / 2.0 + self.f * v[0] / v[2], self.h as f64 / 2.0 + self.f * v[1] / v[2], v[2])) }
+    pub fn focal(&self) -> f64 { self.f }
 }

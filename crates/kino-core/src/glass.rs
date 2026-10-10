@@ -65,15 +65,16 @@ pub fn compose(below: &Frame, inc: &Frame, u: f32, seed: u32, density: f32, inte
         let persp = (fl_len / (fl_len + zc).max(1.0)) as f32; let rf = (s.tx * 6.0 * t, s.ty * 6.0 * t); let shade = 1.0 + 0.3 * (ang[1].to_radians().sin() as f32) * 0.6 - 0.1 * t; let lit = (0.35 + 0.9 * (s.tx * s.ty).abs()) * (0.4 + t);
         for y in y0..=y1 { for x in x0..=x1 { let Some((sx, sy, _, _)) = pj.dest_to_src(x as f64 + 0.5, y as f64 + 0.5) else { continue }; let (sx, sy) = (sx as f32, sy as f32);
             let (ix, iy) = (sx.floor() as i32, sy.floor() as i32); if ix < 0 || iy < 0 || ix >= w as i32 || iy >= h as i32 { continue; } let o = iy as usize * w + ix as usize; if ids[o] as usize != i { continue; }
-            let e_px = edge[o] * persp; let cov = (e_px + 1.0).clamp(0.0, 1.0) * alpha_s; if cov <= 0.0 { continue; }
+            let e_px = edge[o] * persp; let cov = (e_px + 1.0).clamp(0.0, 1.0) * alpha_s * if t > 0.0 { 0.9 } else { 1.0 }; if cov <= 0.0 { continue; }
             let (rx, ry) = ((sx + rf.0).clamp(0.0, wf - 1.001), (sy + rf.1).clamp(0.0, hf - 1.001)); let (fx, fy) = (rx.fract(), ry.fract()); let (x_i, y_i) = (rx as usize, ry as usize);
             let g = |xx: usize, yy: usize, c: usize| below.d[(yy.min(h - 1) * w + xx.min(w - 1)) * 4 + c]; let mut col = [0f32; 3];
             for c in 0..3 { col[c] = (g(x_i, y_i, c) * (1.0 - fx) + g(x_i + 1, y_i, c) * fx) * (1.0 - fy) + (g(x_i, y_i + 1, c) * (1.0 - fx) + g(x_i + 1, y_i + 1, c) * fx) * fy; col[c] *= shade; }
-            let r_src = ((sx - fr.ix).powi(2) + (sy - fr.iy).powi(2)).sqrt(); let vis = sstep((front - r_src) / 40.0); let line = (1.6 - e_px).clamp(0.0, 1.0);
-            let glint = line * vis * lit.min(1.6) * intensity; for c in 0..3 { col[c] = col[c] * (1.0 - 0.3 * line * vis) + glint * [0.95, 0.98, 1.0][c] * 0.75; }
+            let r_src = ((sx - fr.ix).powi(2) + (sy - fr.iy).powi(2)).sqrt(); let vis = sstep((front - r_src) / 40.0); let line = (2.2 - e_px).clamp(0.0, 1.0); let core = (1.0 - e_px / 0.9).clamp(0.0, 1.0);
+            let glint = (line * 0.55 + core) * vis * lit.max(0.55).min(1.6) * intensity; for c in 0..3 { col[c] = col[c] * (1.0 - 0.35 * line * vis) + glint * [0.95, 0.98, 1.0][c] * 0.9; }
+            if t > 0.0 { let ph = (s.tx * 3.1 + s.ty * 1.7).abs(); let band = ((sx * ph.cos() + sy * ph.sin()) * 0.045 + t * 5.0 * (0.5 + s.tx.abs()) + ph * 6.0).sin(); let spec = band.max(0.0).powi(10) * 0.55 * (0.4 + t); for c in 0..3 { col[c] = col[c] * 0.96 + 0.05 * [0.55, 0.75, 1.0][c] * (0.6 + 0.4 * t) + spec * [1.0, 1.0, 1.0][c]; } }
             let oo = (y * w + x) * 4; for c in 0..3 { out.d[oo + c] = out.d[oo + c] * (1.0 - cov) + col[c] * cov; } } } }
     // impact flash + shockwave ring
-    let fl = sstep((u - 0.05) / 0.05) * (1.0 - sstep((u - 0.1) / 0.18)); let ringr = (u - 0.1).max(0.0) / 0.5 * fr.maxr * 0.8; let ra = (1.0 - sstep((u - 0.1) / 0.3)) * 0.5 * intensity;
+    let fl = sstep((u - 0.05) / 0.04) * (1.0 - sstep((u - 0.09) / 0.1)) * 0.7; let ringr = (u - 0.1).max(0.0) / 0.5 * fr.maxr * 0.8; let ra = (1.0 - sstep((u - 0.1) / 0.3)) * 0.5 * intensity;
     if fl > 0.001 || ra > 0.002 { for y in 0..h { for x in 0..w { let d = (x as f32 - fr.ix).hypot(y as f32 - fr.iy); let g = fl * intensity * (-(d / (wf * 0.22)).powi(2)).exp() * 1.2 + if ra > 0.0 { ra * (-((d - ringr) / 6.0).powi(2)).exp() * 0.35 } else { 0.0 }; if g > 0.001 { let o = (y * w + x) * 4; out.d[o] += g; out.d[o + 1] += g * 0.97; out.d[o + 2] += g * 0.92; } } } }
     out
 }
