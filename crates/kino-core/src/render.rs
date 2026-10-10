@@ -7,11 +7,11 @@ use std::process::{Command, Stdio};
 /// Decoded frames for media clips, keyed by clip id. Frames are RGBA8 at project size, project fps,
 /// with speed already applied.
 /// A decoded window of consecutive frames, contiguous in memory. `first` is the global frame index of buf[0].
-pub struct Frames { pub working_linear:bool, pub quantized: std::sync::OnceLock<Vec<u8>>, pub linear_buf: Option<Vec<f32>>, pub buf: Vec<u8>, pub fs: usize, pub first: usize }
+pub struct Frames { pub still:bool,pub working_linear:bool, pub quantized: std::sync::OnceLock<Vec<u8>>, pub linear_buf: Option<Vec<f32>>, pub buf: Vec<u8>, pub fs: usize, pub first: usize }
 impl Frames {
     pub fn get_float(&self,g:usize)->Option<&[f32]>{let b=self.linear_buf.as_ref()?;let n=self.len();if n==0{return None}let i=g.saturating_sub(self.first).min(n-1);Some(&b[i*self.fs..(i+1)*self.fs])}
     pub fn len(&self) -> usize { if self.fs == 0 { 0 } else { self.linear_buf.as_ref().map(|b|b.len()).unwrap_or(self.buf.len()) / self.fs } }
-    pub fn covers(&self, a: usize, b: usize) -> bool { self.len() > 0 && ((a >= self.first && b < self.first + self.len()) || (self.len() == 1 && self.first == 0)) }
+    pub fn covers(&self, a: usize, b: usize) -> bool { self.len() > 0 && ((a >= self.first && b < self.first + self.len()) || (self.still && self.len() == 1 && self.first == 0)) }
     /// Global-index lookup, clamped into the window.
     pub fn get(&self, g: usize) -> Option<&[u8]> { let n = self.len(); if n == 0 { return None; } let i = g.saturating_sub(self.first).min(n - 1); let buf=if let Some(f)=&self.linear_buf{self.quantized.get_or_init(||f.iter().map(|v|(v.clamp(0.,1.)*255.+0.5) as u8).collect())}else{&self.buf};Some(&buf[i * self.fs..(i + 1) * self.fs]) }
 }
@@ -45,7 +45,7 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
       let fit=c.props.get("fit").map(|q|q.at(0.)).unwrap_or(0.);
       crate::color::pipeline::input(p,c,&mut src)?;
       let d=crate::color::interchange::fit(&src,w as usize,h as usize,fit)?;
-      return Ok(Frames{working_linear:true,quantized:Default::default(),linear_buf:Some(d),buf:vec![],fs:w as usize*h as usize*4,first:0})
+      return Ok(Frames{still:true,working_linear:true,quantized:Default::default(),linear_buf:Some(d),buf:vec![],fs:w as usize*h as usize*4,first:0})
     } let is_img0 = { let l = path.to_lowercase(); ["png","jpg","jpeg","webp","bmp","exr","tif","tiff","pfm"].iter().any(|e| l.ends_with(e)) }; let (a, n) = if is_img0 { (0, 1) } else { (a, n) };
     let (in_pt, speed, span) = if c.speed_curve.is_some() { (c.in_point, 1.0, c.source_time(c.duration)) } else { (c.in_point + a as f64 / p.fps * c.speed, c.speed, n as f64 / p.fps * c.speed) };
     let fit = c.props.get("fit").map(|q| q.at(0.0)).unwrap_or(0.0);
@@ -84,7 +84,7 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
         if p.color_pipeline.enabled{let values=buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect();buf=Vec::new();Some(values)}else{None}
     };
     let k = buf.len() / fs; buf.truncate(k * fs);
-    Ok(Frames { working_linear:native_fit,quantized:Default::default(),linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
+    Ok(Frames { still:is_img,working_linear:native_fit,quantized:Default::default(),linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
 }
 
 fn decode_cache_limit()->usize{(crate::guard::limits().mem_bytes/3).min(256*1024*1024).max(1024*1024)}
@@ -116,7 +116,7 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
         if let Some((s, fr)) = cache.frames.get(&c.id) { if *s == sig && fr.covers(ia, ib) { continue; } }
         let shared=cache.frames.values().find(|(s,fr)|*s==sig&&fr.covers(ia,ib)).map(|(_,fr)|fr.clone());
         if let Some(fr)=shared{cache.frames.insert(c.id.clone(),(sig,fr));continue}
-        if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, std::sync::Arc::new(Frames { working_linear:false,quantized:Default::default(),linear_buf: None, buf: vec![], fs: 0, first: 0 }))); continue; }
+        if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, std::sync::Arc::new(Frames { still:false,working_linear:false,quantized:Default::default(),linear_buf: None, buf: vec![], fs: 0, first: 0 }))); continue; }
         // whole-clip decode only for speed-ramped clips (index mapping is in source time); everything else is windowed
         let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(WINDOW).min(total - ia)) };
         let mut count=count;

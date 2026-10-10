@@ -17,7 +17,7 @@ Sources used for constants:
 Tests: nonuniform identity including negative/high values, 10,001 monotone samples, invalid/duplicate/nonfinite points. Proof: same 48-frame gradient with custom master curve, 1.448 s wall-clock. No claim of visual superiority from a gradient.
 
 ## Remaining
-Float linear project-wide decode/compositing, higher-bit export, OCIO config/official ACES output transforms, measured film stock, full covariance/perceptual shot matching, HDR scopes with metadata, camera-gamut-specific input transforms. Legacy effects remain display-referred. Existing color_space is transfer-only for compatibility.
+Measured film stock, camera-specific IDT/profile calibration, semantic/subject-aware shot matching, production OCIO integration and display-referred HLG OOTF remain out of scope. Opt-in float working decode/compositing, high-bit IO, full-covariance Lab matching, declared HDR scopes/metadata and optional pinned ACES2 reference paths are implemented below, with their individual caveats. Legacy effects remain display-referred. Existing color_space is transfer-only for compatibility.
 
 ## LUT precision/safety (V2)
 The existing `lut` effect now uses domain-aware tetrahedral interpolation. Accepts 2..65-cube grids, DOMAIN_MIN/MAX and finite rows; rejects 1-point grids, invalid dimensions, nonfinite data and inconsistent rows. File cap 32 MiB, cache cap 8 entries, cache key includes size and mtime (avoids stale replacement). Existing old unbounded parser removed. Three unit tests cover domain identity over all tetrahedra (1000 samples, error <3e-7), vertices and malformed data. Proof: 48-frame 640x360 synthetic 33-cube grade, 0.607 s including encode.
@@ -206,3 +206,27 @@ FFV1 encoded sRGB fixture decodes RGB16 within2e-5 and probe verifies tags. Actu
 
 ## PQ/HLG FFV1 regression evidence
 PQ and scene-HLG FFV1 RGB16 now have direct encoder/decoder regressions, confirming BT2020 primaries, identity RGB matrix, their exact declared transfer and decoded RGB within1.6e-5 of the configured output function. Actual10-frame320x180PQ RGB16 export0.426s with203declaredreferencewhite, no mastering metadata; probe confirms fullrangeGBRP16/PQ/BT2020 and retainedPCM audio. This is tagged integer interchange, not measured HDR/HLG display rendering; HLG still lacks display OOTF.11pipeline tests pass.
+
+## Common-domain optional reference difference
+`compare_aces2_reference` requires AP1 working + configured Rec709/sRGB output, then compares both encoded float outputs before integer clipping. Reports visible unweighted RGB RMSE, mean signed difference, maximum absolute difference and configured outside0..1coverage. Not a quality ranking: unlike plain matrix/encoding, the official view performs display rendering. No output changes, auto-fitting or compliance claim.
+
+Actual640x360footage fullMCP0.722s: RMSE[0.113652,0.114899,0.113648], maxdelta[0.168222,0.231398,0.168222],34configuredoutofrange pixels of230400visible. This explains the prior darker reference preview numerically, not a defect score. Tests reject incompatible output domains and verify finite metrics on signed/HDR samples.
+
+## Reference frame preflight
+Optional OCIO one-shot rejects malformed/nonfinite frames and alpha outside0..1 before starting Python; persistent apply enforces the same alpha boundary while retaining valid processor state after rejected input. High-bit export rejects subframe timelines that round to zero frames before encoder spawn. Signed/HDR RGB remains allowed.7OCIO+11pipeline tests pass with real optional processor.
+
+## Lab sampling API hostile-input bounds
+Lab sampling now validates frame shape/overflow and excludes nonfinite/out-of-range alpha, not only alpha<0.99. Transport validates finite source means/covariances, symmetry, nonnegative diagonal and minimum4samples before matrix powers. Effect API rejects malformed/nonfinite frames rather than processing partial RGBA chunks. These checks do not certify arbitrary covariance positive definiteness; eigenvalue regularization remains the existing stability fallback. Six matching regressions pass, including malformed dimensions and invalid source evidence.
+
+## Machine-readable declared pipeline inspection
+`inspect_color_pipeline` returns declared render/input/output domains, current settings, bound/wrapped effect contracts and stale project-gamut/reference-white flags. It includes supported high-bit formats/tag candidates and optional reference prerequisites. No render, media metadata inference, dependency availability claim or configuration mutation. The reference dependency is explicitly 'not checked'. Caller must still handle render validation and malformed wrapper fields. Default legacy state, fresh/stale bound effect and invalid gamut tests pass;12pipeline tests total.
+
+
+## Sampling resource preflight
+Declared-neutral sampling now reserves its three channel arrays against the Rust memory budget before allocation and uses exact region capacity. Lab sampling checks cancellation per row. These checks do not bound OCIO subprocess memory or certify real-time performance. The old top-level remaining-features list was reconciled with implemented opt-in features and current caveats, avoiding stale claims that completed IO/scopes were missing.
+
+## Declared mastering geometry/precision checks
+Caller-declared mastering white must lie within its primary triangle (nonnegative barycentric weights), independent of primary winding order. x265 serialization rejects min/max luminance that collapse to the same0.0001nit integer value. These checks prevent inconsistent declarations, not measured display validation. Three mastering tests and12pipeline tests pass. Existing P3/D65 test declaration unchanged.
+
+## Still-image cache identity
+Decoded windows now carry explicit `still` identity. A one-frame video window at frame0 no longer claims to cover every later timeline index; only actual still-image paths get that reuse. This prevents frozen first-frame output when decode budgets shrink video windows to one frame or a source ends early. Direct window regression plus actual shared-source/nested-export/float-interchange tests pass. This intentionally changes a public Rust `Frames` struct field, so external literal initializers must set `still`; MCP schemas unchanged.
