@@ -25,7 +25,7 @@ fn sstep(x: f64) -> f64 { let t = x.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) }
 struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64 }
 
 pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
-    let (w, hh) = (f.w, f.h); let cv = CamView::new(w, hh, cam); let fl = cv.focal(); let k = hh as f64 / 720.0;
+    let (w, hh) = (f.w, f.h); let cv = CamView::new(w, hh, cam); let fl = cv.focal(); let k = w.min(hh) as f64 / 720.0;
     let nsub = 4usize; let shutter = 0.5 / fps.max(1.0); let mut accc = vec![0f32; w * hh * 3]; let mut acca = vec![0f32; w * hh]; let rf = e.refract > 0.0; let mut dacc = vec![0f32; if rf { w * hh * 2 } else { 0 }]; let mut dsum = vec![0f32; if rf { w * hh * 2 } else { 0 }];
     let lg = { let l = e.light; let m = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt().max(1e-9); [l[0] / m, l[1] / m, l[2] / m] };
     let focus = if e.focus > 0.0 { e.focus } else { fl };
@@ -50,7 +50,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                 for v in 0..nv { let l = [loc[v].0, loc[v].1, zoff]; let wp = [pos[0] + rm[0][0] * l[0] + rm[0][1] * l[1] + rm[0][2] * l[2], pos[1] + rm[1][0] * l[0] + rm[1][1] * l[1] + rm[1][2] * l[2], pos[2] + rm[2][0] * l[0] + rm[2][1] * l[1] + rm[2][2] * l[2]];
                     match cv.project(wp) { Some((sx, sy, zv)) => { pts[v] = (sx, sy); dz += zv; } None => { ok = false; } } }
                 if !ok { break; } dz /= nv as f64; zsum += dz; shard.push((pts, dz, 0.0, 0.0, 0.0)); }
-            if !ok || shard.len() < 2 { continue; } let zv = zsum / 2.0; let coc = e.dof * ((zv - focus).abs() / zv) * fl * 0.035 * k; let ndl = nrm[0] * lg[0] + nrm[1] * lg[1] + nrm[2] * lg[2];
+            if !ok || shard.len() < 2 { continue; } let zv = zsum / 2.0; let coc = (e.dof * ((zv - focus).abs() / zv) * fl * 0.035 * k).min(10.0 * k); let ndl = nrm[0] * lg[0] + nrm[1] * lg[1] + nrm[2] * lg[2];
             let refl = [lg[0] - 2.0 * ndl * nrm[0], lg[1] - 2.0 * ndl * nrm[1], lg[2] - 2.0 * ndl * nrm[2]]; let spec = refl[2].max(0.0).powi(18) + 0.35 * (-refl[2]).max(0.0).powi(18);
             let dim = 1.0 / (1.0 + coc * 0.12) * (-e.falloff * ((zv - fl).max(0.0) / fl)).exp(); let fres = 0.04 + 0.96 * (1.0 - nrm[2].abs()).powi(5); let al = life_fade * born * dim;
             { let (fp, bp) = (shard[0].0, shard[1].0); for v in 0..nv { let w2 = (v + 1) % nv; let (ex, ey) = (loc[w2].0 - loc[v].0, loc[w2].1 - loc[v].1); let l = (ex * ex + ey * ey).sqrt().max(1e-9); let nl = [ey / l, -ex / l, 0.0];
@@ -68,7 +68,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             let (cxm, cym) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5); let sw = (pr.blur * 0.9 + 0.7).max(0.7); let size_px = (x1 - x0).max(y1 - y0).max(1.0);
             for y in ya..=yb { for x in xa..=xb { let (px, py) = (x as f64 + 0.5, y as f64 + 0.5); let mut d = f64::MAX; for v in 0..pr.n { let (a, b) = (pr.pts[v], pr.pts[(v + 1) % pr.n]); let (ex, ey) = (b.0 - a.0, b.1 - a.1); let l2 = (ex * ex + ey * ey).max(1e-9); let tt = (((px - a.0) * ex + (py - a.1) * ey) / l2).clamp(0.0, 1.0); let dd = ((px - a.0 - tt * ex).hypot(py - a.1 - tt * ey)); let side = (ex * (py - a.1) - ey * (px - a.0)) * sg; let sd = if side >= 0.0 { dd } else { -dd }; if sd.abs() < d.abs() { d = sd; } }
                 let cov = sstep((d + sw) / (2.0 * sw)); if cov <= 0.002 { continue; }
-                let inner = d.max(0.0); let rimw = 1.1 * k + pr.blur * 0.5; let rim = (-inner / rimw).exp(); let (rr, rg, rb) = if e.dispersion > 0.0 { let o = e.dispersion * (0.7 + pr.blur * 0.1); ((-(inner + o).max(0.0) / rimw).exp(), rim, (-(inner - o).max(0.0) / rimw).exp()) } else { (rim, rim, rim) };
+                let inner = d.max(0.0); let rimw = 1.1 * k + pr.blur * 0.5; let rim = (-inner / rimw).exp(); let (rr, rg, rb) = if e.dispersion > 0.0 { let o = (e.dispersion.min(3.0) * 0.4 * (1.0 + pr.blur * 0.04)).min(1.6 * k); ((-(inner + o).max(0.0) / rimw).exp(), rim, (-(inner - o).max(0.0) / rimw).exp()) } else { (rim, rim, rim) };
                 let grad = 0.55 + 0.45 * (((px - cxm) / size_px + (py - cym) / size_px) * 0.9 + 0.5 + pr.u * 0.3).clamp(0.0, 1.0);
                 let face_a = (e.fresnel * 1.3 * pr.rim_c * (0.6 + 0.8 * grad) + 0.17 + 0.2 * (1.0 - pr.nz) + 0.1 * grad + 1.0 * pr.spec * if pr.face == 0 { 1.0 } else { 0.6 }) * if pr.face == 1 { 0.7 } else { 1.0 };
                 let face_a = if rf { face_a * 0.45 } else { face_a }; let a = ((face_a + 0.5 * rim * (0.5 + 0.5 * pr.face as f64 * 0.0 + 0.5)) * cov * pr.alpha).min(0.95); if a <= 0.002 { continue; }

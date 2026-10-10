@@ -42,7 +42,7 @@ pub fn mix(p: &Project) -> Vec<f32> {
             if off + i + 1 < out.len() { out[off + i] += s[i] * g; out[off + i + 1] += s[i + 1] * g; }
         }
     }}
-    for v in out.iter_mut() { *v = v.clamp(-1.0, 1.0); }
+    limit(&mut out, -1.5);
     out
 }
 
@@ -54,17 +54,38 @@ pub fn write_wav(path: &str, pcm: &[f32]) -> Result<(), String> {
     std::fs::write(path, b).map_err(|e| e.to_string())
 }
 
-/// Spectral-flux style onset detector on a mono envelope; returns beat times in seconds.
-pub fn detect_beats(path: &str, min_gap: f64) -> Vec<f64> {
-    let Ok(o) = Command::new("ffmpeg").args(["-v","error","-i",path,"-vn","-f","f32le","-ac","1","-ar","22050","-"]).output() else { return vec![] };
+/// Onset detector on a short-window RMS envelope. Returns (beat times in seconds, bpm).
+/// Onsets are stamped at the centre of the window where the energy rises; min_gap suppression keeps the strongest hit in each gap.
+pub fn analyze(path: &str, min_gap: f64) -> (Vec<f64>, f64) {
+    let Ok(o) = Command::new("ffmpeg").args(["-v","error","-i",path,"-vn","-f","f32le","-ac","1","-ar","22050","-"]).output() else { return (vec![], 0.0) };
     let s: Vec<f32> = o.stdout.chunks_exact(4).map(|x| f32::from_le_bytes([x[0], x[1], x[2], x[3]])).collect();
-    let hop = 512; let win = 1024; let mut env = vec![];
+    let (hop, win, sr) = (256usize, 512usize, 22050.0f64); let mut env = vec![];
     let mut i = 0; while i + win < s.len() { env.push((s[i..i + win].iter().map(|v| v * v).sum::<f32>() / win as f32).sqrt()); i += hop; }
     let flux: Vec<f32> = env.windows(2).map(|w| (w[1] - w[0]).max(0.0)).collect();
-    let mut beats = vec![]; let mut last = -10.0;
-    for i in 8..flux.len().saturating_sub(8) {
-        let local = flux[i - 8..i + 8].iter().sum::<f32>() / 16.0; let t = i as f64 * hop as f64 / 22050.0;
-        if flux[i] > local * 1.8 + 0.01 && flux[i] >= flux[i - 1] && flux[i] >= flux[i + 1] && t - last >= min_gap { beats.push(t); last = t; }
-    }
-    beats
+    let mut cand: Vec<(f64, f32)> = vec![]; let r = 16usize;
+    for i in r..flux.len().saturating_sub(r) {
+        let local = flux[i - r..i + r].iter().sum::<f32>() / (2 * r) as f32;
+        if flux[i] > local * 1.8 + 0.01 && flux[i] >= flux[i - 1] && flux[i] >= flux[i + 1] { cand.push((((i + 1) * hop + win / 2) as f64 / sr - win as f64 / 2.0 / sr * 0.0, flux[i])); } }
+    // strongest-wins suppression
+    let mut order: Vec<usize> = (0..cand.len()).collect(); order.sort_by(|&x, &y| cand[y].1.partial_cmp(&cand[x].1).unwrap());
+    let mut keep: Vec<f64> = vec![]; for &ix in &order { let t = cand[ix].0; if keep.iter().all(|&k| (k - t).abs() >= min_gap) { keep.push(t); } } keep.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // tempo from autocorrelation of the onset strength (80..180 BPM)
+    let fps = sr / hop as f64; let n = flux.len(); let mut best = (0.0f64, 0usize);
+    let (lo, hi) = ((fps * 60.0 / 180.0) as usize, (fps * 60.0 / 80.0) as usize);
+    let mut ac = vec![0f64; hi + 2]; for lag in lo.max(1)..=hi { if lag >= n { break; } let mut sum = 0.0f64; for j in 0..n - lag { sum += flux[j] as f64 * flux[j + lag] as f64; } ac[lag] = sum / (n - lag) as f64; if ac[lag] > best.0 { best = (ac[lag], lag); } }
+    let bpm = if best.1 > 1 && best.1 < hi { let l = best.1; let (a0, a1, a2) = (ac[l - 1], ac[l], ac[l + 1]); let d = a0 - 2.0 * a1 + a2; let off = if d.abs() > 1e-12 { 0.5 * (a0 - a2) / d } else { 0.0 }; 60.0 * fps / (l as f64 + off) } else { 0.0 };
+    (keep, bpm)
+}
+pub fn detect_beats(path: &str, min_gap: f64) -> Vec<f64> { analyze(path, min_gap).0 }
+
+/// Lookahead peak limiter (5 ms lookahead, 80 ms release) with a ceiling in dBFS; keeps AAC/true-peak overshoot below about -1 dBTP at the default.
+pub fn limit(pcm: &mut [f32], ceiling_db: f64) {
+    let ceil = 10f32.powf(ceiling_db as f32 / 20.0); let la = (SR as f32 * 0.005) as usize; let rel = (-1.0 / (SR as f32 * 0.08)).exp(); let n = pcm.len() / 2;
+    let mut need = vec![1f32; n]; for i in 0..n { let pk = pcm[i * 2].abs().max(pcm[i * 2 + 1].abs()); if pk > ceil { need[i] = ceil / pk; } }
+    // lookahead min over [i, i+la], then smooth release
+    let mut g = vec![1f32; n]; let mut dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    for i in (0..n).rev() { while let Some(&b) = dq.back() { if need[b] >= need[i] { dq.pop_back(); } else { break; } } dq.push_back(i); while let Some(&f) = dq.front() { if f > i + la { dq.pop_front(); } else { break; } } g[i] = need[*dq.front().unwrap()]; }
+    let att = 1.0 - (-3.0 / la.max(1) as f32).exp(); let mut cur = 1f32;
+    for i in 0..n { let t = g[i]; if t < cur { cur += (t - cur) * att; } else { cur = t + (cur - t) * rel; } let gain = cur.min(1.0).max(0.0); pcm[i * 2] *= gain; pcm[i * 2 + 1] *= gain; }
+    for v in pcm.iter_mut() { *v = v.clamp(-ceil, ceil); }
 }

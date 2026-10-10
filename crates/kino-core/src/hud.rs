@@ -55,7 +55,7 @@ pub fn add_detection_box(ss: &mut Session, a: &Value) -> Result<Value, String> {
 /// Number counter: shows a rolling number from `from` to `to` with an ease, as a sequence of text clips (one per frame step).
 pub fn add_counter(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let tid = a.get("track_id").and_then(|v| v.as_str()).ok_or("missing track_id")?.to_string();
-    let (start, dur, hold) = (num(a, "start", 0.0), num(a, "duration", 3.0), num(a, "hold", 1.0)); let (from, to) = (num(a, "from", 0.0), num(a, "to", 100.0));
+    let (start, dur, hold) = (num(a, "start", 0.0), num(a, "duration", 3.0), num(a, "hold", 0.0)); let (from, to) = (num(a, "from", 0.0), num(a, "to", 100.0));
     if dur <= 0.0 || hold < 0.0 { return Err("duration must be > 0, hold >= 0".into()); }
     let fps = ss.project.fps; let roll = dur.min(2.0).max(0.1); let n = ((roll * fps).round() as usize).clamp(2, 600);
     let (size, color) = (num(a, "size", 120.0), rgb(a, "color", [1.0; 3])); let font = a.get("font").and_then(|v| v.as_str()).unwrap_or("Anton").to_string();

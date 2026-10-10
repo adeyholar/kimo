@@ -39,7 +39,9 @@ const WINDOW: usize = 24;
 fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frames, String> {
     let (w, h) = (p.width, p.height);
     let (in_pt, speed, span) = if c.speed_curve.is_some() { (c.in_point, 1.0, c.source_time(c.duration)) } else { (c.in_point + a as f64 / p.fps * c.speed, c.speed, n as f64 / p.fps * c.speed) };
-    let vf = format!("setpts=PTS/{},fps={},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0,format=rgba", speed.max(0.01), p.fps);
+    let fit = c.props.get("fit").map(|q| q.at(0.0)).unwrap_or(0.0);
+    let fitf = if fit >= 1.5 { format!("scale={w}:{h}") } else if fit >= 0.5 { format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}") } else { format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0") };
+    let vf = format!("setpts=PTS/{},fps={},{},format=rgba", speed.max(0.01), p.fps, fitf);
     let is_img = ["png","jpg","jpeg","webp","bmp"].iter().any(|e| path.to_lowercase().ends_with(e));
     let loop_args: Vec<&str> = if is_img { vec!["-loop", "1"] } else { vec![] };
     let fs = (w * h * 4) as usize;
@@ -63,7 +65,7 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
     if !all { cache.frames.retain(|k, _| active.contains(k)); }
     for tr in &p.tracks { for c in &tr.clips {
         let Source::Media { asset } = &c.source else { continue };
-        if !active.contains(&c.id) { continue; }
+        if !active.contains(&c.id) || c.props.get("audio_only").map(|q| q.at(0.0)).unwrap_or(0.0) >= 0.5 { continue; }
         let total = ((c.duration * p.fps).ceil() as usize).max(1);
         let (ta, tb) = match c.time_mode { TimeMode::Normal => (t0, t1), TimeMode::Reverse => (c.start + c.duration - (t1 - c.start), c.start + c.duration - (t0 - c.start)), TimeMode::Freeze { at } => (c.start + at, c.start + at) };
         let (t0, t1) = (ta, tb);
@@ -241,11 +243,13 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     let nt = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1);
     let mut i = 0;
     while i < n {
-        let end = (i + nt * 2).min(n);
+        let end = (i + nt * 4).min(n);
         prepare_range(p, &mut cache, i as f64 / p.fps, end as f64 / p.fps)?;
-        let frames: Vec<Result<Vec<u8>, String>> = std::thread::scope(|sc| {
-            let hs: Vec<_> = (i..end).map(|k| { let cache = &cache; sc.spawn(move || render_frame(p, k as f64 / p.fps, cache).map(|f| to_rgba8(&f))) }).collect();
-            hs.into_iter().map(|h| h.join().unwrap()).collect() });
+        // work queue: nt workers pull frame indices, so one slow frame (shards) no longer idles the other cores
+        let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
+        std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
+            let res = render_frame(p, k as f64 / p.fps, cache).map(|f| to_rgba8(&f)); *slots[k - i].lock().unwrap() = Some(res); }); } });
+        let frames: Vec<Result<Vec<u8>, String>> = slots.into_iter().map(|m| m.into_inner().unwrap().unwrap()).collect();
         for f in frames { si.write_all(&f?).map_err(|e| e.to_string())?; }
         i = end;
     }

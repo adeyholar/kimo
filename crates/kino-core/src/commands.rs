@@ -57,7 +57,7 @@ pub fn registry() -> Vec<Command> {
     Command { name: "add_clip", description: "Add a clip to a track. source_type: media (needs asset_id), solid (color [r,g,b] 0..1), gradient (color, color2).", mutates: true,
         schema: obj(vec![("track_id", s("target track")), ("source_type", json!({"type":"string","enum":["media","solid","gradient"]})), ("asset_id", s("for media")),
             ("color", json!({"type":"array","items":{"type":"number"},"description":"[r,g,b] 0..1"})), ("color2", json!({"type":"array","items":{"type":"number"}})),
-            ("start", n("timeline start seconds")), ("duration", n("seconds")), ("in_point", n("source offset seconds")), ("speed", n("playback speed, default 1"))], &["track_id","source_type","start","duration"]),
+            ("start", n("timeline start seconds")), ("duration", n("seconds")), ("in_point", n("source offset seconds")), ("speed", n("playback speed, default 1")), ("fit", json!({"type":"string","enum":["contain","cover","stretch"],"description":"media framing: contain (letterbox, default), cover (fill + center crop), stretch"}))], &["track_id","source_type","start","duration"]),
         run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string();
             let src = match str_arg(a, "source_type")? {
                 "media" => { let id = str_arg(a, "asset_id")?; if !ss.project.assets.contains_key(id) { return Err(format!("no asset '{id}'")); } Source::Media { asset: id.into() } }
@@ -65,9 +65,18 @@ pub fn registry() -> Vec<Command> {
                 "gradient" => Source::Gradient { c1: color(a, "color", [0.0; 3]), c2: color(a, "color2", [1.0; 3]) },
                 o => return Err(format!("bad source_type {o}")) };
             let id = ss.project.gen_id("clip");
-            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: opt_num(a, "speed", 1.0), speed_curve: None, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, text_fx: None, transition_in: None };
+            let mut c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: opt_num(a, "speed", 1.0), speed_curve: None, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, text_fx: None, transition_in: None };
+            match a.get("fit").and_then(|v| v.as_str()) { Some("cover") => { c.props.insert("fit".into(), Prop::new(1.0)); } Some("stretch") => { c.props.insert("fit".into(), Prop::new(2.0)); } Some("contain") | None => {} Some(o) => return Err(format!("bad fit {o}; use contain, cover or stretch")) }
             let tr = ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or(format!("no track '{tid}'"))?; tr.clips.push(c);
             Ok(json!({"clip_id":id})) } },
+    Command { name: "add_audio_clip", description: "Add an audio-only clip (music, voice, sfx) from an imported asset. It never draws and never takes part in the video stack. Creates an audio track if track_id is omitted. Export applies a limiter (ceiling -1.5 dBFS) so peaks stay under about -1 dBTP.", mutates: true,
+        schema: obj(vec![("asset_id", s("imported asset (wav/mp3/video with audio)")), ("track_id", s("existing track, optional")), ("start", n("timeline start seconds")), ("duration", n("seconds")), ("in_point", n("source offset seconds")), ("volume", n("gain, default 1"))], &["asset_id","start","duration"]),
+        run: |ss, a| { let id = str_arg(a, "asset_id")?; if !ss.project.assets.contains_key(id) { return Err(format!("no asset '{id}'")); }
+            let tid = match a.get("track_id").and_then(|v| v.as_str()) { Some(t) => t.to_string(), None => { let t = ss.project.gen_id("track"); ss.project.tracks.push(Track { id: t.clone(), clips: vec![], locked: false, muted: false, name: "audio".into() }); t } };
+            let cid = ss.project.gen_id("clip"); let mut props = default_props(); props.insert("audio_only".into(), Prop::new(1.0)); props.insert("opacity".into(), Prop::new(0.0));
+            let mut au = Audio::default(); au.volume = Prop::new(opt_num(a, "volume", 1.0));
+            let c = Clip { id: cid.clone(), source: Source::Media { asset: id.into() }, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: 1.0, speed_curve: None, props, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: au, motion_blur: 0.0, text_fx: None, transition_in: None };
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or(format!("no track '{tid}'"))?.clips.push(c); Ok(json!({"clip_id":cid,"track_id":tid})) } },
     Command { name: "add_text", description: "Add a text clip (rendered with a TTF/OTF font). Animate with set_keyframe on reveal (typewriter), opacity, scale, x, y, rotation. Default font is a system sans.", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("text", s("text, \\n for newlines")), ("start", n("seconds")), ("duration", n("seconds")), ("font", s("path to .ttf/.otf (optional)")), ("size", n("pixels, default 72")),
             ("color", json!({"type":"array","items":{"type":"number"}})), ("letter_spacing", n("pixels")), ("stroke_width", n("pixels")), ("stroke_color", json!({"type":"array","items":{"type":"number"}})), ("shadow", n("shadow offset pixels")), ("align", json!({"type":"string","enum":["left","center","right"]}))], &["track_id","text","start","duration"]),
@@ -105,7 +114,7 @@ pub fn registry() -> Vec<Command> {
         run: |ss, a| { let e: Ease = serde_json::from_value(a.get("ease").cloned().unwrap_or(json!("linear"))).map_err(|e| e.to_string())?; let (t, v) = (num_arg(a, "time")?, num_arg(a, "value")?); clip(&mut ss.project, a)?.audio.volume.set_key(t, v, e); Ok(json!({"ok":true})) } },
     Command { name: "detect_beats", description: "Detect beat/onset times (seconds) in an audio or video file, for cutting on the beat. Returns times plus tempo estimate.", mutates: false,
         schema: obj(vec![("path", s("media path")), ("min_gap", n("min seconds between beats, default 0.25"))], &["path"]),
-        run: |_, a| { let b = crate::audio::detect_beats(str_arg(a, "path")?, opt_num(a, "min_gap", 0.25)); let bpm = if b.len() > 3 { let mut d: Vec<f64> = b.windows(2).map(|w| w[1] - w[0]).collect(); d.sort_by(|x, y| x.partial_cmp(y).unwrap()); 60.0 / d[d.len() / 2] } else { 0.0 }; Ok(json!({"beats":b,"bpm":bpm})) } },
+        run: |_, a| { let (b, bpm) = crate::audio::analyze(str_arg(a, "path")?, opt_num(a, "min_gap", 0.25)); Ok(json!({"beats":b,"bpm":bpm})) } },
     Command { name: "export_audio", description: "Mix all clip audio to a 16-bit 48k stereo WAV.", mutates: false,
         schema: obj(vec![("path", s("output .wav"))], &["path"]),
         run: |ss, a| { let p = str_arg(a, "path")?; crate::audio::write_wav(p, &crate::audio::mix(&ss.project))?; Ok(json!({"path":p})) } },
