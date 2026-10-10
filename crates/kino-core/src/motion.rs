@@ -55,3 +55,20 @@ pub fn preset(shape: &str, cx: f64, cy: f64, rx: f64, ry: f64) -> Option<(Vec<(f
         "spiral" => ((0..=24).map(|i| { let u = i as f64 / 24.0; let a = u * tau * 2.0; (cx + rx * u * a.cos(), cy + ry * u * a.sin()) }).collect(), false),
         _ => return None })
 }
+
+/// Onset-envelope beat tracker: decode mono 11.025 kHz audio, spectral-flux-like energy difference in 512-sample hops, tempo by autocorrelation (60-200 BPM), beat grid phase-locked to the strongest onsets.
+pub fn detect_beats(path: &str, t0: f64, dur: f64, min_bpm: f64, max_bpm: f64) -> Result<(f64, Vec<f64>, f64), String> {
+    let out = std::process::Command::new("ffmpeg").args(["-v","error","-ss",&format!("{t0}"),"-t",&format!("{dur}"),"-i",path,"-vn","-ac","1","-ar","11025","-f","s16le","-"]).output().map_err(|e| e.to_string())?;
+    let s: Vec<f32> = out.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0).collect(); if s.len() < 11025 { return Err("audio too short or missing".into()); }
+    let hop = 256usize; let hz = 11025.0 / hop as f64; let n = s.len() / hop; let mut env = vec![0f32; n];
+    // high-passed energy (first difference) then half-wave rectified flux
+    let mut prev = 0f32; for i in 0..n { let mut e = 0f32; for k in 0..hop { let x = s[i * hop + k]; let d = x - if k > 0 { s[i * hop + k - 1] } else { 0.0 }; e += d * d; } let e = (e / hop as f32).sqrt(); env[i] = (e - prev).max(0.0); prev = e * 0.5 + prev * 0.5; }
+    let mean = env.iter().sum::<f32>() / n as f32; for v in env.iter_mut() { *v = (*v - mean).max(0.0); }
+    let (lo, hi) = ((hz * 60.0 / max_bpm) as usize, (hz * 60.0 / min_bpm) as usize); let (mut best, mut bl) = (-1.0f64, lo.max(2));
+    for l in lo.max(2)..=hi.min(n / 2) { let mut ac = 0f64; for i in 0..n - l { ac += (env[i] * env[i + l]) as f64; } let ac = ac / (n - l) as f64; if ac > best { best = ac; bl = l; } }
+    let bpm0 = 60.0 * hz / bl as f64; let bpm_c = if bpm0 < 70.0 { bpm0 * 2.0 } else { bpm0 };
+    let (mut bph, mut bs, mut bpm, mut per) = (0.0f64, -1.0f32, bpm_c, 60.0 / bpm_c * hz);
+    let mut cand = bpm_c - 5.0; while cand <= bpm_c + 5.0 { let pr = 60.0 / cand * hz; for p in 0..48 { let ph = pr * p as f64 / 48.0; let mut sum = 0f32; let mut b = ph; let mut cnt = 0; while (b as usize) < n { let i = b as usize; sum += env[i].max(env[i.saturating_sub(1)]).max(env[(i + 1).min(n - 1)]); b += pr; cnt += 1; } let sc = sum / cnt.max(1) as f32; if sc > bs { bs = sc; bph = ph; bpm = cand; per = pr; } } cand += 0.25; }
+    let mut beats = vec![]; let mut b = bph; while (b as usize) < n { beats.push(t0 + b / hz); b += per; }
+    let conf = if mean > 0.0 { (best / (mean as f64).powi(2).max(1e-12)).min(99.0) } else { 0.0 }; Ok((bpm, beats, conf))
+}

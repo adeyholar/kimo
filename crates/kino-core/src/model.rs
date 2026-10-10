@@ -178,14 +178,18 @@ pub struct TextFx {
     pub shadow_blur: f64, pub shadow_opacity: f64, pub shadow_color: [f64; 3], pub shadow_angle: f64,
     pub gradient: Option<([f64; 3], [f64; 3])>, pub glow: f64, pub glow_color: [f64; 3],
     pub animators: Vec<TextAnimator>,
+    #[serde(default)] pub path: Option<crate::motion::MotionPath>, #[serde(default = "zp")] pub path_start: Prop, #[serde(default)] pub path_flip: bool,
 }
-impl Default for TextFx { fn default() -> Self { TextFx { weight: 0.0, uppercase: false, line_mask: false, italic_skew: 0.0, box_width: 0.0, line_spacing: 1.15, kerning: true, bg: None, bg_pad: 24.0, bg_radius: 12.0, shadow_blur: 0.0, shadow_opacity: 0.6, shadow_color: [0.0; 3], shadow_angle: 45.0, gradient: None, glow: 0.0, glow_color: [1.0, 1.0, 1.0], animators: vec![] } } }
+fn zp() -> Prop { Prop::new(0.0) }
+impl Default for TextFx { fn default() -> Self { TextFx { weight: 0.0, uppercase: false, line_mask: false, italic_skew: 0.0, box_width: 0.0, line_spacing: 1.15, kerning: true, bg: None, bg_pad: 24.0, bg_radius: 12.0, shadow_blur: 0.0, shadow_opacity: 0.6, shadow_color: [0.0; 3], shadow_angle: 45.0, gradient: None, glow: 0.0, glow_color: [1.0, 1.0, 1.0], animators: vec![], path: None, path_start: Prop::new(0.0), path_flip: false } } }
 /// Range selector + properties applied to each unit (char/word/line) by selector amount. All values keyframable.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TextAnimator {
     pub id: String, pub unit: String, pub shape: String,
     pub start: Prop, pub end: Prop, pub offset: Prop, pub smoothness: Prop,
     pub x: Prop, pub y: Prop, pub scale: Prop, pub rotation: Prop, pub opacity: Prop, pub tracking: Prop, pub blur: Prop,
+    /// Selector order: false = reading order, true = pseudo-random (AE 'Randomize Order'), stable per `seed`.
+    #[serde(default)] pub random: bool, #[serde(default)] pub seed: u64,
 }
 
 /// Echo ghosts: `count` earlier (or later when spacing<0) copies of the layer at `spacing` seconds apart.

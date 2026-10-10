@@ -62,7 +62,7 @@ fn shape_amount(shape: &str, x: f32, smooth: f32) -> f32 {
 struct U { x: f32, y: f32, sc: f32, rot: f32, op: f32, track: f32, blur: f32 }
 fn animate(an: &[TextAnimator], t: f64, g: &G, nchar: usize, nword: usize, nline: usize, ci: usize) -> U {
     let mut u = U { x: 0.0, y: 0.0, sc: 1.0, rot: 0.0, op: 1.0, track: 0.0, blur: 0.0 };
-    for a in an { let (n, i) = match a.unit.as_str() { "word" => (nword, g.word), "line" => (nline, g.line), _ => (nchar, ci) }; let pos = (i as f32 + 0.5) / n.max(1) as f32;
+    for a in an { let (n, i) = match a.unit.as_str() { "word" => (nword, g.word), "line" => (nline, g.line), _ => (nchar, ci) }; let i = if a.random { let hh = |k: usize| { let mut x = (k as u64).wrapping_add(a.seed.wrapping_mul(0x9E3779B97F4A7C15)).wrapping_mul(0xBF58476D1CE4E5B9); x ^= x >> 29; x = x.wrapping_mul(0x94D049BB133111EB); x ^ (x >> 32) }; let hi = hh(i); (0..n).filter(|&k| { let h = hh(k); h < hi || (h == hi && k < i) }).count() } else { i }; let pos = (i as f32 + 0.5) / n.max(1) as f32;
         let (s0, e0, off, sm) = (a.start.at(t) as f32, a.end.at(t) as f32, a.offset.at(t) as f32, a.smoothness.at(t) as f32); let (s, e) = (s0 + off, e0 + off); let x = (pos - s) / (e - s).max(1e-4); let k = shape_amount(&a.shape, x, sm);
         if k <= 0.0 { continue; } u.x += a.x.at(t) as f32 * k; u.y += a.y.at(t) as f32 * k; u.sc *= 1.0 + (a.scale.at(t) as f32 - 1.0) * k; u.rot += a.rotation.at(t) as f32 * k; u.op *= 1.0 + (a.opacity.at(t) as f32 - 1.0) * k; u.track += a.tracking.at(t) as f32 * k; u.blur += a.blur.at(t) as f32 * k; }
     u
@@ -74,13 +74,17 @@ fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f
     let nchar = glyphs.len(); let shown = (reveal.clamp(0.0, 1.0) * nchar as f64).ceil() as usize;
     let (bx, by) = ((cw as f32 - bw) / 2.0, (ch as f32 - bh) / 2.0); let mut cov = vec![0f32; cw * ch];
     let empty: Vec<TextAnimator> = vec![]; let an = fx.map(|x| &x.animators).unwrap_or(&empty);
+    let plen = fx.and_then(|x| x.path.as_ref()).map(|pp| { let mut l = 0f64; let mut pv = crate::motion::sample(pp, 0.0, cw, ch); for k in 1..=200 { let c = crate::motion::sample(pp, k as f64 / 200.0, cw, ch); l += (c.0 - pv.0).hypot(c.1 - pv.1); pv = c; } l as f32 }).unwrap_or(1.0);
     let mut track_acc = vec![0f32; nl + 1]; let mut last_line = usize::MAX;
     let mut line_tr = vec![0f32; nl + 1]; for (ci, g) in glyphs.iter().enumerate().take(shown) { line_tr[g.line] += animate(an, t, g, nchar, nwords, nl, ci).track; }
     for (ci, g) in glyphs.iter().enumerate() { if ci >= shown { break; }
-        let u = animate(an, t, g, nchar, nwords, nl, ci); if g.line != last_line { track_acc[g.line] = 0.0; last_line = g.line; } let tr = track_acc[g.line]; track_acc[g.line] += u.track;
+        let mut u = animate(an, t, g, nchar, nwords, nl, ci); if g.line != last_line { track_acc[g.line] = 0.0; last_line = g.line; } let tr = track_acc[g.line]; track_acc[g.line] += u.track;
         if u.op <= 0.0 { continue; }
+        let pd = |tt: f64| -> (f32, f32, f32) { let Some(pp) = fx.and_then(|x| x.path.as_ref()) else { return (0.0, 0.0, 0.0) }; let gx0 = bx + g.x + tr; let sp = (gx0 + g.adv * 0.5 - bx) / plen.max(1.0); let s0 = fx.map(|x| x.path_start.at(tt) as f32).unwrap_or(0.0); let uu = (s0 + if fx.map(|x| x.path_flip).unwrap_or(false) { -sp } else { sp }).clamp(0.0, 1.0) as f64;
+            let (dx, dy, ang) = crate::motion::sample(pp, uu, cw, ch); let (ox0, oy0) = (bx + g.x + tr, by + g.y); let (gcx0, gcy0) = (ox0 + g.adv * 0.5, oy0 - sf.ascent() * 0.35); (cw as f32 / 2.0 + dx as f32 - gcx0, ch as f32 / 2.0 + dy as f32 - gcy0, ang as f32) };
+        let p1 = pd(t); u.x += p1.0; u.y += p1.1; u.rot += p1.2;
         let gid = f.glyph_id(g.c); let shift = match align { "left" => 0.0, "right" => -line_tr[g.line], _ => -line_tr[g.line] * 0.5 }; let (ox, oy) = (bx + g.x + tr + shift, by + g.y);
-        let u1 = u; let u0 = animate(an, t - 0.5 / 30.0, g, nchar, nwords, nl, ci); let dist = ((u1.x - u0.x).powi(2) + (u1.y - u0.y).powi(2)).sqrt() + (u1.sc - u0.sc).abs() * size * 0.5 + (u1.rot - u0.rot).abs() * 0.3; let ns = if dist > 0.8 { ((dist / 1.5).ceil() as usize).clamp(2, 10) } else { 1 }; let wgt = 1.0 / ns as f32;
+        let u1 = u; let mut u0 = animate(an, t - 0.5 / 30.0, g, nchar, nwords, nl, ci); { let p0 = pd(t - 0.5 / 30.0); u0.x += p0.0; u0.y += p0.1; u0.rot += p0.2; } let dist = ((u1.x - u0.x).powi(2) + (u1.y - u0.y).powi(2)).sqrt() + (u1.sc - u0.sc).abs() * size * 0.5 + (u1.rot - u0.rot).abs() * 0.3; let ns = if dist > 0.8 { ((dist / 1.5).ceil() as usize).clamp(2, 10) } else { 1 }; let wgt = 1.0 / ns as f32;
         for si in 0..ns { let ff = if ns > 1 { (si as f32 + 0.5) / ns as f32 } else { 1.0 }; let u = U { x: u0.x + (u1.x - u0.x) * ff, y: u0.y + (u1.y - u0.y) * ff, sc: u0.sc + (u1.sc - u0.sc) * ff, rot: u0.rot + (u1.rot - u0.rot) * ff, op: u1.op, track: u1.track, blur: u1.blur };
         let (gcx, gcy) = (ox + g.adv * 0.5, oy - sf.ascent() * 0.35);
         let band = if fx.map(|x| x.line_mask).unwrap_or(false) { let lh = sf.height() * fx.map(|x| x.line_spacing as f32).unwrap_or(1.15); Some((by + g.line as f32 * lh - lh * 0.02, by + (g.line as f32 + 1.0) * lh + lh * 0.02)) } else { None };
