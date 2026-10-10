@@ -30,7 +30,8 @@ pub struct Plane {
     /// Source quad in 1280x720 canvas pixels (TL,TR,BR,BL). The plane (`region` units, use the texture UV size) is mapped onto it by a homography, so birth is confined to the quad and starts in its pose.
     #[serde(default)] pub quad: Option<[[f64; 2]; 4]>, #[serde(default)] pub impact_uv: Option<[f64; 2]>,
     /// Image carried on the facets (UV = plane coordinates). `opaque` 0..1 mixes it over the glass shading.
-    #[serde(default)] pub texture: Option<String>, #[serde(default = "d_one")] pub opaque: f64,
+    /// Foreground occluder matte (white = in front of the plane, cells hidden there). A path; `%d`/`%04d` style is replaced by the frame index round(t*fps). Any ffmpeg-readable image, sized to the canvas.
+    #[serde(default)] pub occlusion: Option<String>, #[serde(default)] pub texture: Option<String>, #[serde(default = "d_one")] pub opaque: f64,
 }
 fn d_region() -> [f64; 2] { [1280.0, 720.0] } fn d_cells() -> u32 { 120 } fn d_pr() -> f64 { 140.0 } fn d_wave() -> f64 { 2400.0 } fn d_imp() -> f64 { 1100.0 } fn d_lift() -> f64 { 0.9 } fn d_grade() -> f64 { 3.0 } fn d_maxd() -> f64 { 0.25 }
 pub struct Cell { pub poly: Vec<(f64, f64)>, pub c: (f64, f64), pub area: f64, pub lc: (f64, f64), pub uv: Vec<(f64, f64)> }
@@ -69,7 +70,7 @@ pub fn plane_cells(p: &Plane, seed: u64, k: f64) -> Vec<Cell> {
 fn h(a: u64, i: u64, k: u64) -> f64 { let mut x = a.wrapping_mul(0x9E3779B97F4A7C15) ^ i.wrapping_mul(0xBF58476D1CE4E5B9) ^ k.wrapping_mul(0x94D049BB133111EB); x ^= x >> 30; x = x.wrapping_mul(0xBF58476D1CE4E5B9); x ^= x >> 27; x = x.wrapping_mul(0x94D049BB133111EB); x ^= x >> 31; (x >> 11) as f64 / (1u64 << 53) as f64 }
 fn sstep(x: f64) -> f64 { let t = x.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) }
 
-struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64, n3: [f64; 3], tex: Option<[f64; 6]> }
+struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64, n3: [f64; 3], tex: Option<[f64; 6]>, id: u64 }
 
 pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
     let (w, hh) = (f.w, f.h); let cv = CamView::new(w, hh, cam); let fl = cv.focal(); let k = w.min(hh) as f64 / 720.0;
@@ -78,6 +79,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
     let focus = if e.focus > 0.0 { e.focus } else { fl };
     let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));
     let tex = e.plane.as_ref().and_then(|p| p.texture.as_ref().and_then(|t| load_tex(t, p.region)));
+    let occ = e.plane.as_ref().and_then(|p| p.occlusion.as_ref().and_then(|o| load_occ(o, (t * fps).round() as i64, w, hh)));
     let traj = if e.physics && pcells.is_none() { Some((bake_cached(e, k, total, hh), 0)) } else { None };
     for sub in 0..nsub { let ts = (t + ((sub as f64 + 0.5) / nsub as f64 - 0.5) * shutter).max(0.0);
         let mut prims: Vec<Prim> = Vec::with_capacity(e.count as usize * 2);
@@ -112,10 +114,11 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             { let (fp, bp) = (shard[0].0, shard[1].0); for v in 0..nv { let w2 = (v + 1) % nv; let (ex, ey) = (loc[w2].0 - loc[v].0, loc[w2].1 - loc[v].1); let l = (ex * ex + ey * ey).sqrt().max(1e-9); let nl = [ey / l, -ex / l, 0.0];
                 let nw = [rm[0][0] * nl[0] + rm[0][1] * nl[1], rm[1][0] * nl[0] + rm[1][1] * nl[1], rm[2][0] * nl[0] + rm[2][1] * nl[1]]; let nd = nw[0] * lg[0] + nw[1] * lg[1] + nw[2] * lg[2]; let rf = [lg[0] - 2.0 * nd * nw[0], lg[1] - 2.0 * nd * nw[1], lg[2] - 2.0 * nd * nw[2]];
                 let sp2 = rf[2].max(0.0).powi(14) + 0.4 * (-rf[2]).max(0.0).powi(14); let mut q = [(0.0, 0.0); 6]; q[0] = fp[v]; q[1] = fp[w2]; q[2] = bp[w2]; q[3] = bp[v];
-                prims.push(Prim { depth: (shard[0].1 + shard[1].1) / 2.0 - 0.01, pts: q, n: 4, nz: nw[2].abs(), spec: sp2 + 0.12, rim_c: coc, blur: coc, alpha: al * 0.8, face: 2, u: r(15), tx: nw[0] * thick * 1.6, ty: nw[1] * thick * 1.6, n3: nw, tex: None }); } }
-            for (fi, (pts, dz, _, _, _)) in shard.into_iter().enumerate() { let tex_aff = match (pc, &tex) { (Some((_, c)), Some(_)) if nv >= 3 => uv_affine(&pts, &c.uv), _ => None }; prims.push(Prim { depth: dz, pts, n: nv, nz: nrm[2].abs(), spec, rim_c: fres, blur: coc, alpha: al, face: fi, u: r(15), tx: nrm[0] * thick, ty: nrm[1] * thick, n3: nrm, tex: tex_aff }); }
+                prims.push(Prim { depth: (shard[0].1 + shard[1].1) / 2.0 - 0.01, pts: q, n: 4, nz: nw[2].abs(), spec: sp2 + 0.12, rim_c: coc, blur: coc, alpha: al * 0.8, face: 2, u: r(15), tx: nw[0] * thick * 1.6, ty: nw[1] * thick * 1.6, n3: nw, tex: None, id: i }); } }
+            for (fi, (pts, dz, _, _, _)) in shard.into_iter().enumerate() { let tex_aff = match (pc, &tex) { (Some((_, c)), Some(_)) if nv >= 3 => uv_affine(&pts, &c.uv), _ => None }; prims.push(Prim { depth: dz, pts, n: nv, nz: nrm[2].abs(), spec, rim_c: fres, blur: coc, alpha: al, face: fi, u: r(15), tx: nrm[0] * thick, ty: nrm[1] * thick, n3: nrm, tex: tex_aff, id: i }); }
         }
         prims.sort_by(|a, b| b.depth.partial_cmp(&a.depth).unwrap());
+        PROBE.with(|pr| { let mut v = pr.borrow_mut(); v.clear(); for q in prims.iter().filter(|q| q.face == 0) { let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN); let mut c = (0.0, 0.0); for j in 0..q.n { x0 = x0.min(q.pts[j].0); x1 = x1.max(q.pts[j].0); y0 = y0.min(q.pts[j].1); y1 = y1.max(q.pts[j].1); c.0 += q.pts[j].0 / q.n as f64; c.1 += q.pts[j].1 / q.n as f64; } v.push(ProbeShard { id: q.id, cx: c.0, cy: c.1, bbox: [x0, y0, x1, y1], depth: q.depth, alpha: q.alpha }); } });
         for pr in &prims {
             let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN); for v in 0..pr.n { x0 = x0.min(pr.pts[v].0); x1 = x1.max(pr.pts[v].0); y0 = y0.min(pr.pts[v].1); y1 = y1.max(pr.pts[v].1); }
             let pad = pr.blur * 1.2 + 2.0; let (xa, xb, ya, yb) = (((x0 - pad).floor().max(0.0)) as usize, ((x1 + pad).ceil().min(w as f64 - 1.0)) as usize, ((y0 - pad).floor().max(0.0)) as usize, ((y1 + pad).ceil().min(hh as f64 - 1.0)) as usize); if x0 > x1 || xa > xb || ya > yb || (x1 - x0) > w as f64 * 3.0 { continue; }
@@ -123,7 +126,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             let mut area = 0.0; for v in 0..pr.n { let (a, b) = (pr.pts[v], pr.pts[(v + 1) % pr.n]); area += a.0 * b.1 - b.0 * a.1; } let sg = if area >= 0.0 { 1.0 } else { -1.0 }; if area.abs() < 0.5 { continue; }
             let (cxm, cym) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5); let gl = e.glass.clamp(0.0, 1.0); let sw = ((pr.blur * 0.9 + 0.7).max(0.7)) * (1.0 + 1.4 * gl); let size_px = (x1 - x0).max(y1 - y0).max(1.0);
             for y in ya..=yb { for x in xa..=xb { let (px, py) = (x as f64 + 0.5, y as f64 + 0.5); let mut d; let mut dmin = f64::MAX; let mut ins = false; for v in 0..pr.n { let (a, b) = (pr.pts[v], pr.pts[(v + 1) % pr.n]); let (ex, ey) = (b.0 - a.0, b.1 - a.1); let l2 = (ex * ex + ey * ey).max(1e-9); let tt = (((px - a.0) * ex + (py - a.1) * ey) / l2).clamp(0.0, 1.0); let dd = ((px - a.0 - tt * ex).hypot(py - a.1 - tt * ey)); if dd < dmin { dmin = dd; } if (a.1 > py) != (b.1 > py) && px < (b.0 - a.0) * (py - a.1) / (b.1 - a.1) + a.0 { ins = !ins; } } let _ = sg; d = if ins { dmin } else { -dmin };
-                let cov = sstep((d + sw) / (2.0 * sw)); if cov <= 0.002 { continue; }
+                let cov = sstep((d + sw) / (2.0 * sw)) * occ.as_ref().map(|m| 1.0 - m[y * w + x] as f64).unwrap_or(1.0); if cov <= 0.002 { continue; }
                 let inner = d.max(0.0); let rimw = (1.1 * k + pr.blur * 0.5) * (1.0 + 1.8 * gl); let rim = (-inner / rimw).exp(); let (rr, rg, rb) = if e.dispersion > 0.0 { let o = (e.dispersion.min(3.0) * 0.4 * (1.0 + pr.blur * 0.04)).min(1.6 * k); ((-(inner + o).max(0.0) / rimw).exp(), rim, (-(inner - o).max(0.0) / rimw).exp()) } else { (rim, rim, rim) };
                 let grad = 0.55 + 0.45 * (((px - cxm) / size_px + (py - cym) / size_px) * 0.9 + 0.5 + pr.u * 0.3).clamp(0.0, 1.0);
                 let face_a = (e.fresnel * 1.3 * pr.rim_c * (0.6 + 0.8 * grad) + 0.17 + 0.2 * (1.0 - pr.nz) + 0.1 * grad + 1.0 * pr.spec * if pr.face == 0 { 1.0 } else { 0.6 }) * if pr.face == 1 { 0.7 } else { 1.0 };
@@ -197,3 +200,21 @@ fn uv_affine(pts: &[(f64, f64); 6], uv: &[(f64, f64)]) -> Option<[f64; 6]> {
     let (a, b, c) = (pts[0], pts[1], pts[2]); let det = (b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1); if det.abs() < 1e-6 { return None; }
     let solve = |ua: f64, ub: f64, uc: f64| { let (p, q) = (ub - ua, uc - ua); let gx = (p * (c.1 - a.1) - q * (b.1 - a.1)) / det; let gy = (q * (b.0 - a.0) - p * (c.0 - a.0)) / det; [gx, gy, ua - gx * a.0 - gy * a.1] };
     let u = solve(uv[0].0, uv[1].0, uv[2].0); let v = solve(uv[0].1, uv[1].1, uv[2].1); Some([u[0], u[1], u[2], v[0], v[1], v[2]]) }
+
+thread_local! { static OCC: std::cell::RefCell<Option<(String, std::sync::Arc<Vec<f32>>)>> = std::cell::RefCell::new(None); }
+fn load_occ(pat: &str, frame: i64, w: usize, hh: usize) -> Option<std::sync::Arc<Vec<f32>>> {
+    let path = if let Some(i) = pat.find('%') { let rest = &pat[i + 1..]; let digs: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect(); let wid: usize = digs.parse().unwrap_or(0); if rest[digs.len()..].starts_with('d') { format!("{}{:0wid$}{}", &pat[..i], frame.max(0), &rest[digs.len() + 1..], wid = wid) } else { pat.to_string() } } else { pat.to_string() };
+    let key = format!("{}|{}|{}", path, w, hh); if let Some((k, m)) = OCC.with(|c| c.borrow().clone()) { if k == key { return Some(m); } }
+    // alpha if present, else luma; sized to the canvas
+    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", &path, "-vf", &format!("scale={}:{},format=rgba,alphaextract", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
+    let rgbmode = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", &path, "-vf", &format!("scale={}:{}", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
+    let a = if out.stdout.len() == w * hh { out.stdout } else { Vec::new() }; let l = if rgbmode.stdout.len() == w * hh { rgbmode.stdout } else { Vec::new() };
+    let src = if !a.is_empty() && a.iter().any(|&v| v < 250) { a } else { l }; if src.len() != w * hh { return None; }
+    let m = std::sync::Arc::new(src.iter().map(|&v| v as f32 / 255.0).collect::<Vec<f32>>()); OCC.with(|c| *c.borrow_mut() = Some((key, m.clone()))); Some(m)
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ProbeShard { pub id: u64, pub cx: f64, pub cy: f64, pub bbox: [f64; 4], pub depth: f64, pub alpha: f64 }
+thread_local! { static PROBE: std::cell::RefCell<Vec<ProbeShard>> = std::cell::RefCell::new(Vec::new()); }
+/// Per-shard screen-space centre, bounding box, depth and alpha of the last shard render (front face, last motion sub-sample). Pixels, canvas space.
+pub fn take_probe() -> Vec<ProbeShard> { PROBE.with(|p| std::mem::take(&mut *p.borrow_mut())) }
