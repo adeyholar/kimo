@@ -219,3 +219,14 @@ Scene3D additions (V1): shadows:true (1536 px shadow map per directional light, 
 - #5 detect_beats / analyze: 11.6 ms resolution, onsets stamped at window centre, strongest-wins min_gap, bpm from autocorrelation. Test on a 140 BPM synthetic kick: first six onsets within 1-2 ms of truth, bpm 139.9.
 - #6 add_counter hold default 0.
 - #7 add_audio_clip (audio-only, never draws) and a lookahead peak limiter on export (ceiling -1.5 dBFS; tested: +80% gain input exports at -1.5 dBFS peak). Gap: sample-peak limiter, not oversampled true-peak.
+
+## Motion program (queued, requested: all motion features of Premiere, After Effects, Resolve Studio, plus kino-exclusive)
+Status honest: nothing below is done unless marked. Existing: motion blur (shutter-angle, per layer), point/ring tracker, stabilizer, speed ramp, particles, physics, Scene3D.
+- [ ] 1. Track mattes (alpha/luma/inverted), precomps with own time, collapse transforms
+- [ ] 2. Expressions (wiggle, loopIn/Out, time, valueAtTime, linkage), bezier graph-editor handles, spatial motion paths with auto-orient, text animators
+- [ ] 3. Echo, posterize time, frame blending, optical-flow interpolation and slow-mo, optical-flow motion blur for footage, time displacement, rolling-shutter repair
+- [ ] 4. Motion blur for Scene3D geometry and 3D layers, per-effect blur
+- [ ] 5. Planar/homography tracker, mask tracking, occlusion re-acquire, 3D camera solve, face tracking, warp stabilizer parity, object removal
+- [ ] 6. Roto/segmentation (ML model), puppet/mesh warp, liquify, Resolve-style smart reframe, speed warp, optical-flow retime
+- [ ] 7. Kino-exclusive ideas: beat-driven motion (bind any property to audio::analyze beats), motion-by-prompt presets (AI writes the curve set), physics-driven layers (any 2D layer joins the rigid-body sim), motion "diff" tool (compare two clips' motion curves and match one to the other), auto motion-match to reference footage via tracker.
+- [ ] Infra: HUD timecode as one dynamic text source (currently 2 clips per frame, slow export)

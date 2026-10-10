@@ -49,6 +49,8 @@ pub fn add_detection_box(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let lum = 0.2126 * col[0] + 0.7152 * col[1] + 0.0722 * col[2]; let ink = if lum > 0.45 { [0.04, 0.05, 0.05] } else { [1.0; 3] };
     let mut tt = clip(ss, txt(&tag, font, fsz, ink, "center"), start + d0, dur - d0); set(&mut tt, "x", tx); set(&mut tt, "y", ty);
     key(&mut tt, "reveal", 0.05, 0.0, Ease::Linear); key(&mut tt, "reveal", 0.35, 1.0, Ease::Out); key(&mut tt, "opacity", dur - d0 - 0.15, 1.0, Ease::In); key(&mut tt, "opacity", dur - d0, 0.0, Ease::In); cl.push(tt);
+    if let Some(cap) = a.get("caption").and_then(|v| v.as_str()) { let cs = 19.0 * k; let mut ct = clip(ss, txt(cap, "Inter", cs, [1.0; 3], "left"), start + 0.3, dur - 0.3); set(&mut ct, "x", cx - pw / 2.0 + 12.0 * k + cap.chars().count() as f64 * cs * 0.28); set(&mut ct, "y", cy - ph / 2.0 + 26.0 * k);
+        key(&mut ct, "reveal", 0.0, 0.0, Ease::Linear); key(&mut ct, "reveal", 0.35, 1.0, Ease::Out); key(&mut ct, "opacity", dur - 0.45, 1.0, Ease::In); key(&mut ct, "opacity", dur - 0.3, 0.0, Ease::In); cl.push(ct); }
     let ids = push(ss, &tid, cl)?; Ok(json!({"clip_ids": ids}))
 }
 
@@ -85,5 +87,32 @@ pub fn add_prompt_box(ss: &mut Session, a: &Value) -> Result<Value, String> {
     // blinking caret: alternating on/off short clips after typing, plus a solid caret during typing is omitted (text engine shows reveal)
     let mut tcur = start + 0.3 + type_time; let end = start + dur - 0.3; let cx = -w / 2.0 + fsz * 1.2 + 0.0;
     let _ = cx; let mut on = true; while tcur < end - 0.01 { let d = 0.5f64.min(end - tcur); if on { let mut c = clip(ss, shape("rect", 2.5 * k, fsz * 1.1, [0.96, 0.95, 0.9], 0.0, [0.0; 3]), tcur, d); set(&mut c, "y", y); set(&mut c, "x", -w / 2.0 + fsz * 1.2 + text.chars().count() as f64 * fsz * 0.5 + 4.0 * k); cl.push(c); } tcur += d; on = !on; }
+    let ids = push(ss, &tid, cl)?; Ok(json!({"clip_ids": ids}))
+}
+
+/// Viewfinder / editor HUD frame: dark hatched backdrop, "+" registration grid, corner brackets, top labels, blinking REC dot,
+/// running timecode and "BPM / BAR" readout. Every part is a normal clip so it can be restyled afterwards.
+pub fn add_hud_frame(ss: &mut Session, a: &Value) -> Result<Value, String> {
+    let tid = a.get("track_id").and_then(|v| v.as_str()).ok_or("missing track_id")?.to_string();
+    let (start, dur) = (num(a, "start", 0.0), num(a, "duration", 3.0)); if dur <= 0.0 { return Err("duration must be > 0".into()); }
+    let (cw, ch) = (ss.project.width as f64, ss.project.height as f64); let fps = ss.project.fps; let k = ch.min(cw * 9.0 / 16.0) / 720.0 * (ch / ch.min(cw * 9.0 / 16.0)).min(1.0).max(1.0); let k = if cw >= ch { ch / 720.0 } else { cw / 1280.0 * 1.0 }.max(k * 0.0 + 0.1);
+    let label = a.get("label").and_then(|v| v.as_str()).unwrap_or("BOXES").to_string(); let bpm = num(a, "bpm", 125.0); let tc0 = num(a, "tc_start", 0.0);
+    let bg = a.get("background").and_then(|v| v.as_bool()).unwrap_or(true); let col = rgb(a, "color", [0.80, 0.82, 0.85]); let font = "SpaceMono-Bold"; let fs = 21.0 * k; let m = 40.0 * k; let br = 26.0 * k; let bt = 2.0 * k;
+    let mut cl = vec![];
+    if bg { cl.push(clip(ss, Source::Solid { color: rgb(a, "bg_color", [0.145, 0.15, 0.155]) }, start, dur)); }
+    // registration "+" grid: one monospaced text clip, columns every 7 chars
+    let cols = 15usize; let rows = 8usize; let mut lines = vec![]; for _ in 0..rows { lines.push(vec!["+"; cols].join("      ")); let mut g = String::new(); for _ in 0..2 { g.push_str(&" ".repeat((cols - 1) * 7 + 1)); g.push('\n'); } lines.push(g.trim_end().to_string()); }
+    let gtxt = lines.join("\n"); let gs = (cw * 0.0178).min(26.0 * k * 1.2); let mut g = clip(ss, txt(&gtxt, font, gs, [0.5, 0.52, 0.55], "center"), start, dur); set(&mut g, "opacity", 0.55); cl.push(g);
+    // corner brackets
+    for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] { for horiz in [true, false] { let (w, h) = if horiz { (br, bt) } else { (bt, br) };
+        let mut t = clip(ss, shape("rect", w, h, col, 0.0, col), start, dur); set(&mut t, "x", sx * (cw / 2.0 - m - if horiz { br / 2.0 } else { bt / 2.0 })); set(&mut t, "y", sy * (ch / 2.0 - m - if horiz { bt / 2.0 } else { br / 2.0 })); set(&mut t, "opacity", 0.85); cl.push(t); } }
+    let (lx, rx, ty, by) = (-(cw / 2.0 - m - br - 16.0 * k), cw / 2.0 - m - br - 16.0 * k, -(ch / 2.0 - m - 6.0 * k), ch / 2.0 - m - 6.0 * k); let w_of = |s: &str| s.chars().count() as f64 * fs * 0.6;
+    let mut put = |ss: &mut Session, s: &str, x: f64, y: f64, c: [f64; 3], o: f64| -> Clip { let mut t = clip(ss, txt(s, font, fs, c, "center"), start, dur); set(&mut t, "x", x); set(&mut t, "y", y); set(&mut t, "opacity", o); t };
+    cl.push(put(ss, &label, lx + w_of(&label) / 2.0, ty, col, 0.9)); cl.push(put(ss, "REC", rx - w_of("REC") / 2.0, ty, col, 0.9));
+    // blinking red dot (1 Hz)
+    let mut dot = clip(ss, shape("ellipse", 10.0 * k, 10.0 * k, [0.95, 0.2, 0.2], 0.0, [0.0; 3]), start, dur); set(&mut dot, "x", rx - w_of("REC") - 14.0 * k); set(&mut dot, "y", ty); let mut tt = 0.0; let mut on = true; while tt <= dur { key(&mut dot, "opacity", tt, if on { 1.0 } else { 0.0 }, Ease::Hold); tt += 0.5; on = !on; } cl.push(dot);
+    // running timecode and bpm/bar readout: single dynamic-text clips resolved at render time
+    let tc = format!("TC {{tc:{}}}", tc0); let bar = format!("{:.0} BPM  BAR {{bar:{}:{}}}", bpm, bpm, tc0);
+    cl.push(put(ss, &tc, lx + w_of("TC 00:00:00:00") / 2.0, by, col, 0.9)); cl.push(put(ss, &bar, rx - w_of("125 BPM  BAR 00.0.0") / 2.0, by, col, 0.9)); let _ = fps;
     let ids = push(ss, &tid, cl)?; Ok(json!({"clip_ids": ids}))
 }
