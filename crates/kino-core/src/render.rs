@@ -538,7 +538,11 @@ pub fn render_mask_png(p: &Project, clip_id: &str, mask_id: Option<&str>, t: f64
 /// Write a colour-wheel visualisation of the optical flow between a media clip's frame at `t` and the next one.
 pub fn render_flow_png(p: &Project, clip_id: &str, t: f64, path: &str, cache: &mut Cache) -> Result<f64, String> {
     prepare_at(p, cache, Some(t))?; let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == clip_id).ok_or("no such clip")?; let (w, h) = (p.width as usize, p.height as usize);
-    let fr = cache.frames_of(&c.id).ok_or("not a media clip")?; let idx = ((t - c.start) * p.fps) as usize; let (a, b) = (fr.get(idx).ok_or("no frame")?, fr.get(idx + 1).ok_or("no next frame")?);
+    let fr = cache.frames_of(&c.id).ok_or("not a media clip")?; let lt0 = t - c.start; let fidx = |lt: f64| -> usize { let d = c.display_time(lt.max(0.0)); if c.speed_curve.is_some() { (c.source_time(d) * p.fps) as usize } else { (d * p.fps) as usize } };
+    // the next *displayed* frame (follows reverse, freeze and speed curves like the renderer); at the end of the window step backwards instead of faking zero flow
+    let (i0, mut i1) = (fidx(lt0), fidx(lt0 + 1.0 / p.fps)); let mut swapped = false; if i1 == i0 { i1 = fidx(lt0 - 1.0 / p.fps); swapped = i1 != i0; }
+    if i1 == i0 { return Err("no motion between displayed frames here (freeze or window end)".into()); }
+    let (a, b) = if swapped { (fr.get(i1).ok_or("no frame")?, fr.get(i0).ok_or("no frame")?) } else { (fr.get(i0).ok_or("no frame")?, fr.get(i1).ok_or("no next frame")?) };
     let mk = |bb: &[u8]| { let mut f = Frame::new(w, h); for (i, v) in bb.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } f };
     let t0 = std::time::Instant::now(); let (u, v, fw, fh) = crate::flow::flow(&mk(a), &mk(b), 5); let secs = t0.elapsed().as_secs_f64();
     let mm = u.iter().zip(&v).map(|(a, b)| (a * a + b * b).sqrt()).fold(0.0f32, f32::max).max(1.0); let viz = crate::flow::flow_viz(&u, &v, fw, fh, mm * 0.8);
