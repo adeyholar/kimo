@@ -273,3 +273,25 @@ Stable fps phase is retained, but trimmed output timestamps must then reset to0 
 Legacy/8bit export now requests up to256decoded frames of lookahead, clipped by the existing per-media/cache memory budget and timeline end. Spot render keeps24framewindow; frame phase/PTSreset unchanged. This amortizes prefix decode after the correctness fix without retaining full unbounded clips. Four phase tests including spot/export window exact parity and five cache tests pass.
 
 Actual20s320x180500frameexport: fixed24framebaseline11.839s, bounded256lookahead3.810s (68%lesswalltime). All500decoded output frames are byte-identical, SHA256d17fcafa48e360c365c83198023c26ea5c8787badfa9414f806842e916fb73f4 for both exports. Earlier uncorrectedPTS prototype benchmark was rejected, not used as parity evidence. Larger lookahead may use more memory up to the unchanged cap; active-clip fallback still applies.
+
+## High-bit/reference lookahead reuse
+High-bit and optional reference video exports now use the same bounded256frame decode lookahead, while preserving their per-frame output transforms/processors. Regression compares spot/export windows across frame256 in legacy and native managed float modes. Actual10framePQFFV1RGB16 roundtrip matches the prior deliverable byte-for-byte (SHA2565ccc74399cd1e5afe71b42ec9cadf44af13ea2d85b18fdc705c7982b8c40a588). No new high-bit speedup claim from that short clip. Fourphase/13pipeline/7OCIOtests pass, real optional dependency enabled.
+
+## Direct render/decode time validation
+Direct Rust render and cache-preparation APIs reject NaN/infinite times and reversed ranges instead of silently casting them to frame indices or returning a plausible black frame. The finite whole-clip sentinel range remains supported. Two hostile and four phase tests pass. MCP numeric sanitizer already rejected nonfinite JSON numbers; this closes direct engine calls without altering valid sampling.
+
+## Direct managed-effect frame contract
+Managed conversion, linear grade, Bradford adaptation, luminance shoulder and gamut-ray APIs now share preflight for exact RGBA shape, finite RGB and alpha0..1. Signed and HDR RGB remain valid. Invalid frames fail before any channel writes, closing partial-chunk success and invalid-alpha passthrough in direct Rust calls. Existing valid pipeline/transform regressions still pass; legacy effects are not automatically changed.
+
+
+## Empty-frame audit compatibility
+Shared managed-effect preflight permits correctly empty zero-pixel frames, preserving the established output-audit empty-statistics contract. Malformed dimensions/data still fail. Full-suite regression caught this compatibility gap before completion; follow-up restores it rather than redefining the audit API.
+
+## Static input encoding contract enforcement
+Managed media input gamut/transfer now rejects keyframes or expression operations instead of silently reading only their base values. Integer16 lookup construction enforces the same static contract, and inspection flags unsupported animation. Existing static project defaults/clip overrides unchanged. This does not add time-varying camera transforms. Fourteen pipeline tests pass including animated input rejection.
+
+## Color setter contract checks
+MCP pipeline setter rejects unknown settings instead of silently ignoring typos; project JSON schema compatibility remains unchanged. Clip input override setter enforces its documented enabled-managed/media-only scope, so procedural clips cannot report a successful override that rendering ignores. Fourhelper+14pipeline tests pass, including no-mutation typo/domain rejection. High-bit tool description also now accurately names optional caller-declared static mastering support.
+
+## Stale wrapper cleanup
+`set_effect_encoding(clear=true)` works after the managed pipeline is disabled, so a stale wrapper can be removed without temporarily re-enabling color management. Adding/configuring a wrapper still requires enabled management. Five helper tests pass including disable-then-clear.

@@ -3,6 +3,7 @@
 use crate::effects::{ hsl2rgb, lum, p, rgb2hsl, Frame, Params};
 use std::sync::OnceLock;
 pub mod managed;
+pub(crate) mod frame;
 pub mod curves;
 pub mod lut;
 pub mod scopes;

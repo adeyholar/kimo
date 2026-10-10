@@ -70,7 +70,7 @@ fn compress_with(c:[f64;3],weights:[f64;3])->[f64;3] {
     c.map(|v|(y+(v-y)*s.clamp(0.,1.)).clamp(0.,1.))
 }
 pub fn catalog()->Vec<super::Entry>{vec![("color_managed","Explicit float gamut + transfer conversion with Bradford white adaptation. Gamut IDs 0 Rec709,1 Rec2020,2 P3D65,3 ACES AP1,4 AP0,5 ARRI WG3,6 Sony SGamut3,7 SGamut3Cine. Transfer IDs 0 linear,1 sRGB,2 gamma2.4,3 ACEScct,4 LogC3 EI800,5 SLog3,6 PQ,7 HLG scene,8 BT709. No ACES RRT/ODT. Tone_map is luminance Reinhard, not an ACES output transform.",&[("from_gamut",0.,"0..7"),("to_gamut",0.,"0..7"),("from_transfer",1.,"0..8"),("to_transfer",1.,"0..8"),("reference_white",100.,"PQ linear 1.0 in nits, 1..10000"),("exposure",0.,"stops -20..20"),("tone_map",0.,"0 none,1 luminance Reinhard"),("gamut_compress",0.,"0 preserve unbounded values,1 bound linear RGB")]) ]}
-pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String> {
+pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String> {super::frame::validate(f)?;
     let get=|k:&str,d:f64|->Result<f64,String>{let v=p(pr,k,d,t) as f64;if !v.is_finite(){return Err(format!("nonfinite {k}"))}Ok(v)};
     let id=|k:&str,max:usize|->Result<usize,String>{let v=get(k,if k.ends_with("transfer"){1.}else{0.})?;if v.fract()!=0.||v<0.||v>max as f64{return Err(format!("invalid {k}"))}Ok(v as usize)};
     let from=id("from_gamut",7)?;let to=id("to_gamut",7)?;let m=conversion(from,to);let weights=luma_weights(to);let a=id("from_transfer",8)?;let b=id("to_transfer",8)?;
