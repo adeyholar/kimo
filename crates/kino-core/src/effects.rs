@@ -32,6 +32,17 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
     ("chroma_key", "Remove a key color to alpha", &[("r",0.0,"key R"),("g",1.0,"key G"),("b",0.0,"key B"),("tolerance",0.35,"0..1"),("softness",0.1,"0..1")]),
     ("lut", "3D LUT (.cube) via strings.path", &[("intensity", 1.0, "0..1")]),
     ("hsl", "Hue/Sat/Lum, global + per color band (red,yellow,green,cyan,blue,magenta _hue/_sat/_lum)", &[("hue",0.0,"-1..1 (x60deg)"),("sat",0.0,"-1..1"),("lum",0.0,"-1..1"),("red_sat",0.0,"band"),("blue_hue",0.0,"band")]),
+    ("sharpen", "Unsharp mask", &[("amount", 0.8, "0..3"), ("radius", 2.0, "px")]),
+    ("pixelate", "Mosaic blocks", &[("size", 12.0, "px")]),
+    ("posterize", "Reduce color levels", &[("levels", 5.0, "2..32")]),
+    ("sepia", "Sepia tone", &[("amount", 1.0, "0..1")]),
+    ("color_isolate", "Black & white except one hue (keep gun/scope color)", &[("hue", 190.0, "degrees 0..360"), ("range", 40.0, "degrees"), ("softness", 25.0, "degrees"), ("bw_amount", 1.0, "0..1")]),
+    ("shake", "Camera shake / impact (translation jitter)", &[("amount", 8.0, "px"), ("speed", 24.0, "Hz")]),
+    ("mirror", "Mirror half of frame", &[("axis", 0.0, "0=horizontal(left->right), 1=vertical(top->bottom)")]),
+    ("scanlines", "CRT scanlines", &[("amount", 0.3, "0..1"), ("spacing", 3.0, "px")]),
+    ("wave", "Sine wave distortion", &[("amplitude", 10.0, "px"), ("wavelength", 80.0, "px"), ("speed", 3.0, "cycles/s")]),
+    ("light_leak", "Warm animated light leak", &[("amount", 0.6, "0..1"), ("speed", 0.5, "cycles/s")]),
+    ("zoom_blur", "Radial zoom blur", &[("amount", 0.06, "0..0.3")]),
     ("letterbox", "Cinematic bars", &[("ratio", 2.39, "target aspect")]),
 ];
 
@@ -114,6 +125,29 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
                     if w > 0.0 { dh += g(&format!("{n}_hue"))*w; ds += g(&format!("{n}_sat"))*w; dl += g(&format!("{n}_lum"))*w; } }
                 h = (h + dh*60.0).rem_euclid(360.0); s = (s*(1.0+ds)).clamp(0.0,1.0); l = (l + dl*0.5).clamp(0.0,1.0); hsl2rgb(h, s, l) });
         }
+        "sharpen" => { let a = p(params, "amount", 0.8, t); let r = p(params, "radius", 2.0, t) as usize; let mut b = Frame { w: f.w, h: f.h, d: f.d.clone() }; box_blur3(&mut b, r);
+            for i in 0..f.w*f.h { for j in 0..3 { f.d[i*4+j] += (f.d[i*4+j] - b.d[i*4+j]) * a; } } }
+        "pixelate" => { let s = (p(params, "size", 12.0, t) as usize).max(1); let src = f.d.clone();
+            for y in 0..f.h { for x in 0..f.w { let (sx, sy) = ((x / s * s + s / 2).min(f.w-1), (y / s * s + s / 2).min(f.h-1)); for j in 0..4 { f.d[(y*f.w+x)*4+j] = src[(sy*f.w+sx)*4+j]; } } } }
+        "posterize" => { let l = p(params, "levels", 5.0, t).max(2.0); px(f, |c| [(c[0].clamp(0.0,1.0)*l).floor()/(l-1.0), (c[1].clamp(0.0,1.0)*l).floor()/(l-1.0), (c[2].clamp(0.0,1.0)*l).floor()/(l-1.0)]); }
+        "sepia" => { let a = p(params, "amount", 1.0, t); px(f, |c| { let l = lum(c); let s = [l*1.07, l*0.74, l*0.43]; [c[0]+(s[0]-c[0])*a, c[1]+(s[1]-c[1])*a, c[2]+(s[2]-c[2])*a] }); }
+        "color_isolate" => { let (h0, rg, so, bw) = (p(params, "hue", 190.0, t), p(params, "range", 40.0, t), p(params, "softness", 25.0, t).max(1.0), p(params, "bw_amount", 1.0, t));
+            px(f, |c| { let (h, s, _) = rgb2hsl(c); let mut d = (h - h0).abs(); if d > 180.0 { d = 360.0 - d; } let keep = (1.0 - ((d - rg) / so).clamp(0.0, 1.0)) * (s * 2.0).min(1.0); let l = lum(c); let k = keep.max(1.0 - bw);
+                [l + (c[0]-l)*k, l + (c[1]-l)*k, l + (c[2]-l)*k] }); }
+        "shake" => { let a = p(params, "amount", 8.0, t); let sp = p(params, "speed", 24.0, t); let n = |k: f32| (((k * 12.9898).sin() * 43758.545).fract()) * 2.0 - 1.0; let step = (t as f32 * sp).floor();
+            let (dx, dy) = ((n(step) * a) as isize, (n(step + 7.0) * a) as isize); let src = f.d.clone(); let (w, h) = (f.w as isize, f.h as isize);
+            for y in 0..h { for x in 0..w { let (sx, sy) = ((x - dx).clamp(0, w-1), (y - dy).clamp(0, h-1)); for j in 0..4 { f.d[((y*w+x)*4) as usize+j] = src[((sy*w+sx)*4) as usize+j]; } } } }
+        "mirror" => { let v = p(params, "axis", 0.0, t) > 0.5; for y in 0..f.h { for x in 0..f.w { let (sx, sy) = if v { (x, if y >= f.h/2 { f.h-1-y } else { y }) } else { (if x >= f.w/2 { f.w-1-x } else { x }, y) };
+            for j in 0..4 { f.d[(y*f.w+x)*4+j] = f.d[(sy*f.w+sx)*4+j]; } } } }
+        "scanlines" => { let (a, s) = (p(params, "amount", 0.3, t), (p(params, "spacing", 3.0, t) as usize).max(2)); for y in 0..f.h { if y % s == 0 { for x in 0..f.w { for j in 0..3 { f.d[(y*f.w+x)*4+j] *= 1.0 - a; } } } } }
+        "wave" => { let (a, wl, sp) = (p(params, "amplitude", 10.0, t), p(params, "wavelength", 80.0, t), p(params, "speed", 3.0, t)); let src = f.d.clone();
+            for y in 0..f.h { let off = (a * ((y as f32 / wl + t as f32 * sp) * 6.2831853).sin()) as isize; for x in 0..f.w { let sx = (x as isize + off).clamp(0, f.w as isize - 1) as usize; for j in 0..4 { f.d[(y*f.w+x)*4+j] = src[(y*f.w+sx)*4+j]; } } } }
+        "light_leak" => { let (a, sp) = (p(params, "amount", 0.6, t), p(params, "speed", 0.5, t)); let ph = t as f32 * sp * 6.2831853; let (w, h) = (f.w as f32, f.h as f32);
+            for y in 0..f.h { for x in 0..f.w { let (u, v) = (x as f32 / w, y as f32 / h); let cx = 0.5 + 0.5 * ph.sin(); let d = ((u - cx).powi(2) * 2.0 + (v - 0.1).powi(2)).sqrt(); let k = (1.0 - d * 1.8).max(0.0).powi(2) * a * (0.7 + 0.3 * (ph * 2.0).sin());
+                let i = (y*f.w+x)*4; f.d[i] += k * 1.0; f.d[i+1] += k * 0.45; f.d[i+2] += k * 0.12; } } }
+        "zoom_blur" => { let a = p(params, "amount", 0.06, t); let src = f.d.clone(); let (w, h) = (f.w as f32, f.h as f32); let n = 8;
+            for y in 0..f.h { for x in 0..f.w { let mut acc = [0f32; 4]; for k in 0..n { let s = 1.0 - a * k as f32 / n as f32; let sx = ((x as f32 - w/2.0) * s + w/2.0).clamp(0.0, w-1.0) as usize; let sy = ((y as f32 - h/2.0) * s + h/2.0).clamp(0.0, h-1.0) as usize; for j in 0..4 { acc[j] += src[(sy*f.w+sx)*4+j]; } }
+                for j in 0..4 { f.d[(y*f.w+x)*4+j] = acc[j] / n as f32; } } } }
         other => return Err(format!("unknown effect '{other}'")),
     }
     Ok(())

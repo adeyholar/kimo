@@ -6,8 +6,8 @@ use crate::model::*;
 use crate::render;
 use serde_json::{json, Value};
 
-pub struct Session { pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project> }
-impl Session { pub fn new() -> Self { Session { project: Project::default(), undo: vec![], redo: vec![] } } }
+pub struct Session { pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache }
+impl Session { pub fn new() -> Self { Session { project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new() } } }
 
 pub struct Command {
     pub name: &'static str,
@@ -130,6 +130,27 @@ pub fn registry() -> Vec<Command> {
             let c = ss.project.find_clip_mut(&id).unwrap(); let (mut kx, mut ky) = (Prop::new(0.0), Prop::new(0.0)); let mut mx = 0f64;
             for (t, dx, dy) in &off { kx.set_key(*t, *dx, Ease::Linear); ky.set_key(*t, *dy, Ease::Linear); mx = mx.max(dx.abs()).max(dy.abs()); }
             c.props.insert("x".into(), kx); c.props.insert("y".into(), ky); c.props.get_mut("scale").unwrap().base = opt_num(a, "crop", 1.08); Ok(json!({"frames":off.len(),"max_correction_px":mx})) } },
+    Command { name: "list_transitions", description: "List available transition kinds.", mutates: false, schema: obj(vec![], &[]),
+        run: |_, _| Ok(json!(["crossfade","wipe_left","wipe_right","wipe_up","wipe_down","diagonal","blinds","checker","iris","slide_left","slide_right","slide_up","slide_down","zoom","spin","flash"])) },
+    Command { name: "import_srt", description: "Create caption text clips from an SRT file on a track. Style args apply to every caption. Each cue becomes a text clip at its time range.", mutates: true,
+        schema: obj(vec![("track_id", s("track")), ("path", s("SRT file path")), ("size", n("px, default 48")), ("color", json!({"type":"array","items":{"type":"number"}})), ("font", s("ttf path")), ("stroke_width", n("px")), ("y", n("vertical offset px, default 220 (lower third)"))], &["track_id","path"]),
+        run: |ss, a| { let txt = std::fs::read_to_string(str_arg(a, "path")?).map_err(|e| e.to_string())?; let tid = str_arg(a, "track_id")?.to_string(); let mut made = vec![];
+            for blk in txt.replace("\r", "").split("\n\n") { let ls: Vec<&str> = blk.lines().filter(|l| !l.trim().is_empty()).collect(); let ti = ls.iter().position(|l| l.contains("-->")); let Some(ti) = ti else { continue };
+                let pt = |s: &str| -> f64 { let s = s.trim().replace(',', "."); let p: Vec<f64> = s.split(':').filter_map(|x| x.parse().ok()).collect(); if p.len() == 3 { p[0]*3600.0 + p[1]*60.0 + p[2] } else { 0.0 } };
+                let mut it = ls[ti].split("-->"); let (st, en) = (pt(it.next().unwrap_or("")), pt(it.next().unwrap_or(""))); if en <= st { continue; }
+                let body = ls[ti + 1..].join("\\n"); let id = ss.project.gen_id("clip");
+                let src = Source::Text { text: body.replace("\\n", "\n"), font: a.get("font").and_then(|v| v.as_str()).unwrap_or("/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf").into(), size: opt_num(a, "size", 48.0), color: color(a, "color", [1.0; 3]), letter_spacing: 0.0, stroke_width: opt_num(a, "stroke_width", 2.0), stroke_color: [0.0; 3], shadow: 2.0, align: "center".into() };
+                let mut props = default_props(); props.get_mut("y").unwrap().base = opt_num(a, "y", 220.0);
+                let c = Clip { id: id.clone(), source: src, start: st, duration: en - st, in_point: 0.0, speed: 1.0, speed_curve: None, props, effects: vec![], blend: "normal".into(), mask: None, audio: Audio::default(), transition_in: None };
+                ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); made.push(id); }
+            Ok(json!({"captions":made.len(),"clip_ids":made})) } },
+    Command { name: "get_scopes", description: "Video scopes at a time: per-channel histogram (32 bins), luma stats, clipping %, average color, and a coarse luma waveform - for AI color grading feedback.", mutates: false,
+        schema: obj(vec![("time", n("seconds"))], &["time"]),
+        run: |ss, a| { let tt = num_arg(a, "time")?; render::prepare_at(&ss.project, &mut ss.cache, Some(tt))?; let f = render::render_frame(&ss.project, tt, &ss.cache)?;
+            let n = f.w * f.h; let mut hist = [[0u32; 32]; 3]; let (mut sum, mut lo, mut hi) = ([0f64; 3], 0u32, 0u32); let mut lsum = 0f64; let mut lsq = 0f64;
+            for i in 0..n { let mut l = 0f32; for j in 0..3 { let v = f.d[i*4+j].clamp(0.0, 1.0); hist[j][((v * 31.999) as usize).min(31)] += 1; sum[j] += v as f64; l += v * [0.2126, 0.7152, 0.0722][j]; } lsum += l as f64; lsq += (l * l) as f64; if l < 0.02 { lo += 1; } if l > 0.98 { hi += 1; } }
+            let mean = lsum / n as f64; let cols = 16; let mut wf = vec![]; for cx in 0..cols { let (mut mn, mut mx) = (1f32, 0f32); for y in (0..f.h).step_by(4) { for x in (cx * f.w / cols..(cx + 1) * f.w / cols).step_by(4) { let i = y * f.w + x; let l = 0.2126*f.d[i*4] + 0.7152*f.d[i*4+1] + 0.0722*f.d[i*4+2]; mn = mn.min(l); mx = mx.max(l); } } wf.push(json!([mn, mx])); }
+            Ok(json!({"avg_rgb":[sum[0]/n as f64, sum[1]/n as f64, sum[2]/n as f64],"luma_mean":mean,"luma_std":(lsq/n as f64 - mean*mean).max(0.0).sqrt(),"crushed_blacks_pct":lo as f64*100.0/n as f64,"clipped_whites_pct":hi as f64*100.0/n as f64,"histogram_r":hist[0],"histogram_g":hist[1],"histogram_b":hist[2],"luma_waveform_min_max_per_column":wf})) } },
     Command { name: "move_clip", description: "Move a clip to a new timeline start time.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("start", n("seconds"))], &["clip_id","start"]),
         run: |ss, a| { let st = num_arg(a, "start")?; clip(&mut ss.project, a)?.start = st; Ok(json!({"ok":true})) } },
@@ -179,8 +200,8 @@ pub fn registry() -> Vec<Command> {
     Command { name: "remove_effect", description: "Remove an effect from a clip.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("effect_id", s("effect"))], &["clip_id","effect_id"]),
         run: |ss, a| { let eid = str_arg(a, "effect_id")?.to_string(); let c = clip(&mut ss.project, a)?; let l = c.effects.len(); c.effects.retain(|x| x.id != eid); if c.effects.len() == l { Err("no such effect".into()) } else { Ok(json!({"ok":true})) } } },
-    Command { name: "add_transition", description: "Transition INTO a clip over its first `duration` seconds; overlap it with the previous clip on a lower/same-time layer. kinds: crossfade, wipe_left, wipe_up, iris, slide_left, slide_up, zoom.", mutates: true,
-        schema: obj(vec![("clip_id", s("incoming clip")), ("kind", json!({"type":"string","enum":["crossfade","wipe_left","wipe_up","iris","slide_left","slide_up","zoom"]})), ("duration", n("seconds"))], &["clip_id","kind","duration"]),
+    Command { name: "add_transition", description: "Transition INTO a clip over its first `duration` seconds; overlap it with the previous clip on a lower/same-time layer. kinds: crossfade, wipe_left/right/up/down, diagonal, blinds, checker, iris, slide_left/right/up/down, zoom, spin, flash.", mutates: true,
+        schema: obj(vec![("clip_id", s("incoming clip")), ("kind", json!({"type":"string","enum":["crossfade","wipe_left","wipe_up","wipe_right","wipe_down","diagonal","blinds","checker","iris","slide_left","slide_up","slide_right","slide_down","zoom","spin","flash"]})), ("duration", n("seconds"))], &["clip_id","kind","duration"]),
         run: |ss, a| { let k = str_arg(a, "kind")?.into(); let d = num_arg(a, "duration")?; clip(&mut ss.project, a)?.transition_in = Some(Transition { kind: k, duration: d }); Ok(json!({"ok":true})) } },
     Command { name: "set_blend", description: "Blend mode: normal, add, multiply, screen, overlay.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("mode", json!({"type":"string","enum":["normal","add","multiply","screen","overlay"]}))], &["clip_id","mode"]),
@@ -189,7 +210,7 @@ pub fn registry() -> Vec<Command> {
         schema: obj(vec![], &[]), run: |ss, _| serde_json::to_value(&ss.project).map_err(|e| e.to_string()) },
     Command { name: "render_frame", description: "Render the frame at a timeline time to a PNG file so you can look at it. Returns the path.", mutates: false,
         schema: obj(vec![("time", n("seconds")), ("path", s("output .png path"))], &["time","path"]),
-        run: |ss, a| { let p = str_arg(a, "path")?; render::render_png(&ss.project, num_arg(a, "time")?, p)?; Ok(json!({"path":p})) } },
+        run: |ss, a| { let p = str_arg(a, "path")?; render::render_png(&ss.project, num_arg(a, "time")?, p, &mut ss.cache)?; Ok(json!({"path":p})) } },
     Command { name: "export", description: "Render the whole timeline to an H.264 mp4.", mutates: false,
         schema: obj(vec![("path", s("output .mp4 path")), ("crf", n("quality 0..51, default 18"))], &["path"]),
         run: |ss, a| { let p = str_arg(a, "path")?; let d = render::export(&ss.project, p, opt_num(a, "crf", 18.0) as u32)?; Ok(json!({"path":p,"duration":d})) } },

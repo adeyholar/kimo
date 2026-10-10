@@ -6,8 +6,8 @@ use std::process::{Command, Stdio};
 
 /// Decoded frames for media clips, keyed by clip id. Frames are RGBA8 at project size, project fps,
 /// with speed already applied.
-pub struct Cache { frames: HashMap<String, Vec<Vec<u8>>> }
-impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new() } } pub fn frames_of(&self, id: &str) -> Option<&Vec<Vec<u8>>> { self.frames.get(id) } }
+pub struct Cache { frames: HashMap<String, (String, Vec<Vec<u8>>)>, pub size: (u32, u32, f64) }
+impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new(), size: (0, 0, 0.0) } } pub fn frames_of(&self, id: &str) -> Option<&Vec<Vec<u8>>> { self.frames.get(id).map(|x| &x.1) } }
 
 pub fn probe(path: &str) -> Result<(u32, u32, f64, f64), String> {
     let out = Command::new("ffprobe").args(["-v","error","-select_streams","v:0","-show_entries","stream=width,height,r_frame_rate,duration","-of","csv=p=0",path])
@@ -31,12 +31,18 @@ fn decode(p: &Project, c: &Clip, path: &str) -> Result<Vec<Vec<u8>>, String> {
     Ok(buf.chunks_exact(fs).map(|c| c.to_vec()).collect())
 }
 
-pub fn prepare(p: &Project, cache: &mut Cache) -> Result<(), String> {
-    for t in &p.tracks { for c in &t.clips {
+pub fn prepare(p: &Project, cache: &mut Cache) -> Result<(), String> { prepare_at(p, cache, None) }
+
+/// Decode media clips (only those active at `t` when given). Re-decodes when clip timing/speed/project size changed.
+pub fn prepare_at(p: &Project, cache: &mut Cache, t: Option<f64>) -> Result<(), String> {
+    if cache.size != (p.width, p.height, p.fps) { cache.frames.clear(); cache.size = (p.width, p.height, p.fps); }
+    for tr in &p.tracks { for c in &tr.clips {
         if let Source::Media { asset } = &c.source {
-            if cache.frames.contains_key(&c.id) { continue; }
+            if let Some(t) = t { if t < c.start || t >= c.start + c.duration { continue; } }
+            let sig = format!("{asset}|{}|{}|{}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()));
+            if cache.frames.get(&c.id).map(|x| x.0 == sig).unwrap_or(false) { continue; }
             let a = p.assets.get(asset).ok_or(format!("asset {asset} missing"))?;
-            cache.frames.insert(c.id.clone(), decode(p, c, &a.path)?);
+            let fr = decode(p, c, &a.path)?; cache.frames.insert(c.id.clone(), (sig, fr));
         }
     }}
     Ok(())
@@ -51,7 +57,7 @@ fn source_frame(p: &Project, c: &Clip, lt: f64, cache: &Cache) -> Frame {
         Source::Text { text, font, size, color, letter_spacing, stroke_width, stroke_color, shadow, align } => {
             let _ = crate::text::render_text(&mut f, text, font, *size, *color, *letter_spacing, *stroke_width, *stroke_color, *shadow, align, prop(c, "reveal", lt));
         }
-        Source::Media { .. } => if let Some(fr) = cache.frames.get(&c.id) {
+        Source::Media { .. } => if let Some(fr) = cache.frames_of(&c.id) {
             let idx = if c.speed_curve.is_some() { (c.source_time(lt) * p.fps) as usize } else { (lt * p.fps) as usize };
             let idx = idx.min(fr.len().saturating_sub(1));
             if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
@@ -117,6 +123,15 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
                 "wipe_left" => { let edge = k * w as f32; mask = Some(Box::new(move |x, _| if (x as f32) < edge { 1.0 } else { 0.0 })); }
                 "wipe_up" => { let edge = k * h as f32; mask = Some(Box::new(move |_, y| if (y as f32) < edge { 1.0 } else { 0.0 })); }
                 "iris" => { let r = k * (w as f32 * 0.8); let (cx, cy) = (w as f32/2.0, h as f32/2.0); mask = Some(Box::new(move |x, y| { let d = ((x as f32-cx).powi(2)+(y as f32-cy).powi(2)).sqrt(); ((r - d)/6.0 + 0.5).clamp(0.0, 1.0) })); }
+                "wipe_right" => { let edge = (1.0 - k) * w as f32; mask = Some(Box::new(move |x, _| if (x as f32) >= edge { 1.0 } else { 0.0 })); }
+                "wipe_down" => { let edge = (1.0 - k) * h as f32; mask = Some(Box::new(move |_, y| if (y as f32) >= edge { 1.0 } else { 0.0 })); }
+                "diagonal" => { let e = k * (w + h) as f32; mask = Some(Box::new(move |x, y| if (x + y) as f32 <= e { 1.0 } else { 0.0 })); }
+                "blinds" => { let hh = (h as f32 / 10.0).max(1.0); mask = Some(Box::new(move |_, y| if (y as f32 % hh) / hh < k { 1.0 } else { 0.0 })); }
+                "checker" => { let s = (w as f32 / 12.0).max(1.0); mask = Some(Box::new(move |x, y| { let c = ((x as f32 / s) as i32 + (y as f32 / s) as i32) % 2; let th = if c == 0 { k * 2.0 } else { k * 2.0 - 1.0 }; if th > 0.5 { 1.0 } else { 0.0 } })); }
+                "slide_right" => dx -= (1.0 - k as f64) * w as f64,
+                "slide_down" => dy -= (1.0 - k as f64) * h as f64,
+                "spin" => { op *= k; }
+                "flash" => { op = if k < 0.5 { 0.0 } else { op }; }
                 "slide_left" => dx += (1.0 - k as f64) * w as f64,
                 "slide_up" => dy += (1.0 - k as f64) * h as f64,
                 "zoom" => op *= k,
@@ -125,7 +140,8 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
         }}
         let mut sc = prop(c, "scale", lt);
         if let Some(tr_in) = &c.transition_in { if tr_in.kind == "zoom" && lt < tr_in.duration { sc *= 0.6 + 0.4 * (lt / tr_in.duration); } }
-        let f = transform(&f, sc, prop(c, "rotation", lt), dx, dy);
+        let mut rot_extra = 0.0; if let Some(tr_in) = &c.transition_in { if tr_in.kind == "spin" && lt < tr_in.duration { let k = lt / tr_in.duration; rot_extra = (1.0 - k) * 180.0; sc *= 0.5 + 0.5 * k; } }
+        let f = transform(&f, sc, prop(c, "rotation", lt) + rot_extra, dx, dy);
         blend(&mut out, &f, op, &c.blend, mask.as_deref());
     }}
     Ok(out)
@@ -133,9 +149,9 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
 
 pub fn to_rgba8(f: &Frame) -> Vec<u8> { f.d.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect() }
 
-pub fn render_png(p: &Project, t: f64, path: &str) -> Result<(), String> {
-    let mut cache = Cache::new(); prepare(p, &mut cache)?;
-    let f = render_frame(p, t, &cache)?;
+pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<(), String> {
+    prepare_at(p, cache, Some(t))?;
+    let f = render_frame(p, t, cache)?;
     let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", p.width, p.height),"-i","-","-frames:v","1",path])
         .stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
     ch.stdin.take().unwrap().write_all(&to_rgba8(&f)).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?;
