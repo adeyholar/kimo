@@ -324,6 +324,7 @@ fn build_seq(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f64) -> Op
         let mut upd = vec![0f32; pw * ph]; for y in 0..ph { for x in 0..pw { let mut mx = 0f32; for dy in -2i32..=2 { for dx in -2i32..=2 { let (xx, yy) = ((x as i32 + dx).clamp(0, pw as i32 - 1) as usize, (y as i32 + dy).clamp(0, ph as i32 - 1) as usize); mx = mx.max(occ[yy * pw + xx]); } } upd[y * pw + x] = mx; } }
         for k in 0..pw * ph { let a = (1.0 - 0.65f32.powf(sp.speed.clamp(0.01, 4.0) as f32)) * (1.0 - upd[k]); for j in 0..3 { model[k * 3 + j] += (rect[k * 3 + j] - model[k * 3 + j]) * a; } }
         mats.push(occ.iter().map(|&o| ((1.0 - o) * 255.0).round() as u8).collect()); }
+    if sp.temporal > 0 && mats.len() > 2 { let r = sp.temporal; let src = mats.clone(); let nn = src.len(); for i in 0..nn { let (a, b) = (i.saturating_sub(r), (i + r).min(nn - 1)); let mut win = vec![0u8; b - a + 1]; for k in 0..mats[i].len() { for (t, f) in (a..=b).enumerate() { win[t] = src[f][k]; } win.sort_unstable(); mats[i][k] = win[win.len() / 2]; } } }
     let _ = child.kill(); let _ = child.wait(); if mats.is_empty() { None } else { Some(MatteSeq { pw, ph, mats }) }
 }
 /// Image-space coverage matte (1 = surface visible) for the adaptive mode at timeline time `t`; None when it cannot be built.

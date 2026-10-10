@@ -6,7 +6,7 @@ sys.argv=['x',sys.argv[1]];exec(src)
 from PIL import Image,ImageDraw
 g=Image.new('RGBA',(640,440),(255,200,0,255));ImageDraw.Draw(g).rectangle([10,10,630,430],outline=(0,0,0,255),width=12);g.save('/tmp/pin_g.png')
 ga=C('import_media',path='/tmp/pin_g.png')['asset_id'];t1=C('add_track')['track_id'];gc=C('add_clip',track_id=t1,source_type='media',asset_id=ga,start=0,duration=N/30)['clip_id']
-q0=inner(0);r=C('track_planar',clip_id=cl,corners=[v for p in q0 for v in (p[0]/W,p[1]/H)],start=0,end=N-1,target_clip_id=gc,occluder_matte=True,occluder_chroma=float(os.environ.get('OC','0')),occluder_mode=os.environ.get('OM','anchor'),occluder_tolerance=float(os.environ.get('OT','1')),occluder_min_area=float(os.environ.get('MA','0')),**EXTRA);print({k:r[k] for k in ('frames','mean_conf')})
+q0=inner(0);r=C('track_planar',clip_id=cl,corners=[v for p in q0 for v in (p[0]/W,p[1]/H)],start=0,end=N-1,target_clip_id=gc,occluder_matte=True,occluder_chroma=float(os.environ.get('OC','0')),occluder_mode=os.environ.get('OM','anchor'),occluder_tolerance=float(os.environ.get('OT','1')),occluder_min_area=float(os.environ.get('MA','0')),occluder_temporal=float(os.environ.get('TM','0')),**EXTRA);print({k:r[k] for k in ('frames','mean_conf')})
 tiles=[]
 for i in (5,20,32,52):
     C('render_frame',time=i/30,path='/tmp/po_%d.png'%i);tiles.append(Image.open('/tmp/po_%d.png'%i).convert('RGB').resize((640,360)))
