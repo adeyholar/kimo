@@ -268,7 +268,7 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
 /// `transparent`: start from a clear canvas (used for precomps) instead of opaque black.
 pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) -> Result<Frame, String> {
     p.color_pipeline.validate()?;
-    for c in flat_clips(&p.tracks,0.) {for e in c.effects {if let Some(w)=e.strings.get("wrapper_working_gamut"){if !p.color_pipeline.enabled||w.parse::<usize>().ok()!=Some(p.color_pipeline.working_gamut){return Err("effect encoding wrapper no longer matches project working gamut; reconfigure or clear it".into())}}}}
+    for c in flat_clips(&p.tracks,0.) {for e in c.effects {if let Some(w)=e.strings.get("bound_linear_gamut"){let g=w.parse::<usize>().map_err(|_|"bad bound linear gamut")?;if !p.color_pipeline.enabled||g!=p.color_pipeline.working_gamut||e.params.get("gamut").map(|v|(v.base,v.keys.is_empty(),v.expr.is_empty()))!=Some((g as f64,true,true)){return Err("managed linear effect no longer matches working gamut; re-add it".into())}}if let Some(white)=e.strings.get("wrapper_reference_white"){if white.parse::<f64>().ok()!=Some(p.color_pipeline.reference_white){return Err("effect wrapper reference white changed; reconfigure wrapper".into())}}if let Some(w)=e.strings.get("wrapper_working_gamut"){if !p.color_pipeline.enabled||w.parse::<usize>().ok()!=Some(p.color_pipeline.working_gamut){return Err("effect encoding wrapper no longer matches project working gamut; reconfigure or clear it".into())}}}}
     let (w, h) = (p.width as usize, p.height as usize);
     let mut out = Frame::new(w, h);
     if !transparent { for i in 0..w*h { out.d[i*4+3] = 1.0; } } // opaque black canvas
