@@ -46,6 +46,9 @@ def w2(txt,cx,st,col,pop=False):
     if pop: C("add_effect",clip_id=c,kind="outer_glow",params={"radius":16,"amount":1.0,"r":1,"g":1,"b":1}); key(c,"scale",[(0,2.6 if txt=="SPOT" else 1.7),(0.2,1.0)],"linear",bez=[0.2,1.3,0.4,1])
     return c
 w2("FILL",335,10.6,cream); w2("UP",600,10.8,cream,True); w2("A",760,11.1,cream,True); w2("SPOT",1000,11.28,[1,0.36,0.1],True)
+# --- beat-locked shake, per-hit kick tables measured on the reference (phase correlation on the static top band, 125 BPM grid)
+for hits,prof in [([8.92],[[-10,-10],[-4,-6],[-1,-2]]),([9.16,10.88],[[-4,-4],[-1,-1]]),([9.88],[[-3,-25],[-8,-15],[-6,-6],[0,-4]]),([10.12],[[-3,-10],[-3,-6],[-1,-2]]),([11.32],[[-8,-11],[-6,-7],[-2,-2]])]:
+    C("add_camera_shake",track_id=trk(),start=0,duration=D,hits=[h-O for h in hits],profile=prof)
 a=time.time()
 if len(sys.argv)>1 and sys.argv[1]=="export": print(C("export",path="/tmp/db.mp4",crf=17), "render s", time.time()-a)
 else:
