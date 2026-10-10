@@ -193,3 +193,7 @@ User bar: every feature best in class. Tiers: **PRO** = matches or beats the pro
 
 ## 3D suite status
 Done: layer transforms, camera, shard-internal depth sort/DOF/motion blur. Todo: layer depth sorting, DOF and motion blur on 3D layers, materials, lights, shadows, nulls/parenting, extrusion, camera rigs (orbit, look-at).
+
+## Rigid-body physics (physics.rs, used by add_shard_burst physics:true) - V1
+Deterministic 240 Hz baked sim: mass from size, linear/angular velocity, gravity, linear and angular drag, floor plane with restitution + Coulomb friction (spin from contact), body-body impulse collisions (sphere proxies, spatial-hash broadphase). Scrub-safe via cached trajectory. Gaps: sphere proxies not true convex hulls (no resting stability on faces), no joints/constraints/soft bodies/fluids, no general-layer physics tool yet (only shard bursts), CPU.
+Shard shading: Schlick fresnel and depth falloff params. Gaps: no real background refraction (generator layer has no access to what is behind it), no caustics, no area lights.
