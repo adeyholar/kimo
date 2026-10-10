@@ -35,6 +35,10 @@ pub struct Mask {
     pub shape: String,
     pub props: BTreeMap<String, Prop>, // cx, cy, w, h, feather, rotation
     pub invert: bool,
+    /// Full mask stack (see masks.rs). The legacy single shape above applies first when shape != "stack".
+    #[serde(default)] pub layers: Vec<crate::masks::MaskLayer>,
+    /// Track matte: another clip's alpha/luma gates this clip.
+    #[serde(default)] pub matte: Option<crate::masks::Matte>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

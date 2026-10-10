@@ -210,8 +210,9 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
     let mut out = Frame::new(w, h);
     if !transparent { for i in 0..w*h { out.d[i*4+3] = 1.0; } } // opaque black canvas
     let seed = (t * p.fps).round() as u64;
+    let hidden: std::collections::HashSet<&str> = p.tracks.iter().flat_map(|tr| tr.clips.iter()).filter_map(|c| c.mask.as_ref().and_then(|m| m.matte.as_ref()).filter(|m| m.hide_source).map(|m| m.source.as_str())).collect();
     for tr in &p.tracks { for c in &tr.clips {
-        if t < c.start || t >= c.start + c.duration { continue; }
+        if t < c.start || t >= c.start + c.duration || (hidden.contains(c.id.as_str()) && MATTE_DEPTH.with(|d| d.get()) == 0) { continue; }
         crate::guard::check();
         let lt0 = if c.posterize_fps > 0.0 { (((t - c.start) * c.posterize_fps + 1e-6).floor() / c.posterize_fps).max(0.0) } else { t - c.start };
         let (ne, esp) = match &c.echo { Some(e) if !matches!(c.source, Source::Adjustment) => (e.count.min(64) as usize, e.spacing), _ => (0, 0.0) };
@@ -221,13 +222,13 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         if let Source::Adjustment = c.source {
             let mut adj = Frame { w, h, d: out.d.clone() };
             for e in &c.effects { effects::apply(&e.kind, &e.params, &e.strings, &mut adj, lt, seed)?; }
-            let op = prop(c, "opacity", lt) as f32; let mk: Option<Frame> = c.mask.as_ref().map(|m| { let mut mf = Frame::new(w, h); for i in 0..w*h { mf.d[i*4+3] = 1.0; } apply_mask(&mut mf, m, lt); mf });
+            let op = prop(c, "opacity", lt) as f32; let mk: Option<Frame> = c.mask.as_ref().map(|m| { let mut mf = Frame::new(w, h); for i in 0..w*h { mf.d[i*4] = out.d[i*4]; mf.d[i*4+1] = out.d[i*4+1]; mf.d[i*4+2] = out.d[i*4+2]; mf.d[i*4+3] = 1.0; } apply_mask(&mut mf, m, lt); { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs }; crate::masks::apply_stack(&mut mf, &m.layers, lt, &ctx); } mf });
             for i in 0..w*h { let k = op * mk.as_ref().map(|m| m.d[i*4+3]).unwrap_or(1.0); for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - k) + adj.d[i*4+j] * k; } }
             continue;
         }
         let tp=std::time::Instant::now(); let mut f = source_frame(p, c, lt, cache); prof("source", tp);
-        let tp=std::time::Instant::now(); apply_effects_local(&c.effects, &mut f, lt, seed)?; prof("effects", tp);
-        if let Some(m) = &c.mask { apply_mask(&mut f, m, lt); }
+        let tp=std::time::Instant::now(); apply_effects_masked(p, c, &mut f, lt, seed, t, cache)?; prof("effects", tp);
+        if let Some(m) = &c.mask { apply_mask(&mut f, m, lt); if !m.layers.is_empty() { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs }; crate::masks::apply_stack(&mut f, &m.layers, lt, &ctx); } }
         let mut op = prop(c, "opacity", lt) as f32;
         let mut c_blend = c.blend.as_str();
         if let (Some(e), true) = (&c.echo, ek > 0) { match e.mode.as_str() { "average" => {} m => { op *= e.decay.clamp(0.0, 1.0).powi(ek as i32) as f32; if m == "add" { c_blend = "add"; } else if m == "screen" { c_blend = "screen"; } } } }
@@ -256,6 +257,7 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
             if let Some((rx0, ry0, rx1, ry1)) = u { for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } } } acc }
             else { transform_bb(&f, bbf, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
         prof("transform", tp);
+        let mut f = f; if let Some(mt) = c.mask.as_ref().and_then(|m| m.matte.as_ref()) { if let Some(src) = render_clip_alone(p, &mt.source, t, cache) { let cov = crate::masks::matte_coverage(mt, &src); for i in 0..w * h { f.d[i * 4 + 3] *= cov[i]; } } }
         if let Some(cf) = tplan.as_ref().and_then(|pl| pl.compose.as_ref()) { out = cf(&out, &f); continue; }
         if let Source::ShardBurst(_) = &c.source { if let Some(d) = crate::shards::take_disp() { crate::shards::refract_canvas(&mut out, &d, &f); } }
         if let Some(acc) = eacc.as_mut() { let wgt = op / (ne + 1) as f32; for i in 0..w * h { let a = f.d[i * 4 + 3] * wgt; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += f.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; } } continue; }
@@ -310,7 +312,40 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     Ok(n as f64 / p.fps)
 }
 
+
+thread_local! { static MATTE_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0); }
+/// Render one clip alone (full transforms/effects) on a transparent canvas: matte sources and difference references.
+fn render_clip_alone(p: &Project, id: &str, t: f64, cache: &Cache) -> Option<Frame> {
+    if MATTE_DEPTH.with(|d| d.get()) >= 3 { return None; }
+    let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?.clone();
+    if t < c.start || t >= c.start + c.duration { return Some(Frame::new(p.width as usize, p.height as usize)); }
+    let mut c = c; if let Some(m) = c.mask.as_mut() { m.matte = None; }
+    let sub = Project { tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![c], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 };
+    MATTE_DEPTH.with(|d| d.set(d.get() + 1)); let r = render_frame_opts(&sub, t, cache, true).ok(); MATTE_DEPTH.with(|d| d.set(d.get() - 1)); r
+}
+
+/// Effects with a per-effect mask (strings.mask_layer = id of a layer in the clip's mask stack) only apply where that layer covers.
+fn apply_effects_masked(p: &Project, c: &Clip, f: &mut Frame, lt: f64, seed: u64, t: f64, cache: &Cache) -> Result<(), String> {
+    if !c.effects.iter().any(|e| e.strings.contains_key("mask_layer")) { return apply_effects_local(&c.effects, f, lt, seed); }
+    let mut i = 0;
+    while i < c.effects.len() {
+        let e = &c.effects[i];
+        if let Some(mid) = e.strings.get("mask_layer") {
+            let before = Frame { w: f.w, h: f.h, d: f.d.clone() };
+            apply_effects_local(std::slice::from_ref(e), f, lt, seed)?;
+            let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs };
+            if let Some(l) = c.mask.as_ref().and_then(|m| m.layers.iter().find(|l| &l.id == mid)) {
+                let cov = crate::masks::layer_coverage(l, &before, lt, &ctx);
+                for k in 0..f.w * f.h { let a = cov[k]; if a < 1.0 { for j in 0..4 { f.d[k * 4 + j] = before.d[k * 4 + j] * (1.0 - a) + f.d[k * 4 + j] * a; } } }
+            }
+            i += 1;
+        } else { let j = (i..c.effects.len()).find(|&j| c.effects[j].strings.contains_key("mask_layer")).unwrap_or(c.effects.len()); apply_effects_local(&c.effects[i..j], f, lt, seed)?; i = j; }
+    }
+    Ok(())
+}
+
 fn apply_mask(f: &mut Frame, m: &Mask, t: f64) {
+    if m.shape == "stack" { return; }
     let g = |k: &str, d: f64| m.props.get(k).map(|p| p.at(t)).unwrap_or(d) as f32;
     let (cx, cy, mw, mh, feather, rot) = (g("cx",0.5), g("cy",0.5), g("w",0.5), g("h",0.5), g("feather",0.02).max(0.0005), g("rotation",0.0).to_radians());
     let (w, h) = (f.w as f32, f.h as f32); let (s, c) = (rot.sin(), rot.cos());
@@ -399,3 +434,22 @@ fn apply_effects_local(effs: &[crate::model::Effect], f: &mut Frame, lt: f64, se
 thread_local! { static PROF: std::cell::RefCell<std::collections::BTreeMap<&'static str, f64>> = Default::default(); }
 fn prof(k: &'static str, t: std::time::Instant) { if std::env::var("KINO_PROF").is_ok() { PROF.with(|p| *p.borrow_mut().entry(k).or_insert(0.0) += t.elapsed().as_secs_f64()); } }
 pub fn prof_dump() { PROF.with(|p| { let mut p = p.borrow_mut(); if !p.is_empty() { eprintln!("PROF {:?}", *p); p.clear(); } }); }
+
+/// Inspect a mask: renders the clip's source (after effects, before its own mask) and shows the coverage of one layer or the whole stack.
+pub fn render_mask_png(p: &Project, clip_id: &str, mask_id: Option<&str>, t: f64, view: &str, path: &str, cache: &mut Cache) -> Result<(), String> {
+    prepare_at(p, cache, Some(t))?;
+    let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == clip_id).ok_or("no such clip")?; let lt = t - c.start; let seed = (t * p.fps).round() as u64;
+    let (w, h) = (p.width as usize, p.height as usize);
+    let mut f = source_frame(p, c, lt, cache); apply_effects_masked(p, c, &mut f, lt, seed, t, cache)?;
+    if let Some(m) = &c.mask { let mut tmp = Frame { w, h, d: f.d.clone() }; apply_mask(&mut tmp, m, lt); if m.shape != "stack" { for i in 0..w * h { f.d[i * 4 + 3] = tmp.d[i * 4 + 3]; } } }
+    let cache_ref: &Cache = cache; let refs = |id: &str| render_clip_alone(p, id, t, cache_ref); let ctx = crate::masks::Ctx { refs: &refs };
+    let layers = c.mask.as_ref().map(|m| m.layers.clone()).unwrap_or_default();
+    let cov: Vec<f32> = match mask_id { Some(id) => { let l = layers.iter().find(|l| l.id == id).ok_or("no such mask")?; crate::masks::layer_coverage(l, &f, lt, &ctx) } None => crate::masks::stack_coverage(&layers, &f, lt, &ctx).unwrap_or_else(|| vec![1.0; w * h]) };
+    let mut o = Frame::new(w, h);
+    for i in 0..w * h { let k = cov[i]; match view {
+        "overlay" => { let g = 0.35 + 0.0; for j in 0..3 { o.d[i * 4 + j] = f.d[i * 4 + j] * (1.0 - k * g) + if j == 0 { 1.0 } else { 0.0 } * k * g; } }
+        "cutout" => { for j in 0..3 { o.d[i * 4 + j] = f.d[i * 4 + j] * k; } }
+        _ => { for j in 0..3 { o.d[i * 4 + j] = k; } } } o.d[i * 4 + 3] = 1.0; }
+    let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", p.width, p.height),"-i","-","-frames:v","1",path]).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+    ch.stdin.take().unwrap().write_all(&to_rgba8(&o)).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(())
+}
