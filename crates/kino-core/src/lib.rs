@@ -8,3 +8,4 @@ pub mod render;
 pub mod effects;
 pub mod text;
 pub mod audio;
+pub mod tracking;

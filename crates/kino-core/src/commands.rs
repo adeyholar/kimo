@@ -114,6 +114,22 @@ pub fn registry() -> Vec<Command> {
             let c = clip(&mut ss.project, a)?; if ks.is_empty() { c.speed_curve = None; return Ok(json!({"cleared":true})); }
             let mut p = Prop::new(ks[0].1); for (t, v) in &ks { if !(0.0..=100.0).contains(v) { return Err("speed must be 0..100".into()); } p.set_key(*t, *v, e); } c.speed_curve = Some(p);
             Ok(json!({"source_seconds": c.source_time(c.duration)})) } },
+    Command { name: "track_point", description: "Motion-track a point on a media clip and attach a target clip (e.g. text) to it so it sticks to the surface. point is normalized (0..1) at clip start. Writes per-frame x/y keyframes on target_clip_id (offset keeps its current x,y as a displacement from the tracked point).", mutates: true,
+        schema: obj(vec![("clip_id", s("media clip to track")), ("target_clip_id", s("clip to attach")), ("x", n("0..1 point x at start")), ("y", n("0..1 point y at start")), ("patch", n("patch size px, default 48")), ("search", n("search radius px per frame, default 16")), ("step", n("keyframe every N frames, default 1"))], &["clip_id","target_clip_id","x","y"]),
+        run: |ss, a| { let tid = str_arg(a, "target_clip_id")?.to_string(); let (nx, ny) = (num_arg(a, "x")?, num_arg(a, "y")?);
+            let tr = crate::tracking::track_point(&ss.project, str_arg(a, "clip_id")?, nx, ny, opt_num(a, "patch", 48.0) as i32, opt_num(a, "search", 16.0) as i32)?;
+            let (w, h) = (ss.project.width as f64, ss.project.height as f64); let step = opt_num(a, "step", 1.0).max(1.0) as usize;
+            let src = ss.project.find_clip(str_arg(a, "clip_id")?).unwrap().start; let t0 = ss.project.find_clip(&tid).ok_or("no target clip")?.start;
+            let tc = ss.project.find_clip_mut(&tid).ok_or("no target clip")?; let (bx, by) = (tc.props["x"].base, tc.props["y"].base);
+            let (mut kx, mut ky) = (Prop::new(bx), Prop::new(by)); let n = tr.len();
+            for (i, (t, x, y)) in tr.iter().enumerate() { if i % step != 0 && i != n - 1 { continue; } let lt = t + src - t0; kx.set_key(lt, bx + x - nx * w, Ease::Linear); ky.set_key(lt, by + y - ny * h, Ease::Linear); }
+            tc.props.insert("x".into(), kx); tc.props.insert("y".into(), ky); Ok(json!({"frames":n,"end_px":[tr[n-1].1, tr[n-1].2]})) } },
+    Command { name: "stabilize", description: "Stabilize shaky footage: estimates camera motion and writes counter x/y keyframes plus a scale to hide edges. smooth = half-window in frames (bigger = smoother).", mutates: true,
+        schema: obj(vec![("clip_id", s("media clip")), ("smooth", n("frames, default 15")), ("crop", n("scale to hide borders, default 1.08"))], &["clip_id"]),
+        run: |ss, a| { let id = str_arg(a, "clip_id")?.to_string(); let off = crate::tracking::stabilize(&ss.project, &id, opt_num(a, "smooth", 15.0) as usize)?;
+            let c = ss.project.find_clip_mut(&id).unwrap(); let (mut kx, mut ky) = (Prop::new(0.0), Prop::new(0.0)); let mut mx = 0f64;
+            for (t, dx, dy) in &off { kx.set_key(*t, *dx, Ease::Linear); ky.set_key(*t, *dy, Ease::Linear); mx = mx.max(dx.abs()).max(dy.abs()); }
+            c.props.insert("x".into(), kx); c.props.insert("y".into(), ky); c.props.get_mut("scale").unwrap().base = opt_num(a, "crop", 1.08); Ok(json!({"frames":off.len(),"max_correction_px":mx})) } },
     Command { name: "move_clip", description: "Move a clip to a new timeline start time.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("start", n("seconds"))], &["clip_id","start"]),
         run: |ss, a| { let st = num_arg(a, "start")?; clip(&mut ss.project, a)?.start = st; Ok(json!({"ok":true})) } },

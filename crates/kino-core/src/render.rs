@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 /// Decoded frames for media clips, keyed by clip id. Frames are RGBA8 at project size, project fps,
 /// with speed already applied.
 pub struct Cache { frames: HashMap<String, Vec<Vec<u8>>> }
-impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new() } } }
+impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new() } } pub fn frames_of(&self, id: &str) -> Option<&Vec<Vec<u8>>> { self.frames.get(id) } }
 
 pub fn probe(path: &str) -> Result<(u32, u32, f64, f64), String> {
     let out = Command::new("ffprobe").args(["-v","error","-select_streams","v:0","-show_entries","stream=width,height,r_frame_rate,duration","-of","csv=p=0",path])
