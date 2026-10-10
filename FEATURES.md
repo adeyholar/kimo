@@ -182,6 +182,7 @@ User bar: every feature best in class. Tiers: **PRO** = matches or beats the pro
 | Audio mixer | V1 | no EQ bands, no loudness normalize, no ducking |
 
 - [x] HUD tools: add_detection_box, add_counter, add_prompt_box (V1)
+- [x] shatter transition (V1: Voronoi cell reveal with glowing cracks; no flying shards, no radial crack pattern yet)
 
 ## Tests
 `python3 tests/tool_fuzz.py` calls every MCP tool with empty, null, wrong-type, negative, huge and real-id arguments (about 2400 calls) and fails on crash, hang or malformed reply. export/render tools are skipped (slow).

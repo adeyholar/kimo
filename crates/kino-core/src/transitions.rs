@@ -3,7 +3,7 @@
 use crate::effects::Frame;
 use crate::model::Transition;
 
-pub const KINDS: &[&str] = &["crossfade", "wipe", "wipe_left", "wipe_right", "wipe_up", "wipe_down", "diagonal", "blinds", "checker", "iris", "clock", "split_h", "split_v", "noise_dissolve", "slide_left", "slide_right", "slide_up", "slide_down", "zoom", "zoom_blur", "spin", "flash", "dip_black", "dip_white", "dip_color", "light_leak", "glitch", "whip_left", "whip_right"];
+pub const KINDS: &[&str] = &["crossfade", "wipe", "wipe_left", "wipe_right", "wipe_up", "wipe_down", "diagonal", "blinds", "checker", "iris", "clock", "split_h", "split_v", "noise_dissolve", "slide_left", "slide_right", "slide_up", "slide_down", "zoom", "zoom_blur", "spin", "flash", "dip_black", "dip_white", "dip_color", "light_leak", "glitch", "whip_left", "whip_right", "shatter"];
 pub const EASES: &[&str] = &["linear", "in", "out", "in_out", "in_cubic", "out_cubic", "in_out_cubic", "in_out_expo", "out_back", "out_bounce"];
 
 pub fn ease(name: &str, t: f64) -> f64 {
@@ -20,6 +20,12 @@ fn hash(x: i32, y: i32, s: u32) -> f32 { let mut h = (x as u32).wrapping_mul(374
 fn vnoise(x: f32, y: f32, s: u32) -> f32 { let (xi, yi) = (x.floor(), y.floor()); let (fx, fy) = (sstep(x - xi), sstep(y - yi)); let (xi, yi) = (xi as i32, yi as i32);
     let a = hash(xi, yi, s) * (1.0 - fx) + hash(xi + 1, yi, s) * fx; let b = hash(xi, yi + 1, s) * (1.0 - fx) + hash(xi + 1, yi + 1, s) * fx; a * (1.0 - fy) + b * fy }
 
+
+fn voro(x: f32, y: f32, cs: f32, seed: u32) -> (f32, f32, f32, f32, f32) { // (cell hash, d1, d2, cx, cy)
+    let (gx, gy) = ((x / cs).floor() as i32, (y / cs).floor() as i32); let (mut d1, mut d2, mut best, mut bc) = (1e9f32, 1e9f32, (0, 0), (0.0, 0.0));
+    for j in -1..=1 { for i in -1..=1 { let (cx, cy) = (gx + i, gy + j); let px = (cx as f32 + 0.15 + 0.7 * hash(cx, cy, seed)) * cs; let py = (cy as f32 + 0.15 + 0.7 * hash(cx, cy, seed ^ 0x9e37)) * cs; let d = ((x - px).powi(2) + (y - py).powi(2)).sqrt();
+        if d < d1 { d2 = d1; d1 = d; best = (cx, cy); bc = (px, py); } else if d < d2 { d2 = d; } } }
+    (hash(best.0, best.1, seed ^ 0x51ed), d1, d2, bc.0, bc.1) }
 pub type Mask = Box<dyn Fn(usize, usize) -> f32>;
 pub struct Plan { pub op: f32, pub mask: Option<Mask>, pub dx: f64, pub dy: f64, pub scale: f64, pub rot: f64,
     pub dip: Option<([f32; 3], f32)>, pub post: Option<Box<dyn Fn(&mut Frame)>>, pub overlay: Option<Box<dyn Fn(&mut Frame)>> }
@@ -61,6 +67,15 @@ pub fn plan(tr: &Transition, lt: f64, w: usize, h: usize) -> Plan {
             p.mask = Some(Box::new(move |_, y| { let b = (y as f32 / bh) as i32; if hash(b, step as i32, seed) < k * 1.4 - 0.1 { 1.0 } else { 0.0 } }));
             p.post = Some(Box::new(move |f| { let (w, h) = (f.w, f.h); let src = f.d.clone(); for y in 0..h { let b = (y as f32 / bh) as i32; let off = ((hash(b, step as i32 + 5, seed) - 0.5) * 2.0 * sev * w as f32 * 0.25) as i32; let rs = (sev * 14.0) as i32;
                 for x in 0..w { let o = (y * w + x) * 4; for (j, d) in [(0usize, -rs), (1, 0), (2, rs)] { let sx = (x as i32 + off + d).rem_euclid(w as i32) as usize; f.d[o + j] = src[(y * w + sx) * 4 + j]; } } } })); }
+        "shatter" => { // incoming frame revealed through Voronoi shards, shockwave from an impact point; cracks glow ahead of the wave
+            let cs = (wf / tr.count.clamp(3.0, 40.0) as f32).max(8.0); let (ix, iy) = (wf * (0.3 + 0.4 * hash(5, 6, seed)), hf * (0.3 + 0.4 * hash(7, 8, seed))); let maxd = (wf * wf + hf * hf).sqrt();
+            let lag = move |cx: f32, cy: f32, hs: f32| -> f32 { (((cx - ix).powi(2) + (cy - iy).powi(2)).sqrt() / maxd) * 0.55 + hs * 0.2 };
+            p.mask = Some(Box::new(move |x, y| { let (hs, _d1, _d2, cx, cy) = voro(x as f32, y as f32, cs, seed); sstep((k - 0.18 - lag(cx, cy, hs)) / 0.12) }));
+            let it = tr.intensity as f32;
+            p.overlay = Some(Box::new(move |f| { for y in 0..f.h { for x in 0..f.w { let (hs, d1, d2, cx, cy) = voro(x as f32, y as f32, cs, seed); let edge = d2 - d1; let lg = lag(cx, cy, hs);
+                let crack = (1.0 - edge / (1.0 + cs * 0.018)).clamp(0.0, 1.0).powi(2); let born = sstep((k - 0.02 - lg * 0.9) / 0.06); let gone = 1.0 - sstep((k - 0.3 - lg) / 0.2);
+                let glow = (1.0 - edge / (cs * 0.12)).clamp(0.0, 1.0).powi(2) * 0.25; let a = (crack + glow) * born * gone * it; if a <= 0.0 { continue; } let i = (y * f.w + x) * 4; f.d[i] += a * 1.0; f.d[i + 1] += a * 0.97; f.d[i + 2] += a * 0.92; } } }));
+            let kk = k as f64; p.scale = 1.0 + 0.04 * (1.0 - kk); }
         "whip_left" | "whip_right" => { let s = if tr.kind == "whip_left" { 1.0 } else { -1.0 }; p.dx = s * (1.0 - k as f64) * w as f64; let vel = ((1.0 - k) * 4.0 * k).max(0.0).min(1.0) * wf * 0.35 * tr.intensity as f32; p.post = Some(Box::new(move |f| dir_blur(f, vel, 0.0, 16))); p.op = 1.0;
             let v2 = vel; p.overlay = Some(Box::new(move |f| dir_blur(f, v2 * 0.6, 0.0, 12))); }
         _ => p.op = k,
