@@ -71,7 +71,15 @@ pub fn align(pyr: &[Img], t: &Tmpl, q0: &Quad, iters: &[usize], prior: Option<&Q
             let mut mtx = [[0f64; 9]; 8]; for p in 0..8 { for qn in 0..8 { mtx[p][qn] = a[p][qn]; } mtx[p][8] = b[p]; }
             let mut sing = false; for c in 0..8 { let mut mx = c; for r in c + 1..8 { if mtx[r][c].abs() > mtx[mx][c].abs() { mx = r; } } mtx.swap(c, mx); let d = mtx[c][c]; if d.abs() < 1e-12 { sing = true; break; } for k in c..9 { mtx[c][k] /= d; } for r in 0..8 { if r != c { let f = mtx[r][c]; for k in c..9 { mtx[r][k] -= f * mtx[c][k]; } } } }
             if sing { break; }
-            let mut mx = 0f64; for p in 0..8 { let d = mtx[p][8].clamp(-3.0, 3.0); ql[p / 2][p % 2] += d; mx = mx.max(d.abs()); }
+            let mut dl = [[0f64; 2]; 4]; for p in 0..8 { dl[p / 2][p % 2] = mtx[p][8].clamp(-3.0, 3.0); }
+            // occlusion-aware shape constraint: when much of the template is outvoted (an occluder covers it), only the rigid-plus-scale part of the update is trusted,
+            // so the quad cannot shrink or shear into the visible strip. beta 0 = free homography (fully visible), 1 = similarity only.
+            let beta = { let x = ((0.9 - inl * vis.min(1.0).sqrt()) / 0.35).clamp(0.0, 1.0); x * x * (3.0 - 2.0 * x) };
+            if beta > 0.0 { let cen = |q: &Quad| [(q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4.0, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4.0]; let c0 = cen(&ql); let mut tgt = ql; for k in 0..4 { tgt[k][0] += dl[k][0]; tgt[k][1] += dl[k][1]; } let c1 = cen(&tgt);
+                let (mut sa, mut sb, mut sn) = (0.0, 0.0, 0.0); for k in 0..4 { let (px, py) = (ql[k][0] - c0[0], ql[k][1] - c0[1]); let (qx, qy) = (tgt[k][0] - c1[0], tgt[k][1] - c1[1]); sa += px * qx + py * qy; sb += px * qy - py * qx; sn += px * px + py * py; }
+                let (ca, cb) = (sa / sn.max(1e-9), sb / sn.max(1e-9)); // best similarity: [ca -cb; cb ca] about the centroid
+                for k in 0..4 { let (px, py) = (ql[k][0] - c0[0], ql[k][1] - c0[1]); let sim = [c1[0] + ca * px - cb * py - ql[k][0], c1[1] + cb * px + ca * py - ql[k][1]]; for a in 0..2 { dl[k][a] = beta * sim[a] + (1.0 - beta) * dl[k][a]; } } }
+            let mut mx = 0f64; for k in 0..4 { for a in 0..2 { ql[k][a] += dl[k][a]; mx = mx.max(dl[k][a].abs()); } }
             if mx < 0.005 && it > 0 { break; } lam *= 0.7;
         }
         q = quad_scale(&ql, (1u32 << l) as f64);
