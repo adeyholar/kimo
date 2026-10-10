@@ -388,3 +388,6 @@ Obsolete local synchronous encoder wrappers were removed after migration to the 
 
 ### Encoder diagnostics and size regressions
 A process emitting more than8192stderr bytes then failing retains only the final8192bytes and the final error marker. A wrong-sized frame fails before queueing; a later correctly-sized frame succeeds on the same writer. Both regressions pass, with twenty-five library tests running under the optional OCIO gate.
+
+### Staged high-bit audio mux with bounded wait
+High-bit audio mux uses an exclusively created, unique temporary directory and writes its final mux candidate there, keeping the target separate until success. A frame-derived deadline capped by export timeout bounds ffmpeg exit wait with100ms cancellation checks and an8192byte stderr tail. On failure/unwind the completed video-only output is restored before deleting temporary output/WAV. If restore fails, recoverable video/WAV stay in the temporary directory and the error identifies it. No-audio exports skip this path unchanged. Actual20s final FFV1/MKV decoded video and PCM are byte-identical to the previous final audio-muxed output;182fullsuite tests passed with optionalOCIOenabled. Tests cover failed mux, stalled process, restore failure, unwind and temp uniqueness. WAV writing/audio mix, legacy export and image writers remain separate synchronous IO gaps.

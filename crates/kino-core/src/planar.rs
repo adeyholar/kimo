@@ -19,6 +19,8 @@ pub fn solve_h(s: &Quad, d: &Quad) -> Option<[f64; 8]> {
         for k in c..9 { a[c][k] /= dv; } for r in 0..8 { if r != c { let f = a[r][c]; for k in c..9 { a[r][k] -= f * a[c][k]; } } } }
     let mut h = [0f64; 8]; for i in 0..8 { h[i] = a[i][8]; } Some(h)
 }
+/// Map a quad's corners through the homography taking `from` to `to` (context propagation).
+pub fn propagate_quad(from: &Quad, to: &Quad, target: &Quad) -> Option<Quad> { let h = solve_h(from, to)?; let mut o = *target; for i in 0..4 { let (x, y) = ap(&h, target[i][0], target[i][1]); o[i] = [x, y]; } Some(o) }
 #[inline] fn ap(h: &[f64; 8], x: f64, y: f64) -> (f64, f64) { let w = h[6] * x + h[7] * y + 1.0; ((h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w) }
 const UNIT: Quad = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
 
