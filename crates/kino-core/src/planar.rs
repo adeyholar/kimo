@@ -281,3 +281,13 @@ mod pose_tests { use super::*;
         let hist: Vec<Quad> = (0..5).map(|i| mk(i as f64)).collect(); let pr = pose_predict(&hist, w, h).expect("pred"); let tr = mk(5.0);
         let e = (0..4).map(|k| (pr[k][0] - tr[k][0]).hypot(pr[k][1] - tr[k][1])).fold(0.0, f64::max); eprintln!("pose pred max err px {e}"); assert!(e < 3.0, "err {e}"); }
 }
+
+/// Global (whole-frame) motion of a media clip relative to its first frame: per frame [dx px, dy px, scale, rotation deg], from tracking an inset full-frame quad.
+pub fn global_motion(p: &Project, clip_id: &str, f0: usize, f1: usize) -> Result<Vec<[f64; 4]>, String> {
+    let (w, h) = (p.width as f64, p.height as f64); let (mx, my) = (w * 0.12, h * 0.12); let q0: Quad = [[mx, my], [w - mx, my], [w - mx, h - my], [mx, h - my]];
+    let t = track(p, clip_id, q0, f0, f1, 4)?; let cen = |q: &Quad| ((q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4.0, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4.0);
+    let area = |q: &Quad| 0.5 * ((q[0][0] * q[1][1] - q[1][0] * q[0][1]) + (q[1][0] * q[2][1] - q[2][0] * q[1][1]) + (q[2][0] * q[3][1] - q[3][0] * q[2][1]) + (q[3][0] * q[0][1] - q[0][0] * q[3][1])).abs();
+    let ang = |q: &Quad| ((q[1][1] - q[0][1]) + (q[2][1] - q[3][1])).atan2((q[1][0] - q[0][0]) + (q[2][0] - q[3][0]));
+    let (c0, a0, g0) = (cen(&q0), area(&q0), ang(&q0));
+    Ok(t.quads.iter().map(|q| { let c = cen(q); [c.0 - c0.0, c.1 - c0.1, (area(q) / a0.max(1.0)).sqrt(), (ang(q) - g0).to_degrees()] }).collect())
+}
