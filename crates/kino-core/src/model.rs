@@ -65,6 +65,9 @@ pub struct Clip {
     /// Motion blur shutter angle in degrees (0 = off, 180 = film standard).
     #[serde(default)]
     pub motion_blur: f64,
+    /// Rich text styling and per-character animators (text clips only).
+    #[serde(default)]
+    pub text_fx: Option<TextFx>,
     /// Transition INTO this clip from the previous clip on the track.
     pub transition_in: Option<Transition>,
 }
@@ -143,3 +146,21 @@ pub fn default_props() -> BTreeMap<String, Prop> {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Marker { pub id: String, pub time: f64, pub duration: f64, pub name: String, pub color: String }
+
+/// Rich text style + After Effects-style per-unit animators for text clips.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TextFx {
+    pub box_width: f64, pub line_spacing: f64, pub kerning: bool,
+    pub bg: Option<[f64; 4]>, pub bg_pad: f64, pub bg_radius: f64,
+    pub shadow_blur: f64, pub shadow_opacity: f64, pub shadow_color: [f64; 3], pub shadow_angle: f64,
+    pub gradient: Option<([f64; 3], [f64; 3])>, pub glow: f64, pub glow_color: [f64; 3],
+    pub animators: Vec<TextAnimator>,
+}
+impl Default for TextFx { fn default() -> Self { TextFx { box_width: 0.0, line_spacing: 1.15, kerning: true, bg: None, bg_pad: 24.0, bg_radius: 12.0, shadow_blur: 0.0, shadow_opacity: 0.6, shadow_color: [0.0; 3], shadow_angle: 45.0, gradient: None, glow: 0.0, glow_color: [1.0, 1.0, 1.0], animators: vec![] } } }
+/// Range selector + properties applied to each unit (char/word/line) by selector amount. All values keyframable.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TextAnimator {
+    pub id: String, pub unit: String, pub shape: String,
+    pub start: Prop, pub end: Prop, pub offset: Prop, pub smoothness: Prop,
+    pub x: Prop, pub y: Prop, pub scale: Prop, pub rotation: Prop, pub opacity: Prop, pub tracking: Prop, pub blur: Prop,
+}

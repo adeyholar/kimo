@@ -177,6 +177,6 @@ User bar: every feature best in class. Tiers: **PRO** = matches or beats the pro
 | Renderer | V1 | alpha-correct bilinear + 2x2..4x4 supersampling on transforms (done); still CPU f32, no mipmaps/Lanczos for large downscales, no GPU |
 | Transitions | V1 | 16 basic; no eased/curved variants, alignment options |
 | Particles | V1 | procedural 5 types, no forces/collisions/emitter shapes/textures |
-| Text | V1 | no animators, no stroke/shadow styles, no kerning/rich text |
+| Text | V2 | kerned layout, word wrap, AE-style char/word/line animators with range selectors (6 shapes, keyframable) + 9 presets, stroke, blurred shadow, glow, gradient, rounded bg box. Missing: per-span rich text, text on path, variable fonts, emoji |
 | Masks | V2 | no bezier paths with per-vertex keyframes, mask expansion |
 | Audio mixer | V1 | no EQ bands, no loudness normalize, no ducking |

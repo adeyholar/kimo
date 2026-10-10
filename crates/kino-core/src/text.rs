@@ -1,4 +1,7 @@
-use crate::effects::Frame;
+//! Text engine: kerned layout with word wrap, per-unit (char/word/line) animators with range selectors (AE-style),
+//! stroke, blurred shadow, glow, gradient fill and rounded background box.
+use crate::effects::{box_blur3, Frame};
+use crate::model::{TextAnimator, TextFx};
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -12,41 +15,98 @@ fn font(path: &str) -> Result<std::sync::Arc<FontVec>, String> {
     g.insert(path.into(), f.clone()); Ok(f)
 }
 
-/// Coverage mask (w*h) of `text` laid out on the canvas, centered, with `reveal` 0..1 of characters visible.
-fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f32, align: &str, reveal: f64, ox: f32, oy: f32) -> Vec<f32> {
-    let sf = f.as_scaled(PxScale::from(size)); let mut cov = vec![0f32; cw * ch];
-    let lines: Vec<&str> = text.split('\n').collect(); let lh = sf.height() * 1.15;
-    let total_chars: usize = lines.iter().map(|l| l.chars().count()).sum(); let mut shown = (reveal.clamp(0.0, 1.0) * total_chars as f64).ceil() as usize;
-    let block_h = lh * lines.len() as f32; let mut y0 = (ch as f32 - block_h) / 2.0 + sf.ascent() + oy;
-    for line in lines {
-        let w: f32 = line.chars().map(|c| sf.h_advance(f.glyph_id(c)) + spacing).sum::<f32>() - spacing;
-        let mut x = match align { "left" => cw as f32 * 0.08, "right" => cw as f32 * 0.92 - w, _ => (cw as f32 - w) / 2.0 } + ox;
-        for c in line.chars() {
-            let gid = f.glyph_id(c); let adv = sf.h_advance(gid) + spacing;
-            if shown == 0 { break; } shown -= 1;
-            let g = gid.with_scale_and_position(PxScale::from(size), ab_glyph::point(x, y0));
-            if let Some(o) = f.outline_glyph(g) { let b = o.px_bounds();
-                o.draw(|px, py, v| { let X = b.min.x as i32 + px as i32; let Y = b.min.y as i32 + py as i32; if X >= 0 && Y >= 0 && (X as usize) < cw && (Y as usize) < ch { let i = Y as usize * cw + X as usize; cov[i] = cov[i].max(v); } }); }
-            x += adv;
-        }
-        y0 += lh;
-    }
-    cov
+struct G { c: char, x: f32, y: f32, line: usize, word: usize, adv: f32 }
+
+/// Layout glyphs: kerning, tracking, word wrap to box_width (0 = no wrap), alignment, line spacing. Positions are relative to the text block origin (top-left of block, y = baseline).
+fn layout(text: &str, f: &FontVec, size: f32, spacing: f32, align: &str, cw: f32, fx: Option<&TextFx>) -> (Vec<G>, f32, f32, usize, usize, usize) {
+    let sf = f.as_scaled(PxScale::from(size)); let lh = sf.height() * fx.map(|x| x.line_spacing as f32).unwrap_or(1.15); let kern = fx.map(|x| x.kerning).unwrap_or(true);
+    let maxw = fx.map(|x| x.box_width as f32).filter(|w| *w > 0.0);
+    // split into logical lines, then wrap words
+    let mut lines: Vec<Vec<(char, f32)>> = vec![]; // per line: (char, advance incl. kerning+spacing)
+    for para in text.split('\n') { let mut cur: Vec<(char, f32)> = vec![]; let mut curw = 0f32; let mut prev: Option<char> = None; let words: Vec<&str> = para.split(' ').collect();
+        for (wi, wd) in words.iter().enumerate() { let mut chars: Vec<(char, f32)> = vec![]; let mut p2 = prev; if wi > 0 { chars.push((' ', sf.h_advance(f.glyph_id(' ')) + spacing)); p2 = Some(' '); }
+            for ch in wd.chars() { let gid = f.glyph_id(ch); let k = if kern { p2.map(|p| sf.kern(f.glyph_id(p), gid)).unwrap_or(0.0) } else { 0.0 }; chars.push((ch, sf.h_advance(gid) + spacing + k)); p2 = Some(ch); }
+            let ww: f32 = chars.iter().map(|c| c.1).sum();
+            if let Some(mw) = maxw { if curw + ww > mw && !cur.is_empty() { if chars.first().map(|c| c.0 == ' ').unwrap_or(false) { chars.remove(0); } let ww2: f32 = chars.iter().map(|c| c.1).sum(); lines.push(std::mem::take(&mut cur)); cur = chars; curw = ww2; prev = p2; continue; } }
+            curw += ww; cur.extend(chars); prev = p2; }
+        lines.push(cur); }
+    let widths: Vec<f32> = lines.iter().map(|l| l.iter().map(|c| c.1).sum::<f32>() - spacing.max(0.0).min(l.last().map(|c| c.1).unwrap_or(0.0))).collect();
+    let bw = maxw.unwrap_or_else(|| widths.iter().cloned().fold(0.0, f32::max)); let mut out = vec![]; let mut word = 0usize; let mut nchars = 0usize;
+    for (li, l) in lines.iter().enumerate() { let mut x = match align { "left" => 0.0, "right" => bw - widths[li], _ => (bw - widths[li]) / 2.0 }; let y = sf.ascent() + li as f32 * lh;
+        for (c, adv) in l { if *c == ' ' { word += 1; x += adv; nchars += 1; continue; } out.push(G { c: *c, x, y, line: li, word, adv: *adv }); x += adv; nchars += 1; } word += 1; }
+    let nwords = out.iter().map(|g| g.word).max().map(|m| m + 1).unwrap_or(0); let _ = (cw, nchars);
+    (out, bw, lh * lines.len() as f32, lines.len(), nwords, 0)
 }
 
-pub fn render_text(fr: &mut Frame, text: &str, fontpath: &str, size: f64, col: [f64; 3], spacing: f64, stroke_w: f64, stroke_col: [f64; 3], shadow: f64, align: &str, reveal: f64) -> Result<(), String> {
-    let f = font(fontpath)?; let (w, h) = (fr.w, fr.h);
-    let main = coverage(w, h, text, &f, size as f32, spacing as f32, align, reveal, 0.0, 0.0);
-    let over = |fr: &mut Frame, cov: &[f32], c: [f32; 3]| { for i in 0..w*h { let a = cov[i]; if a <= 0.0 { continue; } let o = &mut fr.d[i*4..i*4+4]; let na = a + o[3]*(1.0-a);
-        for j in 0..3 { o[j] = (c[j]*a + o[j]*o[3]*(1.0-a)) / na.max(1e-6); } o[3] = na; } };
-    if shadow > 0.0 { let sc = coverage(w, h, text, &f, size as f32, spacing as f32, align, reveal, shadow as f32, shadow as f32); let sc: Vec<f32> = sc.iter().map(|v| v * 0.6).collect(); over(fr, &sc, [0.0; 3]); }
-    if stroke_w > 0.0 {
-        let mut st = main.clone(); let r = stroke_w.ceil() as i32;
-        for dy in -r..=r { for dx in -r..=r { if ((dx*dx + dy*dy) as f64).sqrt() > stroke_w { continue; }
-            for y in 0..h as i32 { let sy = y - dy; if sy < 0 || sy >= h as i32 { continue; } for x in 0..w as i32 { let sx = x - dx; if sx < 0 || sx >= w as i32 { continue; }
-                let v = main[sy as usize * w + sx as usize]; let i = y as usize * w + x as usize; if v > st[i] { st[i] = v; } } } } }
-        over(fr, &st, [stroke_col[0] as f32, stroke_col[1] as f32, stroke_col[2] as f32]);
+fn shape_amount(shape: &str, x: f32, smooth: f32) -> f32 {
+    // x: position of the unit relative to the selector window (0..1 inside)
+    let soft = |v: f32| { if smooth <= 1e-4 { if (0.0..=1.0).contains(&v) { 1.0 } else { 0.0 } } else { let a = (v / smooth).clamp(0.0, 1.0); let b = ((1.0 - v) / smooth).clamp(0.0, 1.0); let (a, b) = (a * a * (3.0 - 2.0 * a), b * b * (3.0 - 2.0 * b)); a.min(b) } };
+    match shape { "ramp_up" => if (0.0..=1.0).contains(&x) { x } else { 0.0 }, "ramp_down" => if (0.0..=1.0).contains(&x) { 1.0 - x } else { 0.0 },
+        "triangle" => if (0.0..=1.0).contains(&x) { 1.0 - (2.0 * x - 1.0).abs() } else { 0.0 }, "round" => if (0.0..=1.0).contains(&x) { (1.0 - (2.0 * x - 1.0).powi(2)).max(0.0).sqrt() } else { 0.0 },
+        "smooth" => if (0.0..=1.0).contains(&x) { let t = 1.0 - (2.0 * x - 1.0).abs(); t * t * (3.0 - 2.0 * t) } else { 0.0 }, _ => soft(x) }
+}
+struct U { x: f32, y: f32, sc: f32, rot: f32, op: f32, track: f32, blur: f32 }
+fn animate(an: &[TextAnimator], t: f64, g: &G, nchar: usize, nword: usize, nline: usize, ci: usize) -> U {
+    let mut u = U { x: 0.0, y: 0.0, sc: 1.0, rot: 0.0, op: 1.0, track: 0.0, blur: 0.0 };
+    for a in an { let (n, i) = match a.unit.as_str() { "word" => (nword, g.word), "line" => (nline, g.line), _ => (nchar, ci) }; let pos = (i as f32 + 0.5) / n.max(1) as f32;
+        let (s0, e0, off, sm) = (a.start.at(t) as f32, a.end.at(t) as f32, a.offset.at(t) as f32, a.smoothness.at(t) as f32); let (s, e) = (s0 + off, e0 + off); let x = (pos - s) / (e - s).max(1e-4); let k = shape_amount(&a.shape, x, sm);
+        if k <= 0.0 { continue; } u.x += a.x.at(t) as f32 * k; u.y += a.y.at(t) as f32 * k; u.sc *= 1.0 + (a.scale.at(t) as f32 - 1.0) * k; u.rot += a.rotation.at(t) as f32 * k; u.op *= 1.0 + (a.opacity.at(t) as f32 - 1.0) * k; u.track += a.tracking.at(t) as f32 * k; u.blur += a.blur.at(t) as f32 * k; }
+    u
+}
+
+/// Rasterize all glyphs (with animator transforms) into a coverage mask; also returns the block bounds in canvas px.
+fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f32, align: &str, reveal: f64, fx: Option<&TextFx>, t: f64) -> (Vec<f32>, [f32; 4]) {
+    let (glyphs, bw, bh, nl, nwords, _) = layout(text, f, size, spacing, align, cw as f32, fx); let sf = f.as_scaled(PxScale::from(size));
+    let nchar = glyphs.len(); let shown = (reveal.clamp(0.0, 1.0) * nchar as f64).ceil() as usize;
+    let (bx, by) = ((cw as f32 - bw) / 2.0, (ch as f32 - bh) / 2.0); let mut cov = vec![0f32; cw * ch];
+    let empty: Vec<TextAnimator> = vec![]; let an = fx.map(|x| &x.animators).unwrap_or(&empty);
+    let mut track_acc = vec![0f32; nl + 1]; let mut last_line = usize::MAX;
+    for (ci, g) in glyphs.iter().enumerate() { if ci >= shown { break; }
+        let u = animate(an, t, g, nchar, nwords, nl, ci); if g.line != last_line { track_acc[g.line] = 0.0; last_line = g.line; } let tr = track_acc[g.line]; track_acc[g.line] += u.track;
+        if u.op <= 0.0 { continue; }
+        let gid = f.glyph_id(g.c); let (ox, oy) = (bx + g.x + tr, by + g.y);
+        let glyph = gid.with_scale_and_position(PxScale::from(size), ab_glyph::point(0.0, 0.0));
+        let Some(o) = f.outline_glyph(glyph) else { continue }; let b = o.px_bounds(); let (gw, gh) = ((b.max.x - b.min.x).ceil() as usize + 2, (b.max.y - b.min.y).ceil() as usize + 2); let mut loc = vec![0f32; gw * gh];
+        o.draw(|px, py, v| { let i = (py as usize) * gw + px as usize; if i < loc.len() { loc[i] = v; } });
+        // glyph center in canvas space (pivot for scale/rotation)
+        let (gcx, gcy) = (ox + g.adv * 0.5, oy - sf.ascent() * 0.35 + 0.0); let (s_, c_) = (u.rot.to_radians().sin(), u.rot.to_radians().cos()); let inv = 1.0 / u.sc.max(1e-3);
+        let (lx0, ly0) = (b.min.x, b.min.y); // local glyph bitmap origin relative to glyph origin
+        let rad = (gw.max(gh) as f32 * u.sc.max(1.0) * 1.5 + u.x.abs() * 0.0 + 4.0) as i32;
+        let (px0, py0) = ((gcx + u.x) as i32 - rad - (g.adv as i32), (gcy + u.y) as i32 - rad - size as i32);
+        let (px1, py1) = ((gcx + u.x) as i32 + rad + g.adv as i32, (gcy + u.y) as i32 + rad + size as i32);
+        for Y in py0.max(0)..py1.min(ch as i32) { for X in px0.max(0)..px1.min(cw as i32) {
+            let (dx, dy) = (X as f32 + 0.5 - gcx - u.x, Y as f32 + 0.5 - gcy - u.y); let (rx, ry) = ((c_ * dx + s_ * dy) * inv, (-s_ * dx + c_ * dy) * inv); // back to unscaled glyph space around pivot
+            let (sx, sy) = (rx + gcx - ox - lx0 - 0.5, ry + gcy - oy - ly0 - 0.5); if sx < 0.0 || sy < 0.0 || sx > (gw - 1) as f32 || sy > (gh - 1) as f32 { continue; }
+            let (x0, y0) = (sx.floor() as usize, sy.floor() as usize); let (x1, y1) = ((x0 + 1).min(gw - 1), (y0 + 1).min(gh - 1)); let (fx_, fy_) = (sx - x0 as f32, sy - y0 as f32);
+            let v = (loc[y0 * gw + x0] * (1.0 - fx_) + loc[y0 * gw + x1] * fx_) * (1.0 - fy_) + (loc[y1 * gw + x0] * (1.0 - fx_) + loc[y1 * gw + x1] * fx_) * fy_;
+            let i = Y as usize * cw + X as usize; let a = (v * u.op).min(1.0); if a > cov[i] { cov[i] = a; } } }
+        if u.blur > 0.5 { /* per-unit blur approximated below by whole-mask softening when any unit blurs */ }
     }
-    over(fr, &main, [col[0] as f32, col[1] as f32, col[2] as f32]);
+    let blur_any = glyphs.iter().enumerate().take(shown).map(|(ci, g)| animate(an, t, g, nchar, nwords, nl, ci).blur).fold(0.0, f32::max);
+    if blur_any > 0.5 { let mut m = Frame { w: cw, h: ch, d: vec![1.0; cw * ch * 4] }; for i in 0..cw * ch { m.d[i * 4] = cov[i]; } box_blur3(&mut m, (blur_any * 2.0) as usize); for i in 0..cw * ch { cov[i] = cov[i] * (1.0 - (blur_any / (blur_any + 4.0))) + m.d[i * 4] * (blur_any / (blur_any + 4.0)); } }
+    (cov, [bx, by, bw, bh])
+}
+
+pub fn render_text(fr: &mut Frame, text: &str, fontpath: &str, size: f64, col: [f64; 3], spacing: f64, stroke_w: f64, stroke_col: [f64; 3], shadow: f64, align: &str, reveal: f64, fx: Option<&TextFx>, t: f64) -> Result<(), String> {
+    let f = font(fontpath)?; let (w, h) = (fr.w, fr.h);
+    let (main, bounds) = coverage(w, h, text, &f, size as f32, spacing as f32, align, reveal, fx, t);
+    let over = |fr: &mut Frame, cov: &[f32], c: &dyn Fn(usize) -> [f32; 3], k: f32| { for i in 0..w * h { let a = cov[i] * k; if a <= 0.0 { continue; } let cc = c(i); let o = &mut fr.d[i * 4..i * 4 + 4]; let na = a + o[3] * (1.0 - a); for j in 0..3 { o[j] = (cc[j] * a + o[j] * o[3] * (1.0 - a)) / na.max(1e-6); } o[3] = na; } };
+    // background box
+    if let Some(fx) = fx { if let Some(bg) = fx.bg { let (x0, y0, x1, y1) = (bounds[0] - fx.bg_pad as f32, bounds[1] - fx.bg_pad as f32, bounds[0] + bounds[2] + fx.bg_pad as f32, bounds[1] + bounds[3] + fx.bg_pad as f32); let r = (fx.bg_radius as f32).min((x1 - x0) / 2.0).min((y1 - y0) / 2.0); let (cx, cy, hw, hh) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0) / 2.0, (y1 - y0) / 2.0);
+        let mut m = vec![0f32; w * h]; for y in (y0.floor().max(0.0) as usize)..(y1.ceil() as usize + 1).min(h) { for x in (x0.floor().max(0.0) as usize)..(x1.ceil() as usize + 1).min(w) { let (px, py) = ((x as f32 + 0.5 - cx).abs() - hw + r, (y as f32 + 0.5 - cy).abs() - hh + r); let d = (px.max(0.0).powi(2) + py.max(0.0).powi(2)).sqrt() + px.max(py).min(0.0) - r; m[y * w + x] = (0.5 - d).clamp(0.0, 1.0); } }
+        over(fr, &m, &|_| [bg[0] as f32, bg[1] as f32, bg[2] as f32], bg[3] as f32); } }
+    // shadow (offset + optional blur)
+    let (sh_off, sh_blur, sh_op, sh_col, sh_ang) = match fx { Some(x) => (shadow, x.shadow_blur, x.shadow_opacity, x.shadow_color, x.shadow_angle.to_radians()), None => (shadow, 0.0, 0.6, [0.0; 3], 0.785398) };
+    if sh_off > 0.0 || sh_blur > 0.0 { let (dx, dy) = ((sh_off * sh_ang.cos()) as i32, (sh_off * sh_ang.sin()) as i32); let mut m = Frame { w, h, d: vec![1.0; w * h * 4] };
+        for y in 0..h as i32 { for x in 0..w as i32 { let (sx, sy) = (x - dx, y - dy); if sx >= 0 && sy >= 0 && sx < w as i32 && sy < h as i32 { m.d[(y as usize * w + x as usize) * 4] = main[sy as usize * w + sx as usize]; } else { m.d[(y as usize * w + x as usize) * 4] = 0.0; } } }
+        if sh_blur > 0.5 { box_blur3(&mut m, (sh_blur * 2.0) as usize); } let sc: Vec<f32> = (0..w * h).map(|i| m.d[i * 4]).collect(); over(fr, &sc, &|_| [sh_col[0] as f32, sh_col[1] as f32, sh_col[2] as f32], sh_op as f32); }
+    // glow
+    if let Some(fx) = fx { if fx.glow > 0.0 { let mut m = Frame { w, h, d: vec![1.0; w * h * 4] }; for i in 0..w * h { m.d[i * 4] = main[i]; } box_blur3(&mut m, (fx.glow * 2.0) as usize); let gc: Vec<f32> = (0..w * h).map(|i| (m.d[i * 4] * 1.8).min(1.0)).collect(); over(fr, &gc, &|_| [fx.glow_color[0] as f32, fx.glow_color[1] as f32, fx.glow_color[2] as f32], 0.9); } }
+    if stroke_w > 0.0 { let mut st = main.clone(); let r = stroke_w.ceil() as i32;
+        for dy in -r..=r { for dx in -r..=r { if ((dx * dx + dy * dy) as f64).sqrt() > stroke_w { continue; } for y in 0..h as i32 { let sy = y - dy; if sy < 0 || sy >= h as i32 { continue; } for x in 0..w as i32 { let sx = x - dx; if sx < 0 || sx >= w as i32 { continue; } let v = main[sy as usize * w + sx as usize]; let i = y as usize * w + x as usize; if v > st[i] { st[i] = v; } } } } }
+        over(fr, &st, &|_| [stroke_col[0] as f32, stroke_col[1] as f32, stroke_col[2] as f32], 1.0); }
+    let grad = fx.and_then(|x| x.gradient); let (by0, bh) = (bounds[1], bounds[3].max(1.0));
+    match grad { Some((a, b)) => over(fr, &main, &|i| { let y = (i / w) as f32; let t_ = ((y - by0) / bh).clamp(0.0, 1.0); [(a[0] + (b[0] - a[0]) * t_ as f64) as f32, (a[1] + (b[1] - a[1]) * t_ as f64) as f32, (a[2] + (b[2] - a[2]) * t_ as f64) as f32] }, 1.0),
+        None => over(fr, &main, &|_| [col[0] as f32, col[1] as f32, col[2] as f32], 1.0) }
     Ok(())
 }

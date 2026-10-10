@@ -118,7 +118,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
             }
         }
         Source::Text { text, font, size, color, letter_spacing, stroke_width, stroke_color, shadow, align } => {
-            let _ = crate::text::render_text(&mut f, text, font, *size, *color, *letter_spacing, *stroke_width, *stroke_color, *shadow, align, prop(c, "reveal", lt));
+            let _ = crate::text::render_text(&mut f, text, font, *size, *color, *letter_spacing, *stroke_width, *stroke_color, *shadow, align, prop(c, "reveal", lt), c.text_fx.as_ref(), lt);
         }
         Source::Media { .. } => if let Some(fr) = cache.frames_of(&c.id) {
             let idx = if c.speed_curve.is_some() { (c.source_time(lt) * p.fps) as usize } else { (lt * p.fps) as usize };
