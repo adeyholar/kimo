@@ -317,7 +317,7 @@ fn corner_pin(src: &Frame, off: &[[f64; 2]; 4]) -> Frame {
 }
 
 /// Dynamic text tokens, resolved per frame at render time: `{tc:S}` timecode HH:MM:SS:FF offset by S seconds,
-/// `{bar:BPM:S}` musical position "BAR bb.b.s" at BPM offset by S seconds, `{t:S}` seconds with 2 decimals.
+/// `{bar:BPM:S}` musical position "BAR bb.b.s" at BPM offset by S seconds, `{t:S}` seconds with 2 decimals, `{pct:A:B}` percent 0..100 from timeline time A to B.
 pub fn dyn_text(text: &str, gt: f64, fps: f64) -> String {
     if !text.contains('{') { return text.to_string(); }
     let mut out = String::new(); let mut rest = text;
@@ -329,6 +329,7 @@ pub fn dyn_text(text: &str, gt: f64, fps: f64) -> String {
                 "tc" => { let g = gt + f(1); out.push_str(&format!("{:02}:{:02}:{:02}:{:02}", (g / 3600.0) as u32, ((g / 60.0) as u32) % 60, (g as u32) % 60, (g.fract() * fps) as u32)); }
                 "bar" => { let g = gt + f(2); let bars = g / (60.0 / f(1).max(1.0)); out.push_str(&format!("{:02}.{}.{}", (bars / 4.0) as u32 + 1, (bars as u32) % 4 + 1, (bars.fract() * 4.0) as u32 + 1)); }
                 "t" => out.push_str(&format!("{:.2}", gt + f(1))),
+                "pct" => { let (a, b) = (f(1), f(2)); out.push_str(&format!("{}", (((gt - a) / (b - a).max(1e-6)).clamp(0.0, 1.0) * 100.0).round() as u32)); }
                 _ => { out.push('{'); out.push_str(&tail[..=j]); rest = &tail[j + 1..]; continue; }
             }
             rest = &tail[j + 1..];

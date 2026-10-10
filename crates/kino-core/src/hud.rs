@@ -26,7 +26,7 @@ pub fn add_detection_box(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let tw = tag.chars().count() as f64 * fsz * 0.6 + 16.0 * k; let th = fsz * 1.5;
     let sw = (2.0 * k).max(1.5); let fill_alpha_box = num(a, "fill_opacity", 0.08);
     let imp0 = a.get("impact").and_then(|v| v.as_bool()).unwrap_or(false); let lag = if imp0 { 0.44 } else { 0.0 };
-    let e = Ease::OutExpo; let tin = 0.35; let mut cl = vec![];
+    let inst = a.get("instant").and_then(|v| v.as_bool()).unwrap_or(false); let e = Ease::OutExpo; let tin = if inst { 0.001 } else { 0.35 }; let mut cl = vec![];
     // soft fill
     let mut f = clip(ss, shape("rect", pw, ph, col, 0.0, col), start, dur); set(&mut f, "x", cx); set(&mut f, "y", cy); f.props.get_mut("opacity").unwrap().base = 0.0; key(&mut f, "opacity", 0.0, 0.0, e); key(&mut f, "opacity", tin, fill_alpha_box, e); key(&mut f, "opacity", dur - 0.15, fill_alpha_box, Ease::In); key(&mut f, "opacity", dur, 0.0, Ease::In); cl.push(f);
     // impact landing (measured from the SCUMBLE reference, 25 fps): box arrives oversized and shrinks in on an expo-out,
@@ -43,7 +43,7 @@ pub fn add_detection_box(ss: &mut Session, a: &Value) -> Result<Value, String> {
     // outline
     let mut o = clip(ss, shape("rect", pw, ph, [-1.0, 0.0, 0.0], sw, col), start, dur); set(&mut o, "x", cx); set(&mut o, "y", cy);
     { let imp = a.get("impact").and_then(|v| v.as_bool()).unwrap_or(false); let (v0, tt) = if imp { (num(a, "impact_scale", 3.0), 0.44) } else { (1.12, tin) }; let ez = if imp { Ease::Out } else { e }; let pr = o.props.get_mut("scale").unwrap(); pr.base = 1.0; pr.set_key(0.0, v0, ez); pr.set_key(tt, 1.0, ez); }
-    key(&mut o, "opacity", 0.0, 0.0, e); key(&mut o, "opacity", 0.15, 1.0, e); key(&mut o, "opacity", dur - 0.15, 1.0, Ease::In); key(&mut o, "opacity", dur, 0.0, Ease::In); o.motion_blur = 180.0; cl.push(o);
+    key(&mut o, "opacity", 0.0, 0.0, e); key(&mut o, "opacity", if inst { 0.001 } else { 0.15 }, 1.0, e); key(&mut o, "opacity", dur - 0.15, 1.0, Ease::In); key(&mut o, "opacity", dur, 0.0, Ease::In); o.motion_blur = 180.0; cl.push(o);
     // corner ticks (thick short bars at four corners)
     let tl = (pw.min(ph) * 0.14).clamp(8.0 * k, 36.0 * k); let tk = sw * 2.2;
     for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
@@ -51,16 +51,16 @@ pub fn add_detection_box(ss: &mut Session, a: &Value) -> Result<Value, String> {
             let (w, h) = if horiz { (tl, tk) } else { (tk, tl) };
             let mut t = clip(ss, shape("rect", w, h, col, 0.0, col), start + lag, dur - lag);
             set(&mut t, "x", cx + sx * (pw / 2.0 - if horiz { tl / 2.0 } else { tk / 2.0 })); set(&mut t, "y", cy + sy * (ph / 2.0 - if horiz { tk / 2.0 } else { tl / 2.0 }));
-            key(&mut t, "opacity", 0.0, 0.0, e); key(&mut t, "opacity", 0.2, 1.0, e); key(&mut t, "opacity", dur - lag - 0.15, 1.0, Ease::In); key(&mut t, "opacity", dur - lag, 0.0, Ease::In); cl.push(t);
+            key(&mut t, "opacity", 0.0, 0.0, e); key(&mut t, "opacity", if inst { 0.001 } else { 0.2 }, 1.0, e); key(&mut t, "opacity", dur - lag - 0.15, 1.0, Ease::In); key(&mut t, "opacity", dur - lag, 0.0, Ease::In); cl.push(t);
         }
     }
     // label tag: filled plate sitting on the top-left corner, then text; wipes open from the left
-    let (tx, ty) = (cx - pw / 2.0 + tw / 2.0, cy - ph / 2.0 - th / 2.0 - 1.0); let d0 = 0.18 + lag;
+    let (tx, ty) = (cx - pw / 2.0 + tw / 2.0, cy - ph / 2.0 - th / 2.0 - 1.0); let d0 = if inst { 0.0 } else { 0.18 } + lag;
     let mut plate = clip(ss, shape("rect", tw, th, col, 0.0, col), start + d0, dur - d0); set(&mut plate, "x", tx); set(&mut plate, "y", ty);
-    key(&mut plate, "scale", 0.0, 0.0, e); key(&mut plate, "scale", 0.3, 1.0, e); key(&mut plate, "opacity", dur - d0 - 0.15, 1.0, Ease::In); key(&mut plate, "opacity", dur - d0, 0.0, Ease::In); cl.push(plate);
+    key(&mut plate, "scale", 0.0, 0.0, e); key(&mut plate, "scale", if inst { 0.001 } else { 0.3 }, 1.0, e); key(&mut plate, "opacity", dur - d0 - 0.15, 1.0, Ease::In); key(&mut plate, "opacity", dur - d0, 0.0, Ease::In); cl.push(plate);
     let lum = 0.2126 * col[0] + 0.7152 * col[1] + 0.0722 * col[2]; let ink = if lum > 0.45 { [0.04, 0.05, 0.05] } else { [1.0; 3] };
     let mut tt = clip(ss, txt(&tag, font, fsz, ink, "center"), start + d0, dur - d0); set(&mut tt, "x", tx); set(&mut tt, "y", ty);
-    key(&mut tt, "reveal", 0.05, 0.0, Ease::Linear); key(&mut tt, "reveal", 0.35, 1.0, Ease::Out); key(&mut tt, "opacity", dur - d0 - 0.15, 1.0, Ease::In); key(&mut tt, "opacity", dur - d0, 0.0, Ease::In); cl.push(tt);
+    key(&mut tt, "reveal", if inst { 0.0 } else { 0.05 }, 0.0, Ease::Linear); key(&mut tt, "reveal", if inst { 0.001 } else { 0.35 }, 1.0, Ease::Out); key(&mut tt, "opacity", dur - d0 - 0.15, 1.0, Ease::In); key(&mut tt, "opacity", dur - d0, 0.0, Ease::In); cl.push(tt);
     if let Some(cap) = a.get("caption").and_then(|v| v.as_str()) { let cs = 19.0 * k; let mut ct = clip(ss, txt(cap, "Inter", cs, [1.0; 3], "left"), start + 0.3 + lag, dur - 0.3 - lag); set(&mut ct, "x", cx - pw / 2.0 + 12.0 * k + cap.chars().count() as f64 * cs * 0.28); set(&mut ct, "y", cy - ph / 2.0 + 26.0 * k);
         key(&mut ct, "reveal", 0.0, 0.0, Ease::Linear); key(&mut ct, "reveal", 0.35, 1.0, Ease::Out); key(&mut ct, "opacity", dur - 0.45, 1.0, Ease::In); key(&mut ct, "opacity", dur - 0.3, 0.0, Ease::In); cl.push(ct); }
     let ids = push(ss, &tid, cl)?; Ok(json!({"clip_ids": ids}))
@@ -127,4 +127,23 @@ pub fn add_hud_frame(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let tc = format!("TC {{tc:{}}}", tc0); let bar = format!("{:.0} BPM  BAR {{bar:{}:{}}}", bpm, bpm, tc0);
     cl.push(put(ss, &tc, lx + w_of("TC 00:00:00:00") / 2.0, by, col, 0.9)); cl.push(put(ss, &bar, rx - w_of("125 BPM  BAR 00.0.0") / 2.0, by, col, 0.9)); let _ = fps;
     let ids = push(ss, &tid, cl)?; Ok(json!({"clip_ids": ids}))
+}
+
+/// Box expansion to full frame, measured from the SCUMBLE reference (7.6-8.0 s): the detection box grows at CONSTANT speed
+/// (no easing, stepped per frame, about 42 px/frame per side at 1280 wide) until it covers the frame, then a 2-frame white flash
+/// (about 1.0 then 0.5 luma) hides the hard cut. Returns `end` (time the flash finishes) so the next scene can start there.
+pub fn add_box_expand(ss: &mut Session, a: &Value) -> Result<Value, String> {
+    let tid = a.get("track_id").and_then(|v| v.as_str()).ok_or("missing track_id")?.to_string();
+    let start = num(a, "start", 0.0); let fps = ss.project.fps; let (cw, ch) = (ss.project.width as f64, ss.project.height as f64); let k = ch / 720.0;
+    let rect = |key: &str, d: [f64; 4]| -> [f64; 4] { a.get(key).and_then(|v| v.as_array()).filter(|v| v.len() >= 4).map(|v| [v[0].as_f64().unwrap_or(0.0), v[1].as_f64().unwrap_or(0.0), v[2].as_f64().unwrap_or(1.0), v[3].as_f64().unwrap_or(1.0)]).unwrap_or(d) };
+    let from = rect("from", [0.247, 0.036, 0.49, 0.925]); let to = rect("to", [-0.03, -0.03, 1.06, 1.06]); let n = num(a, "frames", 8.0).max(1.0) as usize;
+    let col = rgb(a, "color", [1.0, 0.55, 0.1]); let fill_o = num(a, "fill_opacity", 0.22); let flash = a.get("flash").and_then(|v| v.as_bool()).unwrap_or(true); let frame = 1.0 / fps; let sw = (3.0 * k).max(2.0);
+    let label = a.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string(); let mut cl = vec![];
+    for i in 0..n { let u = i as f64 / n as f64; let r: Vec<f64> = (0..4).map(|j| from[j] + (to[j] - from[j]) * u).collect(); let (pw, ph) = (r[2] * cw, r[3] * ch); let (cx, cy) = ((r[0] + r[2] / 2.0 - 0.5) * cw, (r[1] + r[3] / 2.0 - 0.5) * ch); let s0 = start + i as f64 * frame;
+        let mut f = clip(ss, shape("rect", pw, ph, col, 0.0, col), s0, frame); set(&mut f, "x", cx); set(&mut f, "y", cy); set(&mut f, "opacity", fill_o); cl.push(f);
+        let mut o = clip(ss, shape("rect", pw, ph, [-1.0, 0.0, 0.0], sw, col), s0, frame); set(&mut o, "x", cx); set(&mut o, "y", cy); cl.push(o);
+        if !label.is_empty() { let fs = 20.0 * k; let mut t = clip(ss, txt(&label, "SpaceMono-Bold", fs, col, "left"), s0, frame); set(&mut t, "x", cx - pw / 2.0 + 14.0 * k + label.chars().count() as f64 * fs * 0.3); set(&mut t, "y", cy - ph / 2.0 + 24.0 * k); cl.push(t); } }
+    let mut end = start + n as f64 * frame;
+    if flash { for (i, op) in [1.0, 0.55].iter().enumerate() { let mut w = clip(ss, Source::Solid { color: [1.0, 1.0, 1.0] }, end + i as f64 * frame, frame); set(&mut w, "opacity", *op); cl.push(w); } end += 2.0 * frame; }
+    let ids = push(ss, &tid, cl)?; Ok(json!({"clip_ids": ids, "end": end}))
 }
