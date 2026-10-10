@@ -310,3 +310,6 @@ Curve lookup returns NaN for nonfinite inputs instead of underflowing its interv
 
 ## Covariance positive-semidefinite evidence gate
 Lab transport checks normalized2x2principal minors and determinant, rejecting clearly indefinite symmetric source/reference covariances before regularization. Near-zero numerical tolerance1e-10 permits roundoff, flat/rank-deficient samples remain supported by explicit regularization. Seven matching tests pass, including indefinite2x2 and determinant-only cases. This validates covariance shape, not semantic shot quality.
+
+## Quantitative scope finite accounting
+Scope arrays preflight memory and loops check cancellation. Invalid alpha and scaled/accumulation overflow are excluded with separate counters rather than contaminating JSON min/mean with infinities. Finite range width required, preventing [-MAX,+MAX] width overflow. Three scope and16interchange tests pass; ordinary scope bins/values unchanged. Overflow counter is evidence of an unusable declared numeric domain, not clipping or mastering measurement.

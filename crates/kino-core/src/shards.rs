@@ -16,8 +16,38 @@ pub struct ShardBurst {
     #[serde(default)] pub toward_camera: f64, #[serde(default)] pub spread_time: f64, #[serde(default)] pub fade_out: f64, #[serde(default)] pub dispersion: f64, #[serde(default)] pub origin_spread: f64,
     #[serde(default)] pub physics: bool, #[serde(default = "d_rest")] pub restitution: f64, #[serde(default = "d_fric")] pub friction: f64, #[serde(default)] pub floor: Option<f64>, #[serde(default)] pub ang_drag: f64, #[serde(default = "d_tr")] pub collide: bool,
     #[serde(default)] pub thickness: Option<[f64; 2]>, #[serde(default)] pub glass: f64, #[serde(default)] pub aspect: Option<[f64; 2]>, #[serde(default)] pub fresnel: f64, #[serde(default)] pub refract: f64, #[serde(default)] pub falloff: f64,
+    #[serde(default)] pub plane: Option<Plane>,
 }
 fn d_rest() -> f64 { 0.35 } fn d_fric() -> f64 { 0.5 } fn d_tr() -> bool { true }
+
+/// `plane_fracture` birth mode: a coplanar pane split into connected, non-overlapping Voronoi cells (small near the impact, large far away).
+/// Cells are released by an expanding wave from `impact` and thrown outward and toward the camera with a pressure impulse.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Plane {
+    #[serde(default)] pub impact: [f64; 2], #[serde(default = "d_region")] pub region: [f64; 2], #[serde(default = "d_cells")] pub cells: u32, #[serde(default = "d_pr")] pub radius: f64,
+    #[serde(default = "d_wave")] pub wave_speed: f64, #[serde(default = "d_imp")] pub impulse: f64, #[serde(default = "d_lift")] pub lift: f64, #[serde(default)] pub under_depth: f64,
+    #[serde(default = "d_grade")] pub grading: f64, #[serde(default = "d_tr")] pub hidden_until_birth: bool, #[serde(default = "d_maxd")] pub max_delay: f64,
+}
+fn d_region() -> [f64; 2] { [1280.0, 720.0] } fn d_cells() -> u32 { 120 } fn d_pr() -> f64 { 140.0 } fn d_wave() -> f64 { 2400.0 } fn d_imp() -> f64 { 1100.0 } fn d_lift() -> f64 { 0.9 } fn d_grade() -> f64 { 3.0 } fn d_maxd() -> f64 { 0.25 }
+pub struct Cell { pub poly: Vec<(f64, f64)>, pub c: (f64, f64), pub area: f64 }
+fn clip(poly: &[(f64, f64)], n: (f64, f64), off: f64) -> Vec<(f64, f64)> { // keep points with n.p <= off
+    let mut out = vec![]; for i in 0..poly.len() { let (a, b) = (poly[i], poly[(i + 1) % poly.len()]); let (da, db) = (n.0 * a.0 + n.1 * a.1 - off, n.0 * b.0 + n.1 * b.1 - off);
+        if da <= 0.0 { out.push(a); } if (da < 0.0) != (db < 0.0) && (da - db).abs() > 1e-12 { let t = da / (da - db); out.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)); } } out }
+pub fn plane_cells(p: &Plane, seed: u64, k: f64) -> Vec<Cell> {
+    let (rw, rh) = (p.region[0] * k, p.region[1] * k); let (ix, iy) = (p.impact[0] * k, p.impact[1] * k); let n = p.cells.clamp(4, 400) as usize; let rad = (p.radius * k).max(1.0);
+    // dart throwing with a spacing that grows with distance from the impact (area-weighted size distribution)
+    let base = (rw * rh / n as f64).sqrt() * 0.62; let mut sites: Vec<(f64, f64)> = vec![]; let mut tries = 0u64;
+    while sites.len() < n && tries < 40000 { tries += 1; let x = (h(seed, tries, 900) - 0.5) * rw; let y = (h(seed, tries, 901) - 0.5) * rh; let d = ((x - ix).powi(2) + (y - iy).powi(2)).sqrt();
+        let sp = base * (0.35 + p.grading * sstep(d / (rad * 3.5)) * 0.6 + 0.9 * sstep(d / (rad * 9.0))); if sites.iter().all(|q| ((q.0 - x).powi(2) + (q.1 - y).powi(2)).sqrt() >= sp) { sites.push((x, y)); } }
+    let rect = vec![(-rw / 2.0, -rh / 2.0), (rw / 2.0, -rh / 2.0), (rw / 2.0, rh / 2.0), (-rw / 2.0, rh / 2.0)]; let mut cells = vec![];
+    for (i, &s) in sites.iter().enumerate() { let mut poly = rect.clone();
+        for (j, &t) in sites.iter().enumerate() { if i == j { continue; } let nv = (t.0 - s.0, t.1 - s.1); let mid = ((s.0 + t.0) * 0.5, (s.1 + t.1) * 0.5); if (nv.0 * nv.0 + nv.1 * nv.1) > (4.0 * base * base * 9.0) { continue; } poly = clip(&poly, nv, nv.0 * mid.0 + nv.1 * mid.1); if poly.len() < 3 { break; } }
+        if poly.len() < 3 { continue; }
+        while poly.len() > 6 { let m = poly.len(); let mut best = (f64::MAX, 0); for v in 0..m { let (a, b, c) = (poly[(v + m - 1) % m], poly[v], poly[(v + 1) % m]); let ar = ((b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1)).abs() * 0.5; if ar < best.0 { best = (ar, v); } } poly.remove(best.1); }
+        let mut area = 0.0; let (mut cx, mut cy) = (0.0, 0.0); for v in 0..poly.len() { let (a, b) = (poly[v], poly[(v + 1) % poly.len()]); let cr = a.0 * b.1 - b.0 * a.1; area += cr; cx += (a.0 + b.0) * cr; cy += (a.1 + b.1) * cr; }
+        if area.abs() < 1e-6 { continue; } let c = (cx / (3.0 * area), cy / (3.0 * area)); let rel: Vec<(f64, f64)> = poly.iter().map(|q| (q.0 - c.0, q.1 - c.1)).collect(); cells.push(Cell { poly: rel, c, area: area.abs() * 0.5 }); }
+    cells
+}
 
 fn h(a: u64, i: u64, k: u64) -> f64 { let mut x = a.wrapping_mul(0x9E3779B97F4A7C15) ^ i.wrapping_mul(0xBF58476D1CE4E5B9) ^ k.wrapping_mul(0x94D049BB133111EB); x ^= x >> 30; x = x.wrapping_mul(0xBF58476D1CE4E5B9); x ^= x >> 27; x = x.wrapping_mul(0x94D049BB133111EB); x ^= x >> 31; (x >> 11) as f64 / (1u64 << 53) as f64 }
 fn sstep(x: f64) -> f64 { let t = x.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) }
@@ -29,21 +59,29 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
     let nsub = 4usize; let shutter = 0.5 / fps.max(1.0); let mut accc = vec![0f32; w * hh * 3]; let mut acca = vec![0f32; w * hh]; let rf = e.refract > 0.0; let mut dacc = vec![0f32; if rf { w * hh * 2 } else { 0 }]; let mut dsum = vec![0f32; if rf { w * hh * 2 } else { 0 }];
     let lg = { let l = e.light; let m = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt().max(1e-9); [l[0] / m, l[1] / m, l[2] / m] };
     let focus = if e.focus > 0.0 { e.focus } else { fl };
-    let traj = if e.physics { Some((bake_cached(e, k, total, hh), 0)) } else { None };
+    let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));
+    let traj = if e.physics && pcells.is_none() { Some((bake_cached(e, k, total, hh), 0)) } else { None };
     for sub in 0..nsub { let ts = (t + ((sub as f64 + 0.5) / nsub as f64 - 0.5) * shutter).max(0.0);
         let mut prims: Vec<Prim> = Vec::with_capacity(e.count as usize * 2);
-        for i in 0..e.count as u64 {
-            let r = |kk: u64| h(e.seed, i, kk); let birth = r(40) * e.spread_time; if ts < birth { continue; } let age = ts - birth;
-            let size = (e.size_min * (e.size_max / e.size_min.max(0.1)).powf(r(1).powf(1.0))) * k; // heavy toward small, a few large
+        let ncount = pcells.as_ref().map(|c| c.1.len() as u64).unwrap_or(e.count as u64);
+        for i in 0..ncount {
+            let r = |kk: u64| h(e.seed, i, kk); let pc = pcells.as_ref().map(|c| (&c.0, &c.1[i as usize]));
+            let pdist = pc.map(|(p, c)| ((c.c.0 - p.impact[0] * k).powi(2) + (c.c.1 - p.impact[1] * k).powi(2)).sqrt());
+            let birth = match (pc, pdist) { (Some((p, _)), Some(d)) => (d / (p.wave_speed * k)).min(p.max_delay), _ => r(40) * e.spread_time };
+            if ts < birth && pc.map(|(p, _)| p.hidden_until_birth).unwrap_or(true) { continue; } let age = (ts - birth).max(0.0);
+            let size = if let Some((_, c)) = pc { (c.area.sqrt() / 1.8).max(1.0) } else { (e.size_min * (e.size_max / e.size_min.max(0.1)).powf(r(1).powf(1.0))) * k }; // heavy toward small, a few large
             let (th, ph) = (r(2) * std::f64::consts::TAU, (r(3) * 2.0 - 1.0).acos()); let dir = [ph.sin() * th.cos(), ph.sin() * th.sin() * 0.8, ph.cos()];
             let sp = e.speed * k * (0.35 + 1.1 * r(4).powf(1.2)) / (0.6 + size / (30.0 * k)).sqrt(); let dr = e.drag.max(1e-3); let travel = (1.0 - (-dr * age).exp()) / dr;
             let mut vz = dir[2] * sp; vz -= e.toward_camera * sp * (0.3 + r(5)); // negative z = toward camera
             let os = e.origin_spread * k; let pos = [e.origin[0] * k + (r(50) - 0.5) * 2.0 * os + dir[0] * sp * travel, e.origin[1] * k + (r(51) - 0.5) * 2.0 * os * 0.6 + dir[1] * sp * travel + 0.5 * e.gravity * k * age * age, e.origin[2] + (r(52) - 0.5) * 2.0 * os + vz * travel];
+            let pos = if let (Some((p, c)), Some(d)) = (pc, pdist) { let (ix, iy) = (p.impact[0] * k, p.impact[1] * k); let (dx, dy) = (c.c.0 - ix, c.c.1 - iy); let m = (dx * dx + dy * dy).sqrt().max(1e-6); let (ux, uy) = if d < 1e-3 { let a = r(60) * std::f64::consts::TAU; (a.cos(), a.sin()) } else { (dx / m, dy / m) };
+                let v0 = p.impulse * k * (-d / (p.radius * k * 3.0)).exp().max(0.12) * (0.6 + 0.8 * r(4)) / (0.7 + size / (40.0 * k)).sqrt(); let vz = -p.lift * v0 * (0.6 + 0.8 * r(5));
+                [c.c.0 + ux * v0 * travel, c.c.1 + uy * v0 * travel + 0.5 * e.gravity * k * age * age, p.under_depth * k + vz * travel] } else { pos };
             let phys = traj.as_ref().map(|(tj, _): &(std::sync::Arc<crate::physics::Traj>, i32)| tj.at(i as usize, ts));
-            let ang = [r(6) * 360.0 + (r(7) - 0.5) * 2.0 * e.spin * age, r(8) * 360.0 + (r(9) - 0.5) * 2.0 * e.spin * age, r(10) * 360.0 + (r(11) - 0.5) * 2.0 * e.spin * age];
-            let (pos, rm) = match &phys { Some((p, q)) => (*p, crate::physics::quat_matrix(*q)), None => (pos, rot_matrix(ang)) }; let nv = 4 + (r(12) * 2.99) as usize; let aspect = { let a = e.aspect.unwrap_or([0.62, 1.22]); a[0] + (a[1] - a[0]) * r(13) }; let thick = ({ let t = e.thickness.unwrap_or([0.3, 0.9]); t[0] + (t[1] - t[0]) * r(14) }) * size;
+            let ang = if pc.is_some() { [(r(7) - 0.5) * 2.0 * e.spin * age, (r(9) - 0.5) * 2.0 * e.spin * age, (r(11) - 0.5) * e.spin * age] } else { [r(6) * 360.0 + (r(7) - 0.5) * 2.0 * e.spin * age, r(8) * 360.0 + (r(9) - 0.5) * 2.0 * e.spin * age, r(10) * 360.0 + (r(11) - 0.5) * 2.0 * e.spin * age] };
+            let (pos, rm) = match &phys { Some((p, q)) => (*p, crate::physics::quat_matrix(*q)), None => (pos, rot_matrix(ang)) }; let nv = pc.map(|(_, c)| c.poly.len()).unwrap_or(4 + (r(12) * 2.99) as usize); let aspect = if pc.is_some() { 1.0 } else { let a = e.aspect.unwrap_or([0.62, 1.22]); a[0] + (a[1] - a[0]) * r(13) }; let thick = ({ let t = e.thickness.unwrap_or([0.3, 0.9]); t[0] + (t[1] - t[0]) * r(14) }) * size;
             let life_fade = if e.fade_out > 0.0 { 1.0 - sstep((age - (total - e.fade_out - birth).max(0.1)) / e.fade_out) } else { 1.0 }; let born = sstep(age / 0.05);
-            let mut loc = [(0.0, 0.0); 6]; for v in 0..nv { let a = v as f64 / nv as f64 * std::f64::consts::TAU + (h(e.seed, i, 20 + v as u64) - 0.5) * 1.1; let rr = size * (0.62 + 0.42 * h(e.seed, i, 30 + v as u64)); loc[v] = (a.cos() * rr, a.sin() * rr * aspect); }
+            let mut loc = [(0.0, 0.0); 6]; if let Some((_, c)) = pc { for v in 0..nv { loc[v] = c.poly[v]; } } else { for v in 0..nv { let a = v as f64 / nv as f64 * std::f64::consts::TAU + (h(e.seed, i, 20 + v as u64) - 0.5) * 1.1; let rr = size * (0.62 + 0.42 * h(e.seed, i, 30 + v as u64)); loc[v] = (a.cos() * rr, a.sin() * rr * aspect); } }
             let mut shard: Vec<([(f64, f64); 6], f64, f64, f64, f64)> = vec![]; // per face
             let nrm = [rm[0][2], rm[1][2], rm[2][2]]; let mut zsum = 0.0; let mut ok = true;
             for face in 0..2 { let zoff = if face == 0 { thick * 0.5 } else { -thick * 0.5 }; let mut pts = [(0.0, 0.0); 6]; let mut dz = 0.0;
