@@ -24,7 +24,7 @@ fn font(name: &str, weight: f64) -> Result<std::sync::Arc<FontVec>, String> {
     if let Some(f) = g.get(&key) { return Ok(f.clone()); }
     let path = resolve_font(name); let data = std::fs::read(&path).map_err(|e| format!("font {path}: {e}"))?;
     let mut f = FontVec::try_from_vec(data).map_err(|e| format!("font parse {path}: {e}"))?;
-    if weight > 0.0 { use ab_glyph::VariableFont; f.set_variation(b"wght", weight as f32); }
+    { use ab_glyph::VariableFont; f.set_variation(b"wght", if weight > 0.0 { weight as f32 } else { 700.0 }); }
     let f = std::sync::Arc::new(f); g.insert(key, f.clone()); Ok(f)
 }
 
