@@ -1,5 +1,7 @@
 # Ground-truth test for track_planar under occlusion: a textured plate drifts, a skin-coloured "finger" slides in from the top and covers ~55% of it.
 # Reports mean/max corner error (px) overall and during occlusion. usage: planar_occlusion_test.py <texture> [expand-less]
+import json,os
+EXTRA=json.loads(os.environ.get("TP","{}"))
 import sys,time,subprocess,os,numpy as np;sys.path.insert(0,'/home/sandbox/kino/examples');from mcp_client import Kino
 from PIL import Image,ImageDraw,ImageFilter
 TEX=sys.argv[1];tex=Image.open(TEX).convert('RGB').resize((640,440));W,H,N=1280,720,60
@@ -20,7 +22,7 @@ for i in range(N):
 subprocess.run(['ffmpeg','-v','error','-y','-framerate','30','-i','/tmp/pof/f%03d.png','-c:v','libx264','-crf','10','-pix_fmt','yuv420p','/tmp/po.mp4'],check=True)
 k=Kino();C=k.call;C('project_set',width=W,height=H,fps=30)
 a=C('import_media',path='/tmp/po.mp4')['asset_id'];t0=C('add_track')['track_id'];cl=C('add_clip',track_id=t0,source_type='media',asset_id=a,start=0,duration=N/30)['clip_id']
-q0=quad(0);r=C('track_planar',clip_id=cl,corners=[v for p in q0 for v in (p[0]/W,p[1]/H)],start=0,end=N-1,return_quads=True)
+q0=quad(0);r=C('track_planar',clip_id=cl,corners=[v for p in q0 for v in (p[0]/W,p[1]/H)],start=0,end=N-1,return_quads=True,**EXTRA)
 Q=np.array(r['quads']).reshape(len(r['quads']),4,2)
 err=np.array([np.abs(Q[i]-quad(i)).max() if Q.max()>2 else np.abs(Q[i]*[W,H]-quad(i)).max() for i in range(N)])
 occ=slice(22,46)

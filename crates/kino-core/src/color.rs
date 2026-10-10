@@ -16,6 +16,7 @@ pub mod wrapper;
 pub mod metadata;
 pub mod delivery;
 pub(crate) mod process;
+pub(crate) mod mux;
 pub mod interchange;
 pub mod exposure;
 pub mod output_audit;

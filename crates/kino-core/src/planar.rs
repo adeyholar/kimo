@@ -42,6 +42,11 @@ pub struct Fit { pub q: Quad, pub conf: f64, pub gain: f64 }
 fn tukey(r: f32, c: f32) -> f32 { let a = r.abs() / c; if a >= 1.0 { 0.0 } else { let t = 1.0 - a * a; t * t } }
 
 /// Align template level data to image pyramid, coarse to fine, starting from quad `q0` (full-res pixel coords).
+/// Floor for the similarity-lock blend (0 = free homography when visible, 1 = rigid+scale only). Set per track by the command.
+pub static SHAPE_LOCK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub static SCALE_DAMP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 pub fn align(pyr: &[Img], t: &Tmpl, q0: &Quad, iters: &[usize], prior: Option<&Quad>) -> Fit {
     let nl = pyr.len().min(t.n.len()); let mut q = *q0; let mut conf = 0.0; let mut gain = 1.0;
     for l in (0..nl).rev() { let s = 1.0 / (1u32 << l) as f64; let mut ql = quad_scale(&q, s); let im = &pyr[l]; let tv = &t.v[l]; let us = &t.us[l];
@@ -75,9 +80,11 @@ pub fn align(pyr: &[Img], t: &Tmpl, q0: &Quad, iters: &[usize], prior: Option<&Q
             // occlusion-aware shape constraint: when much of the template is outvoted (an occluder covers it), only the rigid-plus-scale part of the update is trusted,
             // so the quad cannot shrink or shear into the visible strip. beta 0 = free homography (fully visible), 1 = similarity only.
             let beta = { let x = ((0.9 - inl * vis.min(1.0).sqrt()) / 0.35).clamp(0.0, 1.0); x * x * (3.0 - 2.0 * x) };
+            let beta = beta.max(f32::from_bits(SHAPE_LOCK.load(std::sync::atomic::Ordering::Relaxed)) as f64);
             if beta > 0.0 { let cen = |q: &Quad| [(q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4.0, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4.0]; let c0 = cen(&ql); let mut tgt = ql; for k in 0..4 { tgt[k][0] += dl[k][0]; tgt[k][1] += dl[k][1]; } let c1 = cen(&tgt);
                 let (mut sa, mut sb, mut sn) = (0.0, 0.0, 0.0); for k in 0..4 { let (px, py) = (ql[k][0] - c0[0], ql[k][1] - c0[1]); let (qx, qy) = (tgt[k][0] - c1[0], tgt[k][1] - c1[1]); sa += px * qx + py * qy; sb += px * qy - py * qx; sn += px * px + py * py; }
-                let (ca, cb) = (sa / sn.max(1e-9), sb / sn.max(1e-9)); // best similarity: [ca -cb; cb ca] about the centroid
+                let (ca, cb) = (sa / sn.max(1e-9), sb / sn.max(1e-9));
+                let damp = f32::from_bits(SCALE_DAMP.load(std::sync::atomic::Ordering::Relaxed)) as f64; let (ca, cb) = if damp > 0.0 { let sc = ca.hypot(cb).max(1e-9); let an = cb.atan2(ca); let sc2 = 1.0 + (sc - 1.0) * (1.0 - damp); (sc2 * an.cos(), sc2 * an.sin()) } else { (ca, cb) }; // best similarity: [ca -cb; cb ca] about the centroid
                 for k in 0..4 { let (px, py) = (ql[k][0] - c0[0], ql[k][1] - c0[1]); let sim = [c1[0] + ca * px - cb * py - ql[k][0], c1[1] + cb * px + ca * py - ql[k][1]]; for a in 0..2 { dl[k][a] = beta * sim[a] + (1.0 - beta) * dl[k][a]; } } }
             let mut mx = 0f64; for k in 0..4 { for a in 0..2 { ql[k][a] += dl[k][a]; mx = mx.max(dl[k][a].abs()); } }
             if mx < 0.005 && it > 0 { break; } lam *= 0.7;

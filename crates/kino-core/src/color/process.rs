@@ -79,3 +79,18 @@ impl Drop for EncodeStream{fn drop(&mut self){self.tx.take();let _=self.child.ki
 #[test]fn stderr_tail_keeps_last_bytes_and_is_bounded(){let mut e=EncodeStream::new(Command::new("sh").args(["-c","head -c 20000 /dev/zero >&2; printf END-OF-ENCODER-ERROR >&2; exit 7"]),4,Duration::from_secs(2)).unwrap();let error=e.finish().unwrap_err();assert!(error.ends_with("END-OF-ENCODER-ERROR"));assert!(e.stderr.lock().unwrap().len()<=8192);assert!(error.len()<8300);}
 #[test]fn wrong_frame_size_does_not_poison_encoder(){let path=std::env::temp_dir().join(format!("kino-write-size-{}.txt",std::process::id()));let mut e=EncodeStream::new(Command::new("sh").args(["-c",&format!("exec cat > {}",path.display())]),4,Duration::from_secs(2)).unwrap();assert!(e.write(vec![1;3]).unwrap_err().contains("size mismatch"));e.write(b"test".to_vec()).unwrap();e.finish().unwrap();assert_eq!(std::fs::read(&path).unwrap(),b"test");std::fs::remove_file(path).unwrap();}
 }
+
+/// Bounded process exit wait for file-to-file work, with joined stderr drain.
+pub(crate) fn wait_command(cmd:&mut Command,timeout:Duration)->Result<(),String>{
+ if timeout.is_zero(){return Err("invalid process deadline".into())}let deadline=Instant::now().checked_add(timeout).ok_or("process deadline overflow")?;
+ let mut child=cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e|e.to_string())?;
+ let mut errors=child.stderr.take().ok_or("process stderr missing")?;let(tx,rx)=mpsc::channel();
+ let reader=thread::spawn(move||{let mut tail=Vec::with_capacity(8192);let mut b=[0u8;1024];while let Ok(n)=errors.read(&mut b){if n==0{break}let excess=tail.len().saturating_add(n).saturating_sub(8192);if excess>0{tail.drain(..excess);}tail.extend_from_slice(&b[..n]);}let _=tx.send(tail);});
+ let mut owner=Capture{child,reader:Some(reader)};
+ let result=(||{loop{crate::guard::check();if let Some(status)=owner.child.try_wait().map_err(|e|e.to_string())?{return if status.success(){Ok(())}else{Err(format!("process failed: {status}"))}}let remaining=deadline.saturating_duration_since(Instant::now());if remaining.is_zero(){return Err("process deadline exceeded".into())}thread::sleep(remaining.min(Duration::from_millis(100)));}})();
+ let _=owner.child.kill();let _=owner.child.wait();if let Some(h)=owner.reader.take(){let _=h.join();}let tail=rx.try_recv().unwrap_or_default();result.map_err(|e|{let tail=String::from_utf8_lossy(&tail);if tail.trim().is_empty(){e}else{format!("{e}; process stderr: {}",tail.trim())}})
+}
+#[cfg(test)]mod wait_tests{use super::*;
+#[test]fn file_command_failure_tail_is_bounded(){let error=wait_command(Command::new("sh").args(["-c","head -c 20000 /dev/zero >&2; printf FINAL-MUX-ERROR >&2; exit 7"]),Duration::from_secs(2)).unwrap_err();assert!(error.ends_with("FINAL-MUX-ERROR"));assert!(error.len()<8300);}
+#[test]fn wait_timeout_reaps_real_process(){let path=std::env::temp_dir().join(format!("kino-wait-pid-{}",std::process::id()));let error=wait_command(Command::new("sh").args(["-c",&format!("echo $$ > {}; exec sleep 30",path.display())]),Duration::from_millis(100)).unwrap_err();assert!(error.contains("deadline"));let id=std::fs::read_to_string(&path).unwrap();assert!(!std::path::Path::new(&format!("/proc/{}",id.trim())).exists());std::fs::remove_file(path).unwrap();}
+}

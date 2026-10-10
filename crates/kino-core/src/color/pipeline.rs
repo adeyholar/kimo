@@ -47,7 +47,7 @@ pub fn export_high(p:&Project,path:&str,format:&str,crf:u32)->Result<f64,String>
     let mut encoder=super::process::EncodeStream::new(cmd.arg(path),frame_bytes,super::process::encode_deadline(count))?;let mut cache=crate::render::Cache::new();
     for i in 0..count{crate::guard::check();let t=i as f64/p.fps;crate::render::prepare_export_range(p,&mut cache,t,t)?;let mut f=crate::render::render_frame(p,t,&cache)?;output(p,&mut f)?;encoder.write(rgba16(&f)?)?}encoder.finish()?;
     // Keep PCM audio intact in FFV1/MKV; AAC for MP4 HEVC.
-    let pcm=crate::audio::mix(p);if pcm.iter().any(|v|v.abs()>1e-6){let wav=format!("{path}.tmp.wav");let video=format!("{path}.tmp.{}",if format=="ffv1_16"{"mkv"}else{"mp4"});crate::audio::write_wav(&wav,&pcm)?;std::fs::rename(path,&video).map_err(|e|e.to_string())?;let st=Command::new("ffmpeg").args(["-v","error","-y","-i",&video,"-i",&wav,"-c:v","copy","-c:a",if format=="ffv1_16"{"pcm_s16le"}else{"aac"},"-shortest",path]).status().map_err(|e|e.to_string())?;let _=std::fs::remove_file(video);let _=std::fs::remove_file(wav);if !st.success(){return Err("high-bit audio mux failed".into())}}
+    let pcm=crate::audio::mix(p);if pcm.iter().any(|v|v.abs()>1e-6){super::mux::audio(path,&pcm,format,count)?}
     Ok(count as f64/p.fps)
 }
 /// Exact integer16 transfer lookup, scoped to one native decode window.
