@@ -389,11 +389,7 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     encoder.finish()?;
     // mux mixed audio
     let pcm = crate::audio::mix(p);
-    if pcm.iter().any(|v| v.abs() > 1e-6) {
-        let wav = format!("{path}.tmp.wav"); let vid = format!("{path}.tmp.mp4"); crate::audio::write_wav(&wav, &pcm)?; std::fs::rename(path, &vid).map_err(|e| e.to_string())?;
-        let st = Command::new("ffmpeg").args(["-v","error","-y","-i",&vid,"-i",&wav,"-c:v","copy","-c:a","aac","-b:a","192k","-shortest",path]).status().map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(&wav); let _ = std::fs::remove_file(&vid); if !st.success() { return Err("audio mux failed".into()); }
-    }
+    if pcm.iter().any(|v|v.abs()>1e-6){crate::color::mux::legacy_audio(path,&pcm,n)?}
     Ok(n as f64 / p.fps)
 }
 

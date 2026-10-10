@@ -301,10 +301,15 @@ fn build_seq(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f64) -> Op
         let mut rect = vec![0f32; pw * ph * 3]; for y in 0..ph { for x in 0..pw { let (px, py) = crate::shards::hmap(&m8, (x as f64 + 0.5) / pw as f64, (y as f64 + 0.5) / ph as f64); let (px, py) = (px.clamp(0.0, w as f64 - 1.001), py.clamp(0.0, h as f64 - 1.001)); let (ix, iy) = (px as usize, py as usize); let (fx, fy) = ((px - ix as f64) as f32, (py - iy as f64) as f32);
             for j in 0..3 { let s = |xx: usize, yy: usize| buf[(yy * w + xx) * 4 + j] as f32 / 255.0; rect[(y * pw + x) * 3 + j] = s(ix, iy) * (1.0 - fx) * (1.0 - fy) + s(ix + 1, iy) * fx * (1.0 - fy) + s(ix, iy + 1) * (1.0 - fx) * fy + s(ix + 1, iy + 1) * fx * fy; } } }
         if model.is_empty() { model = rect.clone(); }
-        let mut diff = vec![0f32; pw * ph]; for y in 0..ph { for x in 0..pw { let mut best = f32::MAX; for oy in -1i32..=1 { for ox in -1i32..=1 { let (xx, yy) = ((x as i32 + ox).clamp(0, pw as i32 - 1) as usize, (y as i32 + oy).clamp(0, ph as i32 - 1) as usize);
-            let (a, b) = ((y * pw + x) * 3, (yy * pw + xx) * 3); let mut m = 0f32; for j in 0..3 { m = m.max((rect[a + j] - model[b + j]).abs()); }
-            if sp.chroma > 0.0 { let yc = 0.299 * rect[a] + 0.587 * rect[a + 1] + 0.114 * rect[a + 2]; let ya = 0.299 * model[b] + 0.587 * model[b + 1] + 0.114 * model[b + 2]; let dch = (((rect[a] - yc) - (model[b] - ya)).abs().max(((rect[a + 2] - yc) - (model[b + 2] - ya)).abs()) * 2.5).min(1.0); m = m * (1.0 - sp.chroma) + dch * sp.chroma; }
-            best = best.min(m); } } diff[y * pw + x] = best; } }
+        // tolerant compare: distance of each live channel value to the [min,max] envelope of the surface model within `tol` plane px (survives press/parallax shifts)
+        let rad = sp.tol.round().clamp(0.0, 8.0) as usize; let nch = if sp.chroma > 0.0 { 5 } else { 3 };
+        let chans = |v: &Vec<f32>| -> Vec<Vec<f32>> { let mut o = vec![vec![0f32; pw * ph]; nch]; for k in 0..pw * ph { for j in 0..3 { o[j][k] = v[k * 3 + j]; } if nch == 5 { let yy = 0.299 * v[k * 3] + 0.587 * v[k * 3 + 1] + 0.114 * v[k * 3 + 2]; o[3][k] = (v[k * 3] - yy) * 2.5; o[4][k] = (v[k * 3 + 2] - yy) * 2.5; } } o };
+        let (rc, mc_) = (chans(&rect), chans(&model)); let mut diff = vec![0f32; pw * ph];
+        for j in 0..nch { let (mut mn, mut mx) = (mc_[j].clone(), mc_[j].clone());
+            if rad > 0 { let mut tmn = mn.clone(); let mut tmx = mx.clone(); for y in 0..ph { for x in 0..pw { let (mut a0, mut a1) = (f32::MAX, f32::MIN); for dx in x.saturating_sub(rad)..=(x + rad).min(pw - 1) { let v = mc_[j][y * pw + dx]; a0 = a0.min(v); a1 = a1.max(v); } tmn[y * pw + x] = a0; tmx[y * pw + x] = a1; } }
+                for y in 0..ph { for x in 0..pw { let (mut a0, mut a1) = (f32::MAX, f32::MIN); for dy in y.saturating_sub(rad)..=(y + rad).min(ph - 1) { a0 = a0.min(tmn[dy * pw + x]); a1 = a1.max(tmx[dy * pw + x]); } mn[y * pw + x] = a0; mx[y * pw + x] = a1; } } }
+            let wgt = if j < 3 { 1.0 - sp.chroma } else { sp.chroma };
+            if wgt > 0.0 { for k in 0..pw * ph { let d = (rc[j][k] - mx[k]).max(mn[k] - rc[j][k]).max(0.0).min(1.0) * wgt; if j == 0 || j == 3 { diff[k] += 0.0; } diff[k] = diff[k].max(d); } } }
         let mut t1 = vec![0f32; pw * ph]; let mut t2 = vec![0f32; pw * ph]; crate::masks::box_pass(&diff, &mut t1, pw, ph, 2, true); crate::masks::box_pass(&t1, &mut t2, pw, ph, 2, false);
         let occ: Vec<f32> = t2.iter().map(|&d| { let x = ((d - lo) / (hi - lo)).clamp(0.0, 1.0); x * x * (3.0 - 2.0 * x) }).collect();
         // dilate the occluder by 2 plane px before deciding what may update the model, so soft finger edges never leak into it
