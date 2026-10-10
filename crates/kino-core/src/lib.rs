@@ -1,6 +1,7 @@
 //! kino-core: project model, keyframes, command registry, CPU renderer.
 //! Every user-visible operation is a registered Command; the MCP server
 //! is generated from the registry, so nothing can exist without a tool.
+pub mod ext;
 pub mod keyframe;
 pub mod hud;
 pub mod flow;

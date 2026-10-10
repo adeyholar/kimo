@@ -634,7 +634,7 @@ pub fn registry() -> Vec<Command> {
     Command { name: "redo", description: "Redo the last undone operation.", mutates: false,
         schema: obj(vec![], &[]),
         run: |ss, _| { let nx = ss.redo.pop().ok_or("nothing to redo")?; let cur = std::mem::replace(&mut ss.project, nx); ss.undo.push(cur); Ok(json!({"ok":true})) } },
-    ]; v.extend(crate::edit::commands()); v.extend(crate::colortools::commands()); v
+    ]; v.extend(crate::edit::commands()); v.extend(crate::colortools::commands()); v.extend(crate::ext::commands()); v
 }
 
 pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {

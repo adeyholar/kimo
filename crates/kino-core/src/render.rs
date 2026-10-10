@@ -20,6 +20,7 @@ pub struct Cache { frames: HashMap<String, (String, Frames)>, pub size: (u32, u3
 impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new(), size: (0, 0, 0.0) } } pub fn frames_of(&self, id: &str) -> Option<&Frames> { self.frames.get(id).map(|x| &x.1) } }
 
 pub fn probe(path: &str) -> Result<(u32, u32, f64, f64), String> {
+    if [".tif",".tiff"].iter().any(|e|path.to_lowercase().ends_with(e)){let(w,h)=crate::color::interchange::tiff_size(path)?;return Ok((w,h,0.,25.))}
     let out = Command::new("ffprobe").args(["-v","error","-select_streams","v:0","-show_entries","stream=width,height,r_frame_rate,duration","-of","csv=p=0",path])
         .output().map_err(|e| format!("ffprobe: {e}"))?;
     let s = String::from_utf8_lossy(&out.stdout); let s = s.trim();
@@ -38,23 +39,35 @@ const WINDOW: usize = 24;
 
 /// Decode `n` frames starting at global clip frame `a` (windowed: memory stays bounded for any clip length).
 fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frames, String> {
-    let (w, h) = (p.width, p.height); let is_img0 = { let l = path.to_lowercase(); ["png","jpg","jpeg","webp","bmp"].iter().any(|e| l.ends_with(e)) }; let (a, n) = if is_img0 { (0, 1) } else { (a, n) };
+    let (w, h) = (p.width, p.height);
+    if p.color_pipeline.enabled&&[".tif",".tiff"].iter().any(|e|path.to_lowercase().ends_with(e)){
+      let src=crate::color::interchange::tiff_frame(path,decode_cache_limit())?;
+      let fit=c.props.get("fit").map(|q|q.at(0.)).unwrap_or(0.);
+      let d=crate::color::interchange::fit(&src,w as usize,h as usize,fit)?;
+      return Ok(Frames{quantized:Default::default(),linear_buf:Some(d),buf:vec![],fs:w as usize*h as usize*4,first:0})
+    } let is_img0 = { let l = path.to_lowercase(); ["png","jpg","jpeg","webp","bmp","exr","tif","tiff","pfm"].iter().any(|e| l.ends_with(e)) }; let (a, n) = if is_img0 { (0, 1) } else { (a, n) };
     let (in_pt, speed, span) = if c.speed_curve.is_some() { (c.in_point, 1.0, c.source_time(c.duration)) } else { (c.in_point + a as f64 / p.fps * c.speed, c.speed, n as f64 / p.fps * c.speed) };
     let fit = c.props.get("fit").map(|q| q.at(0.0)).unwrap_or(0.0);
     let fitf = if fit >= 1.5 { format!("scale={w}:{h}") } else if fit >= 0.5 { format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}") } else { format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0") };
-    let pix=if p.color_pipeline.enabled{"rgba64le"}else{"rgba"};
+    let float_source=p.color_pipeline.enabled&&[".exr",".pfm"].iter().any(|ext|path.to_lowercase().ends_with(ext));
+    let pix=if float_source{"gbrapf32le"}else if p.color_pipeline.enabled{"rgba64le"}else{"rgba"};
     let vf = format!("setpts=PTS/{},fps={},{},format={pix}", speed.max(0.01), p.fps, fitf);
-    let is_img = ["png","jpg","jpeg","webp","bmp"].iter().any(|e| path.to_lowercase().ends_with(e));
+    let is_img = ["png","jpg","jpeg","webp","bmp","exr","tif","tiff","pfm"].iter().any(|e| path.to_lowercase().ends_with(e));
     let loop_args: Vec<&str> = if is_img { vec!["-loop", "1"] } else { vec![] };
     let fs = (w * h * 4) as usize;
-    let per_frame=fs.checked_mul(if p.color_pipeline.enabled{5}else{1}).ok_or("decode size overflow")?;
-    let estimate=per_frame.checked_mul(n.max(1)).ok_or("decode allocation overflow")?;
+
+
+    let (dw,dh)=if float_source{let(q,r,_,_)=probe(path)?;(q as usize,r as usize)}else{(w as usize,h as usize)};
+    let raw_fs=dw.checked_mul(dh).and_then(|v|v.checked_mul(4)).ok_or("source dimensions overflow")?;
+    let estimate=raw_fs.max(fs).checked_mul(if p.color_pipeline.enabled{8}else{1}).ok_or("decode allocation overflow")?.checked_mul(n.max(1)).ok_or("decode allocation overflow")?;
     if estimate>decode_cache_limit(){return Err("decode request exceeds bounded cache; reduce size/duration or use windowed timing".into())}
     crate::guard::reserve(estimate);
-    let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"])
+    let exr_args:Vec<&str>=if path.to_lowercase().ends_with(".exr"){vec!["-apply_trc","linear"]}else{vec![]};
+    let vf=if float_source{format!("setpts=PTS/{},fps={},format={pix}",speed.max(0.01),p.fps)}else{vf};
+    let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(&exr_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"])
         .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
-    let mut buf = Vec::with_capacity(fs * n.max(1) * if p.color_pipeline.enabled {2}else{1}); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let status=child.wait().map_err(|e|e.to_string())?;if !status.success(){return Err("media decode failed".into())}
-    let linear_buf=if p.color_pipeline.enabled {let values:Vec<f32>=buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect();buf=Vec::new();Some(values)}else{None};
+    let mut buf = Vec::with_capacity(fs * n.max(1) * if p.color_pipeline.enabled {4}else{1}); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let status=child.wait().map_err(|e|e.to_string())?;if !status.success(){return Err("media decode failed".into())}
+    let linear_buf=if p.color_pipeline.enabled {let values=if float_source{let mut values=Vec::with_capacity(buf.len()/4);if buf.len()%(raw_fs*4)!=0{return Err("truncated float decode".into())}for frame in buf.chunks_exact(raw_fs*4){let d=crate::color::interchange::unpack(frame,dw,dh)?;values.extend(crate::color::interchange::fit(&Frame{w:dw,h:dh,d},w as usize,h as usize,fit)?)}values}else{buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect()};buf=Vec::new();Some(values)}else{None};
     let k = buf.len() / fs; buf.truncate(k * fs);
     Ok(Frames { quantized:Default::default(),linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
 }
@@ -87,7 +100,7 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
         // whole-clip decode only for speed-ramped clips (index mapping is in source time); everything else is windowed
         let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(WINDOW).min(total - ia)) };
         let mut count=count;
-        if !all && c.speed_curve.is_none(){let per=(p.width as usize)*(p.height as usize)*4*if p.color_pipeline.enabled{5}else{1};count=count.min((decode_cache_limit()/per.max(1)).max(1));if count<ib-ia+1{return Err("active decode range exceeds cache budget".into())}}
+        if !all && c.speed_curve.is_none(){let per=(p.width as usize)*(p.height as usize)*4*if p.color_pipeline.enabled{8}else{1};count=count.min((decode_cache_limit()/per.max(1)).max(1));if count<ib-ia+1{return Err("active decode range exceeds cache budget".into())}}
         cache.frames.remove(&c.id);
         let fr = decode(p, c, &a.path, start, count)?;
         let bytes=|fr:&Frames|fr.buf.len()+fr.linear_buf.as_ref().map(|b|b.len()*5).unwrap_or(0);
@@ -154,7 +167,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
             if let Some(b)=fr.get_float(idx){f.d.copy_from_slice(b)}else if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
             let fb = prop(c, "flow_blur", lt) as f32;
             if fb > 0.0 { let nxt=if fr.len()>0 {Some(idx+1)}else{None};
-                if let Some(next_idx) = nxt { let mut g2 = Frame::new(w, h); 
+                if let Some(next_idx) = nxt { let mut g2 = Frame::new(w, h);
                     if let Some(b)=fr.get_float(next_idx){g2.d.copy_from_slice(b)}else if let Some(nb)=fr.get(next_idx){for (i,v) in nb.iter().enumerate(){g2.d[i]=*v as f32/255.;}}
                     if p.color_pipeline.enabled {let a=crate::color::pipeline::input(p,c,&mut f);let b=crate::color::pipeline::input(p,c,&mut g2);source_linear=true;if a.is_err()||b.is_err(){f.d.fill(f32::NAN);}}
                     let q = (prop(c, "flow_quality", lt) as usize).clamp(3,6);

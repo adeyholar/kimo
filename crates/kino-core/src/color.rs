@@ -13,6 +13,7 @@ pub mod linear;
 pub mod pipeline;
 pub mod wrapper;
 pub mod metadata;
+pub mod interchange;
 
 type C = (&'static str, f64, &'static str);
 pub type Entry = (&'static str, &'static str, &'static [C]);
