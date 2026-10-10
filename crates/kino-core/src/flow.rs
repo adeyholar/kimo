@@ -24,7 +24,7 @@ pub fn flow(a: &Frame, b: &Frame, quality: usize) -> (Vec<f32>, Vec<f32>, usize,
             for y in 0..h { for x in 0..w { let i = y * w + x; let (xl, xr, yu, yd) = (x.saturating_sub(1), (x + 1).min(w - 1), y.saturating_sub(1), (y + 1).min(h - 1));
                 let gx = 0.5 * ((ia[y * w + xr] - ia[y * w + xl]) + (bw[y * w + xr] - bw[y * w + xl])) * 0.5; let gy = 0.5 * ((ia[yd * w + x] - ia[yu * w + x]) + (bw[yd * w + x] - bw[yu * w + x])) * 0.5; let it = bw[i] - ia[i];
                 ixx[i] = gx * gx; ixy[i] = gx * gy; iyy[i] = gy * gy; ixt[i] = gx * it; iyt[i] = gy * it; } }
-            let r = 5; let (sxx, sxy, syy, sxt, syt) = (boxf(&ixx, w, h, r), boxf(&ixy, w, h, r), boxf(&iyy, w, h, r), boxf(&ixt, w, h, r), boxf(&iyt, w, h, r)); let lam = 1e-4 + 2e-3;
+            let r = 5; let (sxx, sxy, syy, sxt, syt) = (boxf(&ixx, w, h, r), boxf(&ixy, w, h, r), boxf(&iyy, w, h, r), boxf(&ixt, w, h, r), boxf(&iyt, w, h, r)); let lam = 2e-5;
             for i in 0..w * h { let (a_, b_, c_) = (sxx[i] + lam, sxy[i], syy[i] + lam); let det = a_ * c_ - b_ * b_; if det.abs() < 1e-12 { continue; } let (du, dv) = (-(c_ * sxt[i] - b_ * syt[i]) / det, -(-b_ * sxt[i] + a_ * syt[i]) / det);
                 let lim = 4.0; u[i] += du.clamp(-lim, lim); v[i] += dv.clamp(-lim, lim); }
             u = boxf(&u, w, h, 1); v = boxf(&v, w, h, 1); } }

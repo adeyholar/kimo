@@ -53,6 +53,42 @@ fn hist(rgb: &[u8], sel: &dyn Fn(usize) -> bool, n: usize) -> Vec<f32> { let mut
     let mut o = vec![0f32; 4096]; for b in 0..4096usize { if h[b] == 0.0 { continue; } let (r, g, bl) = (b >> 8, (b >> 4) & 15, b & 15); for dr in -1i32..=1 { for dg in -1i32..=1 { for db in -1i32..=1 { let (rr, gg, bb) = (r as i32 + dr, g as i32 + dg, bl as i32 + db); if !(0..16).contains(&rr) || !(0..16).contains(&gg) || !(0..16).contains(&bb) { continue; } let wgt = if dr == 0 && dg == 0 && db == 0 { 1.0 } else { 0.25 }; o[((rr << 8) | (gg << 4) | bb) as usize] += h[b] * wgt; } } } }
     let s: f32 = o.iter().sum::<f32>().max(1e-6); let _ = tot; for v in o.iter_mut() { *v = (*v + 0.02) / (s + 0.02 * 4096.0); } o }
 
+// ---- parametric (affine) object motion: direct Gauss-Newton alignment of the object's pixels, multi-scale, robust ----
+fn box2(s: &[f32], w: usize, h: usize) -> (Vec<f32>, usize, usize) { let (nw, nh) = ((w / 2).max(1), (h / 2).max(1)); let mut o = vec![0f32; nw * nh];
+    for y in 0..nh { for x in 0..nw { let (x0, y0, x1, y1) = (2 * x, 2 * y, (2 * x + 1).min(w - 1), (2 * y + 1).min(h - 1)); o[y * nw + x] = 0.25 * (s[y0 * w + x0] + s[y0 * w + x1] + s[y1 * w + x0] + s[y1 * w + x1]); } } (o, nw, nh) }
+fn solve6(mut a: [[f64; 7]; 6]) -> Option<[f64; 6]> { for i in 0..6 { let mut p = i; for r in i + 1..6 { if a[r][i].abs() > a[p][i].abs() { p = r; } } if a[p][i].abs() < 1e-12 { return None; } a.swap(i, p);
+    for r in 0..6 { if r == i { continue; } let f = a[r][i] / a[i][i]; for c in i..7 { a[r][c] -= f * a[i][c]; } } } let mut x = [0f64; 6]; for i in 0..6 { x[i] = a[i][6] / a[i][i]; } Some(x) }
+/// Affine map prev -> cur (x' = A x + b) for the object `alpha` (in prev), as [a,b,c,d,tx,ty] with x' = (a x + b y + tx, c x + d y + ty).
+pub fn aff_step(gp: &[f32], gc: &[f32], alpha: &[f32], w: usize, h: usize, init: Option<[f64; 6]>) -> [f64; 6] {
+    let mut pg = vec![(gp.to_vec(), w, h)]; let mut cg = vec![(gc.to_vec(), w, h)]; let mut pa = vec![(alpha.to_vec(), w, h)];
+    for _ in 0..4 { let (a, aw, ah) = pg.last().unwrap().clone(); if aw < 48 || ah < 48 { break; } pg.push(box2(&a, aw, ah)); let (b, bw, bh) = cg.last().unwrap().clone(); cg.push(box2(&b, bw, bh)); let (c, cw, ch) = pa.last().unwrap().clone(); pa.push(box2(&c, cw, ch)); }
+    let (mut m, mut cx, mut cy, mut tot) = ([1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0], 0f64, 0f64, 0f64);
+    for y in 0..h { for x in 0..w { let a = alpha[y * w + x] as f64; if a > 0.5 { cx += x as f64; cy += y as f64; tot += 1.0; } } } if tot < 30.0 { return m; } cx /= tot; cy /= tot;
+    if let Some(i) = init { m = [i[0], i[1], i[2], i[3], i[0] * cx + i[1] * cy + i[4] - cx, i[2] * cx + i[3] * cy + i[5] - cy]; }
+    for lvl in (0..pg.len()).rev() { let s = (1u32 << lvl) as f64; let (ip, lw, lh) = (&pg[lvl].0, pg[lvl].1, pg[lvl].2); let ic = &cg[lvl].0; let ia = &pa[lvl].0; let (lcx, lcy) = (cx / s, cy / s);
+        // translation of the centroid at this level
+        let mut p = [m[0], m[1], m[2], m[3], m[4] / s, m[5] / s]; let mut lam: f64 = 1e-3;
+        // collect object pixels once
+        let mut px: Vec<(usize, usize)> = vec![]; for y in 1..lh - 1 { for x in 1..lw - 1 { if ia[y * lw + x] > 0.5 { px.push((x, y)); } } } if px.len() < 20 { continue; }
+        let mut prev_err = f64::MAX;
+        for _it in 0..30 { let mut ata = [[0f64; 6]; 6]; let mut atb = [0f64; 6]; let mut err = 0f64; let mut cnt = 0f64;
+            for &(x, y) in &px { let (xc, yc) = (x as f64 - lcx, y as f64 - lcy);
+                let xs = lcx + p[4] + p[0] * xc + p[1] * yc; let ys = lcy + p[5] + p[2] * xc + p[3] * yc; if xs < 1.0 || ys < 1.0 || xs > lw as f64 - 2.0 || ys > lh as f64 - 2.0 { continue; }
+                let (xf, yf) = (xs as f32, ys as f32); let gx = 0.5 * (bil(ic, lw, lh, xf + 1.0, yf) - bil(ic, lw, lh, xf - 1.0, yf)) as f64; let gy = 0.5 * (bil(ic, lw, lh, xf, yf + 1.0) - bil(ic, lw, lh, xf, yf - 1.0)) as f64;
+                let r = (bil(ic, lw, lh, xf, yf) - ip[y * lw + x]) as f64; let wt = { let k = 0.08; let a = r.abs(); if a < k { 1.0 } else { k / a } };
+                let j = [gx * xc, gx * yc, gy * xc, gy * yc, gx, gy]; for a in 0..6 { for b in 0..6 { ata[a][b] += wt * j[a] * j[b]; } atb[a] -= wt * j[a] * r; } err += wt * r * r; cnt += wt; }
+            if cnt < 10.0 { break; } err /= cnt; if err > prev_err { lam *= 10.0; } else { lam = (lam * 0.5).max(1e-6); } prev_err = prev_err.min(err);
+            let mut sys = [[0f64; 7]; 6]; for a in 0..6 { for b in 0..6 { sys[a][b] = ata[a][b] + if a == b { lam * (ata[a][a] + 1e-3) } else { 0.0 }; } sys[a][6] = atb[a]; }
+            if let Some(d) = solve6(sys) { let mut np = p; for k in 0..6 { np[k] += d[k]; } if (np[0] - 1.0).abs() < 0.6 && (np[3] - 1.0).abs() < 0.6 && np[1].abs() < 0.6 && np[2].abs() < 0.6 { p = np; } let mag: f64 = d.iter().map(|v| v * v).sum(); if mag < 1e-10 { break; } } else { break; } }
+        m = [p[0], p[1], p[2], p[3], p[4] * s, p[5] * s]; }
+    // convert centred form (x' = c + t + A (x - c)) to absolute: b = c + t - A c
+    [m[0], m[1], m[2], m[3], cx + m[4] - m[0] * cx - m[1] * cy, cy + m[5] - m[2] * cx - m[3] * cy]
+}
+/// out(y) = src(M^-1 y)
+pub fn aff_warp(src: &[f32], w: usize, h: usize, m: &[f64; 6]) -> Vec<f32> { let det = m[0] * m[3] - m[1] * m[2]; if det.abs() < 1e-6 { return src.to_vec(); }
+    let (ia, ib, ic, id) = (m[3] / det, -m[1] / det, -m[2] / det, m[0] / det); let mut o = vec![0f32; w * h];
+    for y in 0..h { for x in 0..w { let (dx, dy) = (x as f64 - m[4], y as f64 - m[5]); let (sx, sy) = (ia * dx + ib * dy, ic * dx + id * dy); o[y * w + x] = if sx < -1.0 || sy < -1.0 || sx > w as f64 || sy > h as f64 { 0.0 } else { bil(src, w, h, sx as f32, sy as f32) }; } } o }
+
 #[derive(Clone)]
 pub struct Opts { pub band: f32, pub temporal: f32, pub colour: f32, pub guide_r: usize }
 impl Default for Opts { fn default() -> Self { Opts { band: 14.0, temporal: 0.6, colour: 0.9, guide_r: 3 } } }
@@ -88,12 +124,15 @@ pub fn track(frames: &[Vec<u8>], w: usize, h: usize, seeds: &[(usize, Vec<[f64; 
     let mut bf: Vec<Fl> = (0..nf).map(|_| Fl { u: vec![], v: vec![], w2: 0, h2: 0 }).collect(); let mut ff: Vec<Fl> = (0..nf).map(|_| Fl { u: vec![], v: vec![], w2: 0, h2: 0 }).collect();
     for t in 1..nf { bf[t] = mk(t, t - 1); } for t in 0..nf - 1 { ff[t] = mk(t, t + 1); }
     let seed_a: Vec<Vec<f32>> = seeds.iter().map(|s| raster_poly(&s.1, w, h)).collect(); let anchors: Vec<(Vec<f32>, Vec<f32>)> = seeds.iter().enumerate().map(|(k, s)| anchor_models(&frames[s.0], &seed_a[k], w, h, o.band)).collect();
+    let aff = std::env::var("KINO_MATTE_MOTION").map(|v| v != "flow").unwrap_or(true);
     let none: Vec<Option<Vec<f32>>> = vec![None; nf]; let mut fwd: Vec<Vec<Option<Vec<f32>>>> = vec![]; let mut bwd: Vec<Vec<Option<Vec<f32>>>> = vec![];
     for (k, s) in seeds.iter().enumerate() {
         let end_f = if k + 1 < seeds.len() { seeds[k + 1].0 } else { nf - 1 }; let mut chain = none.clone(); chain[s.0] = Some(seed_a[k].clone());
-        for t in s.0 + 1..=end_f { let prev = chain[t - 1].as_ref().unwrap(); let wp = warp(prev, w, h, &bf[t]); chain[t] = Some(refine(&wp, &frames[t], &anchors[k], w, h, o)); } fwd.push(chain);
+        let sg: Vec<f32> = (0..w*h).map(|i| gray(&frames[s.0], i)).collect(); let mut mt = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0];
+        for t in s.0 + 1..=end_f { let prev = chain[t - 1].as_ref().unwrap(); let wp = if aff { let g1: Vec<f32> = (0..w*h).map(|i| gray(&frames[t], i)).collect(); mt = aff_step(&sg, &g1, &seed_a[k], w, h, Some(mt)); aff_warp(&seed_a[k], w, h, &mt) } else { warp(prev, w, h, &bf[t]) }; chain[t] = Some(refine(&wp, &frames[t], &anchors[k], w, h, o)); } fwd.push(chain);
         let end_b = if k > 0 { seeds[k - 1].0 } else { 0 }; let mut chain = none.clone(); chain[s.0] = Some(seed_a[k].clone());
-        for t in (end_b..s.0).rev() { let prev = chain[t + 1].as_ref().unwrap(); let wp = warp(prev, w, h, &ff[t]); chain[t] = Some(refine(&wp, &frames[t], &anchors[k], w, h, o)); } bwd.push(chain); }
+        let mut mt = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0];
+        for t in (end_b..s.0).rev() { let prev = chain[t + 1].as_ref().unwrap(); let wp = if aff { let g1: Vec<f32> = (0..w*h).map(|i| gray(&frames[t], i)).collect(); mt = aff_step(&sg, &g1, &seed_a[k], w, h, Some(mt)); aff_warp(&seed_a[k], w, h, &mt) } else { warp(prev, w, h, &ff[t]) }; chain[t] = Some(refine(&wp, &frames[t], &anchors[k], w, h, o)); } bwd.push(chain); }
     // blend: between seeds k and k+1 use forward chain of k and backward chain of k+1 by distance
     let mut blended: Vec<Vec<f32>> = Vec::with_capacity(nf); let mut conf = vec![1.0f64; nf]; let mut warnings = vec![];
     for t in 0..nf { let prev = seeds.iter().rposition(|s| s.0 <= t); let next = seeds.iter().position(|s| s.0 >= t);

@@ -6,7 +6,7 @@ W,H,FPS,N=640,360,30,60; rng=np.random.default_rng(3)
 base=np.array([[0,-60],[18,-50],[22,-20],[60,-45],[66,-38],[30,-5],[26,40],[34,75],[18,78],[8,45],[-8,45],[-14,78],[-30,76],[-24,36],[-28,-5],[-62,-30],[-68,-38],[-24,-20],[-18,-50]],float)
 def shape(i):
     t=i/(N-1); a=math.radians(25*math.sin(t*math.pi*1.5)); s=1.0+0.25*t; c,sn=math.cos(a),math.sin(a); cx=130+400*t; cy=180+40*math.sin(t*6)
-    P=base*s; P=np.stack([P[:,0]*c-P[:,1]*sn,P[:,0]*sn+P[:,1]*c],1); P[:,0]+=4*np.sin(np.arange(len(P))*1.7+t*9); P[:,1]+=4*np.cos(np.arange(len(P))*2.3+t*7); return P+[cx,cy]
+    P=base*s; P=np.stack([P[:,0]*c-P[:,1]*sn,P[:,0]*sn+P[:,1]*c],1); J=float(os.environ.get('JIT','0')); P[:,0]+=J*np.sin(np.arange(len(P))*1.7+t*9); P[:,1]+=J*np.cos(np.arange(len(P))*2.3+t*7); return P+[cx,cy]
 def poly_alpha(P):
     im=Image.new("L",(W*4,H*4),0); ImageDraw.Draw(im).polygon([(x*4,y*4) for x,y in P],fill=255); return np.array(im.resize((W,H),Image.BOX)).astype(np.float32)/255
 tex=lambda sd,m,amp: np.clip(m+amp*np.array(Image.fromarray((np.random.default_rng(sd).random((H//4,W//4,3))*255).astype(np.uint8)).resize((W,H),Image.BICUBIC)).astype(np.float32)/255,0,1)
@@ -14,7 +14,8 @@ bg=tex(1,0.25,0.35); fgt=tex(2,0.35,0.35)
 import os; os.makedirs("/tmp/gt",exist_ok=True); GT=[]
 for i in range(N):
     P=shape(i); A=poly_alpha(P); A=np.array(Image.fromarray((A*255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(0.8 if i%7 else 2.5))).astype(np.float32)/255  # some motion-blurred frames
-    c0=shape(0).mean(0); ci=P.mean(0); f=np.roll(np.roll(fgt,int(round(ci[0]-c0[0])),1),int(round(ci[1]-c0[1])),0); b=bg  # object texture travels with the object; static camera
+    t=i/(N-1); a=math.radians(25*math.sin(t*math.pi*1.5)); sc=1.0+0.25*t; c,sn=math.cos(a),math.sin(a); ci=np.array([130+400*t,180+40*math.sin(t*6)]); c0=np.array([130.0,180+0.0])  # texture rotates/scales/translates WITH the object
+    ft=Image.fromarray((fgt*255).astype(np.uint8)).transform((W,H),Image.AFFINE,(c/sc,sn/sc,c0[0]-(c*ci[0]+sn*ci[1])/sc,-sn/sc,c/sc,c0[1]-(-sn*ci[0]+c*ci[1])/sc),Image.BICUBIC); f=np.array(ft).astype(np.float32)/255; b=bg
     fr=A[...,None]*f+(1-A[...,None])*b; Image.fromarray((fr*255).astype(np.uint8)).save("/tmp/gt/f%03d.png"%i); GT.append(A)
 subprocess.run("ffmpeg -v error -y -framerate 30 -i /tmp/gt/f%03d.png -c:v libx264 -crf 12 -pix_fmt yuv420p /tmp/gt.mp4",shell=True,check=True)
 k=Kino();C=k.call;C("project_set",width=W,height=H,fps=FPS)
