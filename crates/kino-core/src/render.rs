@@ -6,46 +6,73 @@ use std::process::{Command, Stdio};
 
 /// Decoded frames for media clips, keyed by clip id. Frames are RGBA8 at project size, project fps,
 /// with speed already applied.
-pub struct Cache { frames: HashMap<String, (String, Vec<Vec<u8>>)>, pub size: (u32, u32, f64) }
-impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new(), size: (0, 0, 0.0) } } pub fn frames_of(&self, id: &str) -> Option<&Vec<Vec<u8>>> { self.frames.get(id).map(|x| &x.1) } }
+/// A decoded window of consecutive frames, contiguous in memory. `first` is the global frame index of buf[0].
+pub struct Frames { pub buf: Vec<u8>, pub fs: usize, pub first: usize }
+impl Frames {
+    pub fn len(&self) -> usize { if self.fs == 0 { 0 } else { self.buf.len() / self.fs } }
+    pub fn covers(&self, a: usize, b: usize) -> bool { self.len() > 0 && a >= self.first && b < self.first + self.len() }
+    /// Global-index lookup, clamped into the window.
+    pub fn get(&self, g: usize) -> Option<&[u8]> { let n = self.len(); if n == 0 { return None; } let i = g.saturating_sub(self.first).min(n - 1); Some(&self.buf[i * self.fs..(i + 1) * self.fs]) }
+}
+impl std::ops::Index<usize> for Frames { type Output = [u8]; fn index(&self, i: usize) -> &[u8] { &self.buf[i * self.fs..(i + 1) * self.fs] } }
+pub struct Cache { frames: HashMap<String, (String, Frames)>, pub size: (u32, u32, f64) }
+impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new(), size: (0, 0, 0.0) } } pub fn frames_of(&self, id: &str) -> Option<&Frames> { self.frames.get(id).map(|x| &x.1) } }
 
 pub fn probe(path: &str) -> Result<(u32, u32, f64, f64), String> {
     let out = Command::new("ffprobe").args(["-v","error","-select_streams","v:0","-show_entries","stream=width,height,r_frame_rate,duration","-of","csv=p=0",path])
         .output().map_err(|e| format!("ffprobe: {e}"))?;
     let s = String::from_utf8_lossy(&out.stdout); let s = s.trim();
     let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() < 3 { return Err(format!("cannot probe {path}: {s}")); }
+    if parts.len() < 3 {
+        let o = Command::new("ffprobe").args(["-v","error","-show_entries","format=duration","-of","csv=p=0",path]).output().map_err(|e| e.to_string())?;
+        let d: f64 = String::from_utf8_lossy(&o.stdout).trim().parse().map_err(|_| format!("cannot probe {path}"))?;
+        return Ok((0, 0, d, 0.0));
+    }
     let fr: Vec<f64> = parts[2].split('/').filter_map(|x| x.parse().ok()).collect();
     let fps = if fr.len() == 2 && fr[1] > 0.0 { fr[0]/fr[1] } else { 30.0 };
     Ok((parts[0].parse().unwrap_or(0), parts[1].parse().unwrap_or(0), parts.get(3).and_then(|d| d.parse().ok()).unwrap_or(0.0), fps))
 }
 
-fn decode(p: &Project, c: &Clip, path: &str) -> Result<Vec<Vec<u8>>, String> {
+const WINDOW: usize = 24;
+
+/// Decode `n` frames starting at global clip frame `a` (windowed: memory stays bounded for any clip length).
+fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frames, String> {
     let (w, h) = (p.width, p.height);
-    let (speed, span) = if let Some(_) = c.speed_curve { (1.0, c.source_time(c.duration)) } else { (c.speed, c.duration * c.speed) };
+    let (in_pt, speed, span) = if c.speed_curve.is_some() { (c.in_point, 1.0, c.source_time(c.duration)) } else { (c.in_point + a as f64 / p.fps * c.speed, c.speed, n as f64 / p.fps * c.speed) };
     let vf = format!("setpts=PTS/{},fps={},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0,format=rgba", speed.max(0.01), p.fps);
-    let is_img = ["png","jpg","jpeg","webp","bmp","gif"].iter().any(|e| path.to_lowercase().ends_with(e)) && !path.to_lowercase().ends_with("gif");
+    let is_img = ["png","jpg","jpeg","webp","bmp"].iter().any(|e| path.to_lowercase().ends_with(e));
     let loop_args: Vec<&str> = if is_img { vec!["-loop", "1"] } else { vec![] };
-    let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(["-ss",&format!("{}", c.in_point),"-t",&format!("{}", span),"-i",path,"-vf",&vf,"-f","rawvideo","-pix_fmt","rgba","-"])
+    let fs = (w * h * 4) as usize;
+    let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt","rgba","-"])
         .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
-    let mut buf = Vec::new(); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let _ = child.wait();
-    let fs = (w*h*4) as usize;
-    Ok(buf.chunks_exact(fs).map(|c| c.to_vec()).collect())
+    let mut buf = Vec::with_capacity(fs * n.max(1)); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let _ = child.wait();
+    let k = buf.len() / fs; buf.truncate(k * fs);
+    Ok(Frames { buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
 }
 
 pub fn prepare(p: &Project, cache: &mut Cache) -> Result<(), String> { prepare_at(p, cache, None) }
 
 /// Decode media clips (only those active at `t` when given). Re-decodes when clip timing/speed/project size changed.
-pub fn prepare_at(p: &Project, cache: &mut Cache, t: Option<f64>) -> Result<(), String> {
+pub fn prepare_at(p: &Project, cache: &mut Cache, t: Option<f64>) -> Result<(), String> { match t { Some(t) => prepare_range(p, cache, t, t), None => prepare_range(p, cache, f64::MIN, f64::MAX) } }
+
+/// Decode clips overlapping [t0, t1] and evict decoded clips outside it (bounds memory).
+pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result<(), String> {
     if cache.size != (p.width, p.height, p.fps) { cache.frames.clear(); cache.size = (p.width, p.height, p.fps); }
+    let all = t0 == f64::MIN;
+    let active: std::collections::HashSet<String> = p.tracks.iter().flat_map(|tr| tr.clips.iter()).filter(|c| all || (c.start <= t1 && c.start + c.duration > t0)).map(|c| c.id.clone()).collect();
+    if !all { cache.frames.retain(|k, _| active.contains(k)); }
     for tr in &p.tracks { for c in &tr.clips {
-        if let Source::Media { asset } = &c.source {
-            if let Some(t) = t { if t < c.start || t >= c.start + c.duration { continue; } }
-            let sig = format!("{asset}|{}|{}|{}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()));
-            if cache.frames.get(&c.id).map(|x| x.0 == sig).unwrap_or(false) { continue; }
-            let a = p.assets.get(asset).ok_or(format!("asset {asset} missing"))?;
-            let fr = decode(p, c, &a.path)?; cache.frames.insert(c.id.clone(), (sig, fr));
-        }
+        let Source::Media { asset } = &c.source else { continue };
+        if !active.contains(&c.id) { continue; }
+        let total = ((c.duration * p.fps).ceil() as usize).max(1);
+        let (ia, ib) = if all || c.speed_curve.is_some() { (0, total - 1) } else { ((((t0 - c.start).max(0.0) * p.fps).floor() as usize).min(total - 1), (((t1 - c.start).max(0.0) * p.fps).ceil() as usize).min(total - 1)) };
+        let sig = format!("{asset}|{}|{}|{}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()));
+        if let Some((s, fr)) = cache.frames.get(&c.id) { if *s == sig && fr.covers(ia, ib) { continue; } }
+        let a = p.assets.get(asset).ok_or(format!("asset {asset} missing"))?;
+        if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, Frames { buf: vec![], fs: 0, first: 0 })); continue; }
+        // whole-clip decode only for speed-ramped clips (index mapping is in source time); everything else is windowed
+        let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(WINDOW).min(total - ia)) };
+        let fr = decode(p, c, &a.path, start, count)?; cache.frames.insert(c.id.clone(), (sig, fr));
     }}
     Ok(())
 }
@@ -78,7 +105,6 @@ fn source_frame(p: &Project, c: &Clip, lt: f64, cache: &Cache) -> Frame {
         }
         Source::Media { .. } => if let Some(fr) = cache.frames_of(&c.id) {
             let idx = if c.speed_curve.is_some() { (c.source_time(lt) * p.fps) as usize } else { (lt * p.fps) as usize };
-            let idx = idx.min(fr.len().saturating_sub(1));
             if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
         },
     }
@@ -178,7 +204,7 @@ pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<
 }
 
 pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
-    let mut cache = Cache::new(); prepare(p, &mut cache)?;
+    let mut cache = Cache::new();
     let n = (p.duration() * p.fps).round() as usize;
     let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", p.width, p.height),"-r",&format!("{}", p.fps),"-i","-","-c:v","libx264","-pix_fmt","yuv420p","-crf",&crf.to_string(),path])
         .stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
@@ -187,6 +213,7 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     let mut i = 0;
     while i < n {
         let end = (i + nt * 2).min(n);
+        prepare_range(p, &mut cache, i as f64 / p.fps, end as f64 / p.fps)?;
         let frames: Vec<Result<Vec<u8>, String>> = std::thread::scope(|sc| {
             let hs: Vec<_> = (i..end).map(|k| { let cache = &cache; sc.spawn(move || render_frame(p, k as f64 / p.fps, cache).map(|f| to_rgba8(&f))) }).collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect() });
