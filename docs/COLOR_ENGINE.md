@@ -40,3 +40,11 @@ Lab equations/constants source: http://www.brucelindbloom.com/Eqn_Lab_to_XYZ.htm
 Synthetic 33-cube CDL roundtrip: bake 0.0122 s (35937 entries), 48-frame 640x360 export 0.602 s; 8-bit direct-vs-baked RGBA mean absolute error 0.00278 code values, max 1 code value. Unit tests cover known SOP result and invalid params. No measured film stock LUT included.
 
 Synthetic Lab transfer: render-space mean Delta E76 against same-layout reference improved 27.1945 -> 0.8418. This is a warm/cool gradient pair, not different real scenes and not a perceptual study.
+
+## Real-footage validation and sampling fix
+On SCUMBLE footage (two-second segment, 640x360), added deliberate CDL cast/contrast/saturation distortion then matched the same reference frame. A floating-point frame-boundary bug in existing clip isolation sampled shifted clips one frame earlier (`3.8-3.0` underflow at 25fps), causing the first test to match different fast-cut frames and worsen Delta E76. Fixed color-tool isolation by zero-based clock + frame-boundary snap; out-of-clip sample times now fail. Corrected mean Delta E76 8.596 -> 2.447 (71.5% lower). 48-frame export 3.758 s; sampling+matching 0.472 s. This is known-distortion recovery, NOT different-shot creative matching or reference-tool parity.
+
+Qualifier adds edge-aware guided matte refine, black/white cleanup and matte gamma, with bounded radii. SCUMBLE hue qualifier proof: 48 frames 640x360, 11.450 s; hue keys matching colors across the scene, not a semantic object/skin selector. Matte inspected. General color effects now reject nonfinite output rather than passing corrupt pixels into encode.
+
+## Color blur hot-path fix
+Replaced color qualifier/halation use of the generic per-pixel-allocation box blur with a color-only separable RGB cascade. Correct clamp extension, f64 running sums, bounded radius, one scratch allocation, alpha preserved. Constant-border and alpha invariance tests pass. Same actual SCUMBLE 50-frame qualifier export fell from 11.450 s to 2.868 s on this workspace (about 4x faster end-to-end, includes decode/encode). Recovery export 3.635 s, Delta E76 unchanged. Prior documents called the 2-second/25fps real proof 48 frames; corrected count is 50 frames. Synthetic 24fps proofs are 48 frames.

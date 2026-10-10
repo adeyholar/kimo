@@ -18,8 +18,14 @@ fn on(a: &Value, k: &str, d: f64) -> f64 { a.get(k).and_then(|v| v.as_f64()).unw
 /// Frame of one clip in isolation (its own effects included) at a timeline time.
 fn clip_frame(p: &Project, clip_id: &str, t: f64) -> Result<Frame, String> {
     let mut q = p.clone(); let mut keep = None; for (ti, tr) in q.tracks.iter().enumerate() { if tr.clips.iter().any(|c| c.id == clip_id) { keep = Some(ti); } }
-    let ti = keep.ok_or(format!("no clip '{clip_id}'"))?; let mut tr = q.tracks[ti].clone(); tr.clips.retain(|c| c.id == clip_id); q.tracks = vec![tr];
-    let mut cache = render::Cache::new(); render::prepare_at(&q, &mut cache, Some(t))?; render::render_frame(&q, t, &cache)
+    let ti = keep.ok_or(format!("no clip '{clip_id}'"))?; let mut tr = q.tracks[ti].clone(); tr.clips.retain(|c| c.id == clip_id);
+    let c = &mut tr.clips[0]; let local = t - c.start;
+    if !local.is_finite() || local < -1e-7 || local >= c.duration { return Err("sample time must be inside clip".into()); }
+    // Isolate on a zero-based clock and snap frame-boundary noise. E.g. 3.8-3.0
+    // underflows to frame 19 while 0.8 maps to frame 20 at 25fps without this.
+    let frame = local.max(0.0) * q.fps; let snapped = if (frame-frame.round()).abs() < 1e-7 { frame.round() / q.fps } else { local };
+    c.start = 0.0; q.tracks = vec![tr];
+    let mut cache = render::Cache::new(); render::prepare_at(&q, &mut cache, Some(snapped))?; render::render_frame(&q, snapped, &cache)
 }
 fn any_frame(p: &Project, clip: Option<&str>, t: f64) -> Result<Frame, String> { match clip { Some(c) => clip_frame(p, c, t), None => { let mut cache = render::Cache::new(); render::prepare_at(p, &mut cache, Some(t))?; render::render_frame(p, t, &cache) } } }
 fn stats(f: &Frame, region: Option<[f64; 4]>) -> ([f32; 3], [f32; 3]) {
@@ -107,3 +113,18 @@ pub fn commands() -> Vec<Command> { vec![
             let v: Vec<(&str, f64)> = vec![("sr_mean", sm[0] as f64), ("sg_mean", sm[1] as f64), ("sb_mean", sm[2] as f64), ("sr_std", sd[0] as f64), ("sg_std", sd[1] as f64), ("sb_std", sd[2] as f64), ("tr_mean", tm[0] as f64), ("tg_mean", tm[1] as f64), ("tb_mean", tm[2] as f64), ("tr_std", td[0] as f64), ("tg_std", td[1] as f64), ("tb_std", td[2] as f64), ("strength", on(a, "strength", 1.0))];
             let fx = add_fx(&mut ss.project, id, "color_transfer", &v)?; Ok(json!({"effect_id": fx, "src_mean": sm, "ref_mean": tm})) } },
 ] }
+
+#[cfg(test)] mod color_sampling_tests {
+    use super::*;
+    #[test] fn shifted_clip_samples_same_keyframed_frame() {
+        use crate::commands::{dispatch, Session};
+        let mut ss=Session::new();dispatch(&mut ss,"project_set",&json!({"width":64,"height":64,"fps":25})).unwrap();
+        let tr=dispatch(&mut ss,"add_track",&json!({})).unwrap()["track_id"].as_str().unwrap().to_string();
+        let a=dispatch(&mut ss,"add_clip",&json!({"track_id":tr,"source_type":"solid","color":[0.3,0.4,0.5],"start":3,"duration":2})).unwrap()["clip_id"].as_str().unwrap().to_string();
+        dispatch(&mut ss,"set_keyframe",&json!({"clip_id":a,"property":"opacity","time":0.8,"value":0.25})).unwrap();
+        let f=clip_frame(&ss.project,&a,3.8).unwrap();
+        let mut zero=ss.project.clone();zero.find_clip_mut(&a).unwrap().start=0.;let z=clip_frame(&zero,&a,0.8).unwrap();
+        assert_eq!(f.d,z.d);
+        assert!(clip_frame(&ss.project,&a,2.).is_err());assert!(clip_frame(&ss.project,&a,5.).is_err());
+    }
+}

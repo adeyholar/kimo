@@ -1,6 +1,6 @@
 //! Pro color: log/ACES transforms, primaries, log wheels, RGB + hue curves, qualifier, power windows,
 //! film print emulation, halation, white balance, color transfer, tone mapping. Scopes live in `scope_png`.
-use crate::effects::{box_blur3, hsl2rgb, lum, p, rgb2hsl, Frame, Params};
+use crate::effects::{ hsl2rgb, lum, p, rgb2hsl, Frame, Params};
 use std::sync::OnceLock;
 pub mod managed;
 pub mod curves;
@@ -8,6 +8,7 @@ pub mod lut;
 pub mod scopes;
 pub mod matching;
 pub mod cdl;
+pub mod blur;
 
 type C = (&'static str, f64, &'static str);
 pub type Entry = (&'static str, &'static str, &'static [C]);
@@ -39,7 +40,7 @@ pub fn catalog3() -> &'static [Entry] {
         v.push(("hue_curves", "Hue-vs-Hue (degrees shift), Hue-vs-Sat (multiplier), Hue-vs-Lum (offset) at 12 hue knots (0,30..330 deg), and Lum-vs-Sat (multiplier) at 9 luma knots.", {
             let mut c = vec![]; c.extend(knots("hvh", 12, |_| 0.0, "hue shift deg at hue k*30")); c.extend(knots("hvs", 12, |_| 1.0, "sat mult at hue k*30")); c.extend(knots("hvl", 12, |_| 0.0, "luma offset at hue k*30")); c.extend(knots("lvs", 9, |_| 1.0, "sat mult at luma k/8")); lv(c) }));
         v.push(("qualifier", "HSL qualifier (secondary): key by hue/sat/lum ranges with softness, blur the matte, then grade inside (or outside with invert). show_matte=1 views the matte.", lv({
-            let mut c = vec![("hue_center", 30.0, "deg"), ("hue_width", 40.0, "deg"), ("hue_soft", 20.0, "deg"), ("sat_min", 0.15, "0..1"), ("sat_max", 1.0, "0..1"), ("sat_soft", 0.1, "0..1"), ("lum_min", 0.0, "0..1"), ("lum_max", 1.0, "0..1"), ("lum_soft", 0.1, "0..1"), ("matte_blur", 3.0, "px"), ("invert", 0.0, "0/1"), ("show_matte", 0.0, "0/1"), ("amount", 1.0, "0..1")]; c.extend_from_slice(ADJ); c })));
+            let mut c = vec![("hue_center", 30.0, "deg"), ("hue_width", 40.0, "deg"), ("hue_soft", 20.0, "deg"), ("sat_min", 0.15, "0..1"), ("sat_max", 1.0, "0..1"), ("sat_soft", 0.1, "0..1"), ("lum_min", 0.0, "0..1"), ("lum_max", 1.0, "0..1"), ("lum_soft", 0.1, "0..1"), ("matte_blur", 3.0, "px"), ("matte_refine", 0.0, "edge-aware guided radius px"), ("refine_eps", 0.001, "guided regularization"), ("clean_black", 0.0, "matte cutoff 0..1"), ("clean_white", 1.0, "matte white level 0..1"), ("matte_gamma", 1.0, "positive matte gamma"), ("invert", 0.0, "0/1"), ("show_matte", 0.0, "0/1"), ("amount", 1.0, "0..1")]; c.extend_from_slice(ADJ); c })));
         v.push(("power_window", "Power window (secondary): ellipse/rect/gradient shape with feather and rotation; grade inside (or outside with invert). Keyframe cx/cy (or feed track_point output) to track. shape 0 ellipse, 1 rect, 2 linear gradient.", lv({
             let mut c = vec![("shape", 0.0, "0 ellipse, 1 rect, 2 gradient"), ("cx", 0.5, "0..1"), ("cy", 0.5, "0..1"), ("w", 0.4, "fraction of width"), ("h", 0.4, "fraction of height"), ("rotation", 0.0, "deg"), ("feather", 0.2, "0..1"), ("invert", 0.0, "0/1"), ("show_matte", 0.0, "0/1"), ("amount", 1.0, "0..1")]; c.extend_from_slice(ADJ); c })));
         v.push(("film_print", "Print-stock emulation: filmic toe/shoulder S-curve, dye crosstalk, density-based saturation (rich shadows, rolled-off highlights), print-light warmth", lv(vec![("toe", 0.35, "0..1 shadow compression"), ("shoulder", 0.35, "0..1 highlight roll-off"), ("pivot", 0.435, "0..1"), ("crosstalk", 0.06, "0..0.3 dye cross-contamination"), ("density", 0.25, "0..1 saturation in shadows"), ("warmth", 0.03, "-0.2..0.2 print light"), ("amount", 1.0, "0..1")])));
@@ -128,7 +129,13 @@ pub fn apply3(kind: &str, pr: &Params, f: &mut Frame, t: f64, _seed: u64) -> Res
         "qualifier" => { let (hc, hw, hso) = (g("hue_center", 30.0), g("hue_width", 40.0).max(1.0), g("hue_soft", 20.0).max(0.1)); let (s0, s1, ss) = (g("sat_min", 0.15), g("sat_max", 1.0), g("sat_soft", 0.1).max(0.001)); let (l0, l1, ls) = (g("lum_min", 0.0), g("lum_max", 1.0), g("lum_soft", 0.1).max(0.001));
             let mut m = Frame { w, h, d: vec![0.0; n * 4] }; for i in 0..n { let c = [f.d[i * 4], f.d[i * 4 + 1], f.d[i * 4 + 2]]; let (hu, s, l) = rgb2hsl(c); let mut dh = (hu - hc).abs() % 360.0; if dh > 180.0 { dh = 360.0 - dh; }
                 let kh = 1.0 - sstep(hw * 0.5, hw * 0.5 + hso, dh); let ks = sstep(s0 - ss, s0, s) * (1.0 - sstep(s1, s1 + ss, s)); let kl = sstep(l0 - ls, l0, l) * (1.0 - sstep(l1, l1 + ls, l)); let v = kh * ks * kl; m.d[i * 4] = v; m.d[i * 4 + 1] = v; m.d[i * 4 + 2] = v; m.d[i * 4 + 3] = 1.0; }
-            let bl = g("matte_blur", 3.0) as usize; if bl > 0 { box_blur3(&mut m, bl * 2); } let mm: Vec<f32> = (0..n).map(|i| m.d[i * 4]).collect(); matte_apply(f, &mm, pr, t); }
+            let bl = g("matte_blur", 3.0).clamp(0.0, w.min(h) as f32 / 4.0) as usize; if bl > 0 { blur::blur(&mut m, bl * 2); }
+            let mut mm: Vec<f32> = (0..n).map(|i| m.d[i * 4].clamp(0.0, 1.0)).collect();
+            let refine = g("matte_refine", 0.0).clamp(0.0, 128.0) as usize;
+            if refine > 0 && w.min(h) >= 4 { crate::masks::guided(&mut mm, f, refine, g("refine_eps", 0.001).clamp(1e-6, 1.0)); }
+            let black=g("clean_black",0.0).clamp(0.0,0.999);let white=g("clean_white",1.0).clamp(black+0.001,1.0);let gamma=g("matte_gamma",1.0).clamp(0.01,100.0);
+            for v in &mut mm { *v=((*v-black)/(white-black)).clamp(0.0,1.0).powf(gamma); }
+            matte_apply(f, &mm, pr, t); }
         "power_window" => { let (sh, cx, cy, ww, hh, rot, fe) = (g("shape", 0.0) as u32, g("cx", 0.5) * w as f32, g("cy", 0.5) * h as f32, g("w", 0.4) * w as f32 * 0.5, g("h", 0.4) * h as f32 * 0.5, g("rotation", 0.0).to_radians(), g("feather", 0.2).max(0.001));
             let (sn, cs) = rot.sin_cos(); let mut mm = vec![0f32; n]; for y in 0..h { for x in 0..w { let (dx, dy) = (x as f32 - cx, y as f32 - cy); let (rx, ry) = (dx * cs + dy * sn, -dx * sn + dy * cs);
                 let d = match sh { 0 => ((rx / ww.max(1.0)).powi(2) + (ry / hh.max(1.0)).powi(2)).sqrt(), 1 => (rx.abs() / ww.max(1.0)).max(ry.abs() / hh.max(1.0)), _ => (ry / hh.max(1.0)) * 0.5 + 0.5 };
@@ -139,7 +146,7 @@ pub fn apply3(kind: &str, pr: &Params, f: &mut Frame, t: f64, _seed: u64) -> Res
                 for j in 0..3 { let v = o[j].max(0.0); o[j] = if v < pv { pv * (v / pv).powf(1.0 + toe) } else { 1.0 - (1.0 - pv) * ((1.0 - v).max(0.0) / (1.0 - pv)).powf(1.0 + sho) }; }
                 o[0] += wm; o[2] -= wm; let l = lum(o); let sat = 1.0 + dn * (1.0 - l) - dn * 0.5 * l * l; for j in 0..3 { o[j] = l + (o[j] - l) * sat; o[j] = c[j] + (o[j] - c[j]) * a; } f.d[i * 4..i * 4 + 3].copy_from_slice(&o); } }
         "halation" => { let (th, r, a, col) = (g("threshold", 0.75), g("radius", 24.0) as usize, g("amount", 0.6), [g("r", 1.0), g("g", 0.3), g("b", 0.1)]); let mut m = Frame { w, h, d: f.d.clone() };
-            for i in 0..n { let l = lum([m.d[i * 4], m.d[i * 4 + 1], m.d[i * 4 + 2]]); let v = ((l - th) / (1.0 - th).max(0.01)).clamp(0.0, 1.0); for j in 0..3 { m.d[i * 4 + j] = v * col[j]; } } box_blur3(&mut m, r.max(2)); for i in 0..n { for j in 0..3 { f.d[i * 4 + j] += m.d[i * 4 + j] * a * 2.0; } } }
+            for i in 0..n { let l = lum([m.d[i * 4], m.d[i * 4 + 1], m.d[i * 4 + 2]]); let v = ((l - th) / (1.0 - th).max(0.01)).clamp(0.0, 1.0); for j in 0..3 { m.d[i * 4 + j] = v * col[j]; } } blur::blur(&mut m, r.clamp(2, 1024)); for i in 0..n { for j in 0..3 { f.d[i * 4 + j] += m.d[i * 4 + j] * a * 2.0; } } }
         "bleach_bypass" => { let a = g("amount", 0.7); for i in 0..n { let c = [f.d[i * 4], f.d[i * 4 + 1], f.d[i * 4 + 2]]; let l = lum(c); let mix = |v: f32| if l < 0.5 { 2.0 * v * l } else { 1.0 - 2.0 * (1.0 - v) * (1.0 - l) }; for j in 0..3 { f.d[i * 4 + j] = c[j] + (mix(c[j]) - c[j]) * a; } } }
         "white_balance" => { let k = [g("r_gain", 1.0), g("g_gain", 1.0), g("b_gain", 1.0)]; for i in 0..n { for j in 0..3 { f.d[i * 4 + j] *= k[j]; } } }
         "color_transfer" => { let s = g("strength", 1.0); let get = |a: &str| [g(&format!("{a}r_mean"), 0.5), g(&format!("{a}g_mean"), 0.5), g(&format!("{a}b_mean"), 0.5)]; let gs = |a: &str| [g(&format!("{a}r_std"), 0.2), g(&format!("{a}g_std"), 0.2), g(&format!("{a}b_std"), 0.2)]; let (sm, ss, tm, ts) = (get("s"), gs("s"), get("t"), gs("t"));
@@ -151,5 +158,6 @@ pub fn apply3(kind: &str, pr: &Params, f: &mut Frame, t: f64, _seed: u64) -> Res
             for i in 0..n { let c = [f.d[i * 4], f.d[i * 4 + 1], f.d[i * 4 + 2]]; let l = lum(c); let t_ = sstep(0.0, 1.0, (l + bal * 0.5).clamp(0.0, 1.0)); for j in 0..3 { let tint = sc[j] * (1.0 - t_) * ss + hc[j] * t_ * hs; f.d[i * 4 + j] = c[j] + (tint - 0.5 * (ss * (1.0 - t_) + hs * t_)) * 0.5 ; } } }
         other => return crate::keying::apply4(other, pr, f, t, _seed),
     }
+    if f.d.iter().any(|v| !v.is_finite()) { return Err(format!("color effect '{kind}' produced nonfinite pixels; reduce extreme parameters")); }
     Ok(())
 }
