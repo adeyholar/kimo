@@ -80,6 +80,7 @@ pub struct Clip {
     /// Echo / temporal smear (AE Echo, CC Wide Time, frame blending).
     #[serde(default)]
     pub echo: Option<Echo>,
+    #[serde(default)] pub motion_path: Option<crate::motion::MotionPath>,
     /// Posterize time: quantize this clip's local time to N fps (0 = off).
     #[serde(default)]
     pub posterize_fps: f64,

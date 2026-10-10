@@ -3,6 +3,8 @@
 //! is generated from the registry, so nothing can exist without a tool.
 pub mod keyframe;
 pub mod hud;
+pub mod flow;
+pub mod motion;
 pub mod masks;
 pub mod confetti;
 pub mod shards;

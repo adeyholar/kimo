@@ -94,6 +94,7 @@ pub fn path_at(l: &MaskLayer, t: f64) -> Vec<PathPt> {
         PathPt { x: o[0], y: o[1], ix: o[2], iy: o[3], ox: o[4], oy: o[5], f: o[6].max(0.0) } }).collect()
 }
 
+pub fn flatten_pub(pts: &[PathPt], closed: bool, w: usize, h: usize) -> Vec<(f64, f64, f64)> { flatten(pts, closed, w, h) }
 fn flatten(pts: &[PathPt], closed: bool, w: usize, h: usize) -> Vec<(f64, f64, f64)> {
     let n = pts.len(); let (wf, hf) = (w as f64, h as f64); let mut poly = vec![]; let segs = if closed { n } else { n.saturating_sub(1) };
     for i in 0..segs { let a = &pts[i]; let b = &pts[(i + 1) % n];
@@ -206,7 +207,7 @@ fn raster_path_legacy(pts: &[PathPt], closed: bool, w: usize, h: usize) -> Vec<f
     for v in cov.iter_mut() { *v = v.min(1.0); } cov
 }
 
-fn box_pass(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize, horiz: bool) {
+pub(crate) fn box_pass(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize, horiz: bool) {
     let (len, lines) = if horiz { (w, h) } else { (h, w) }; let n = (2 * r + 1) as f32;
     for l in 0..lines { let idx = |i: usize| if horiz { l * w + i } else { i * w + l };
         let mut acc = 0f32; for i in 0..=r.min(len - 1) { acc += src[idx(i)]; } acc += src[idx(0)] * r as f32; // clamp-extend left

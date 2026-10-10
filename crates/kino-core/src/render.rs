@@ -136,6 +136,10 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         Source::Media { .. } => if let Some(fr) = cache.frames_of(&c.id) {
             let idx = if c.speed_curve.is_some() { (c.source_time(lt) * p.fps) as usize } else { (lt * p.fps) as usize };
             if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
+            let fb = prop(c, "flow_blur", lt) as f32;
+            if fb > 0.0 { let nxt = fr.get(idx + 1).map(|b| (b, false)).or_else(|| if idx > 0 { fr.get(idx - 1).map(|b| (b, true)) } else { None });
+                if let Some((nb, rev)) = nxt { let mut g2 = Frame::new(w, h); for (i, v) in nb.iter().enumerate() { g2.d[i] = *v as f32 / 255.0; } let q = (prop(c, "flow_quality", lt) as usize).max(3);
+                    let src = Frame { w, h, d: f.d.clone() }; f = crate::flow::flow_blur(&src, &g2, if rev { fb } else { fb }, q); } }
         },
     }
     f
@@ -234,9 +238,11 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         if let (Some(e), true) = (&c.echo, ek > 0) { match e.mode.as_str() { "average" => {} m => { op *= e.decay.clamp(0.0, 1.0).powi(ek as i32) as f32; if m == "add" { c_blend = "add"; } else if m == "screen" { c_blend = "screen"; } } } }
                 let (mut dx, mut dy) = (prop(c, "x", lt), prop(c, "y", lt));
         let mut mask: Option<Box<dyn Fn(usize, usize) -> f32>> = None;
-        let (mut sc, mut rot_extra) = (prop(c, "scale", lt), 0.0); let mut tplan: Option<crate::transitions::Plan> = None;
+        let (mut sc, mut rot_extra) = (prop(c, "scale", lt), 0.0);
+        let mp_at = |l2: f64| -> (f64, f64, f64) { match &c.motion_path { Some(mp) => { let (x, y, a) = crate::motion::sample(mp, prop(c, "path", l2), w, h); (x, y, if mp.auto_orient { a + mp.orient_offset } else { 0.0 }) } None => (0.0, 0.0, 0.0) } };
+        let (mp0x, mp0y, mp0a) = mp_at(lt); dx += mp0x; dy += mp0y; rot_extra += mp0a; let mut tplan: Option<crate::transitions::Plan> = None;
         if let Some(tr_in) = &c.transition_in { if lt < tr_in.duration {
-            let pl = crate::transitions::plan(tr_in, lt, w, h); op *= pl.op; dx += pl.dx; dy += pl.dy; sc *= pl.scale; rot_extra = pl.rot;
+            let pl = crate::transitions::plan(tr_in, lt, w, h); op *= pl.op; dx += pl.dx; dy += pl.dy; sc *= pl.scale; rot_extra += pl.rot;
             if let Some((col, a)) = pl.dip { for i in 0..w * h { for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - a) + col[j] * a; } out.d[i*4+3] = out.d[i*4+3] + a * (1.0 - out.d[i*4+3]); } }
             mask = None; tplan = Some(pl);
         }}
@@ -250,8 +256,8 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         }
         let moving = c.motion_blur > 0.0 && ek == 0 && { let sh0 = c.motion_blur / 360.0 / p.fps; ["x", "y", "scale", "rotation"].iter().any(|k| (prop(c, k, lt - sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9 || (prop(c, k, lt + sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9) };
         let tp=std::time::Instant::now(); let bbf = alpha_bbox(&f); let f = if moving { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h]; let mut u: Option<(usize, usize, usize, usize)> = None;
-            for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (prop(c, "x", lt2), prop(c, "y", lt2)); dx2 += dx - prop(c, "x", lt); dy2 += dy - prop(c, "y", lt);
-                let mut sc2 = prop(c, "scale", lt2); if sc != prop(c, "scale", lt) { sc2 *= sc / prop(c, "scale", lt).max(1e-9); } LAST_RECT.with(|l| l.set(None)); FAST_NS.with(|l| l.set(true)); let tf = transform_bb(&f, bbf, sc2, prop(c, "rotation", lt2) + rot_extra, dx2, dy2); FAST_NS.with(|l| l.set(false));
+            for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (prop(c, "x", lt2), prop(c, "y", lt2)); dx2 += dx - prop(c, "x", lt) - mp0x; dy2 += dy - prop(c, "y", lt) - mp0y; let (mp2x, mp2y, mp2a) = mp_at(lt2); dx2 += mp2x; dy2 += mp2y;
+                let mut sc2 = prop(c, "scale", lt2); if sc != prop(c, "scale", lt) { sc2 *= sc / prop(c, "scale", lt).max(1e-9); } LAST_RECT.with(|l| l.set(None)); FAST_NS.with(|l| l.set(true)); let tf = transform_bb(&f, bbf, sc2, prop(c, "rotation", lt2) + rot_extra - mp0a + mp2a, dx2, dy2); FAST_NS.with(|l| l.set(false));
                 if let Some((rx0, ry0, rx1, ry1)) = LAST_RECT.with(|l| l.get()) { u = Some(match u { Some((a, b, c2, d)) => (a.min(rx0), b.min(ry0), c2.max(rx1), d.max(ry1)), None => (rx0, ry0, rx1, ry1) });
                 for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; let a = tf.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += tf.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; wsum[i] += a; } } } } }
             if let Some((rx0, ry0, rx1, ry1)) = u { for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } } } acc }
@@ -452,4 +458,15 @@ pub fn render_mask_png(p: &Project, clip_id: &str, mask_id: Option<&str>, t: f64
         _ => { for j in 0..3 { o.d[i * 4 + j] = k; } } } o.d[i * 4 + 3] = 1.0; }
     let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", p.width, p.height),"-i","-","-frames:v","1",path]).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
     ch.stdin.take().unwrap().write_all(&to_rgba8(&o)).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(())
+}
+
+/// Write a colour-wheel visualisation of the optical flow between a media clip's frame at `t` and the next one.
+pub fn render_flow_png(p: &Project, clip_id: &str, t: f64, path: &str, cache: &mut Cache) -> Result<f64, String> {
+    prepare_at(p, cache, Some(t))?; let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == clip_id).ok_or("no such clip")?; let (w, h) = (p.width as usize, p.height as usize);
+    let fr = cache.frames_of(&c.id).ok_or("not a media clip")?; let idx = ((t - c.start) * p.fps) as usize; let (a, b) = (fr.get(idx).ok_or("no frame")?, fr.get(idx + 1).ok_or("no next frame")?);
+    let mk = |bb: &[u8]| { let mut f = Frame::new(w, h); for (i, v) in bb.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } f };
+    let t0 = std::time::Instant::now(); let (u, v, fw, fh) = crate::flow::flow(&mk(a), &mk(b), 5); let secs = t0.elapsed().as_secs_f64();
+    let mm = u.iter().zip(&v).map(|(a, b)| (a * a + b * b).sqrt()).fold(0.0f32, f32::max).max(1.0); let viz = crate::flow::flow_viz(&u, &v, fw, fh, mm * 0.8);
+    let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", fw, fh),"-i","-","-frames:v","1",path]).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+    ch.stdin.take().unwrap().write_all(&to_rgba8(&viz)).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(secs)
 }
