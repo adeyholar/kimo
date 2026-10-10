@@ -153,9 +153,15 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
             let k = f.h as f32 / 720.0; let (ax, ay) = (p(params, "amount", 29.0, t) * k, p(params, "amount_y", 9.0, t) * k); let (dec, fr) = (p(params, "decay", 27.0, t), p(params, "frequency", 12.5, t));
             let (rot, zm) = (p(params, "rotation", 0.0, t), p(params, "zoom", 0.0, t));
             let (mut dx, mut dy, mut dr, mut dz) = (0f32, 0f32, 0f32, 0f32);
+            if let Some(pr) = strings.get("profile") { // measured per-frame kick table "dx,dy;dx,dy;..." (pixels @720p), discrete frames like the reference
+                let tab: Vec<(f32, f32)> = pr.split(';').filter_map(|s| { let mut it = s.split(',').filter_map(|x| x.trim().parse::<f32>().ok()); Some((it.next()?, it.next()?)) }).collect();
+                let fps: f64 = strings.get("fps").and_then(|s| s.parse().ok()).unwrap_or(25.0); let sc = p(params, "scale", 1.0, t);
+                for h in hits.iter() { let fi = ((t - h) * fps + 1e-4).floor(); if fi >= 0.0 && (fi as usize) < tab.len() { let (a, b) = tab[fi as usize]; dx += a * k * sc; dy += b * k * sc; } }
+            } else {
             for (n, h) in hits.iter().enumerate() { let dt = (t - h) as f32; if dt < 0.0 || dt > 1.5 { continue; }
                 let env = (-dec * dt).exp(); let osc = (std::f32::consts::TAU * fr * dt).cos(); let sg: f32 = if n % 2 == 0 { 1.0 } else { -1.0 } * if (n / 2) % 2 == 0 { 1.0 } else { 0.7 };
                 dx += ax * env * osc; dy -= ay * env; dr += rot * env * osc * sg; dz += zm * env; }
+            }
             if dx.abs() < 1e-3 && dy.abs() < 1e-3 && dr.abs() < 1e-4 && dz.abs() < 1e-5 { return Ok(()); }
             let src = f.d.clone(); let (w, h) = (f.w, f.h); let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0); let (s_, c_) = (dr.to_radians().sin(), dr.to_radians().cos()); let inv = 1.0 / (1.0 + dz);
             for y in 0..h { for x in 0..w { let (px, py) = (x as f32 - cx - dx, y as f32 - cy - dy); let sx = ((px * c_ + py * s_) * inv + cx).clamp(0.0, w as f32 - 1.0); let sy = ((-px * s_ + py * c_) * inv + cy).clamp(0.0, h as f32 - 1.0);
