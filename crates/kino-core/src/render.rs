@@ -352,15 +352,16 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
 
 pub fn to_rgba8(f: &Frame) -> Vec<u8> { f.d.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect() }
 
+fn image_encoder_command(w:usize,h:usize,path:&str)->Command{let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{w}x{h}"),"-i","-","-frames:v","1",path]);cmd}
+fn write_image_command(f:&Frame,cmd:&mut Command,deadline:std::time::Duration)->Result<(),String>{let size=f.w.checked_mul(f.h).and_then(|n|n.checked_mul(4)).filter(|n|*n>0&&*n==f.d.len()).ok_or("invalid image frame shape")?;crate::guard::reserve(size);let mut encoder=crate::color::process::EncodeStream::new(cmd,size,deadline)?;encoder.write(to_rgba8(f))?;encoder.finish()}
+fn write_image(f:&Frame,path:&str)->Result<(),String>{write_image_command(f,&mut image_encoder_command(f.w,f.h,path),crate::color::process::encode_deadline(1))}
+
 pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<(), String> {
     if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) {return Err("HDR output cannot be shown as an SDR PNG; select an SDR preview output or render_high_bit_still".into())}
     prepare_at(p, cache, Some(t))?;
     let mut f = render_frame(p, t, cache)?;
     crate::color::pipeline::output(p,&mut f)?;
-    let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", p.width, p.height),"-i","-","-frames:v","1",path])
-        .stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
-    ch.stdin.take().unwrap().write_all(&to_rgba8(&f)).map_err(|e| e.to_string())?; let st=ch.wait().map_err(|e| e.to_string())?;if !st.success(){return Err("PNG encoder failed".into())}
-    Ok(())
+    write_image(&f,path)
 }
 
 fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Command{let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}",p.width,p.height),"-r",&format!("{}",p.fps),"-i","-","-c:v","libx264","-pix_fmt","yuv420p","-crf",&crf.to_string(),path]);cmd}
@@ -531,8 +532,7 @@ pub fn render_mask_png(p: &Project, clip_id: &str, mask_id: Option<&str>, t: f64
         "overlay" => { let g = 0.35 + 0.0; for j in 0..3 { o.d[i * 4 + j] = f.d[i * 4 + j] * (1.0 - k * g) + if j == 0 { 1.0 } else { 0.0 } * k * g; } }
         "cutout" => { for j in 0..3 { o.d[i * 4 + j] = f.d[i * 4 + j]; } } // straight colour; alpha carries the matte so the PNG is a real transparent cutout
         _ => { for j in 0..3 { o.d[i * 4 + j] = k; } } } o.d[i * 4 + 3] = if view == "cutout" { k * f.d[i * 4 + 3] } else { 1.0 }; }
-    let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", p.width, p.height),"-i","-","-frames:v","1",path]).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
-    ch.stdin.take().unwrap().write_all(&to_rgba8(&o)).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(())
+    write_image(&o,path)
 }
 
 /// Write a colour-wheel visualisation of the optical flow between a media clip's frame at `t` and the next one.
@@ -548,8 +548,7 @@ pub fn render_flow_png(p: &Project, clip_id: &str, t: f64, path: &str, cache: &m
     let(a,b)=flow_pair(fr,if swapped{i1}else{i0},if swapped{i0}else{i1},w,h)?;
     let t0=std::time::Instant::now();let(u,v,fw,fh)=crate::flow::flow(&a,&b,5);let secs=t0.elapsed().as_secs_f64();
     let mm = u.iter().zip(&v).map(|(a, b)| (a * a + b * b).sqrt()).fold(0.0f32, f32::max).max(1.0); let viz = crate::flow::flow_viz(&u, &v, fw, fh, mm * 0.8);
-    let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", fw, fh),"-i","-","-frames:v","1",path]).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
-    ch.stdin.take().unwrap().write_all(&to_rgba8(&viz)).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(secs)
+    write_image(&viz,path)?;Ok(secs)
 }
 
 fn flow_pair(fr:&Frames,a:usize,b:usize,w:usize,h:usize)->Result<(Frame,Frame),String>{
@@ -571,4 +570,9 @@ fn flow_pair(fr:&Frames,a:usize,b:usize,w:usize,h:usize)->Result<(Frame,Frame),S
 }
 #[cfg(test)]mod legacy_unwind_test{use super::*;
 #[test]fn render_worker_panic_reaps_encoder(){let pidpath=std::env::temp_dir().join(format!("kino-legacy-unwind-pid-{}",std::process::id()));let script=format!("echo $$ > {}; exec sleep 30",pidpath.display());let result=std::panic::catch_unwind(||{let _encoder=crate::color::process::EncodeStream::new(Command::new("sh").args(["-c",&script]),4,std::time::Duration::from_secs(2)).unwrap();std::thread::sleep(std::time::Duration::from_millis(30));std::thread::scope(|sc|{sc.spawn(||panic!("injected render worker failure"));});});assert!(result.is_err());let id=std::fs::read_to_string(&pidpath).unwrap();assert!(!std::path::Path::new(&format!("/proc/{}",id.trim())).exists());std::fs::remove_file(pidpath).unwrap();}
+}
+#[cfg(test)]mod image_writer_tests{use super::*;
+#[test]fn alpha_png_exact_bytes_and_decoded_hash(){use std::hash::{Hash,Hasher};let base=std::env::temp_dir().join(format!("kino-image-base-{}.png",std::process::id()));let after=std::env::temp_dir().join(format!("kino-image-after-{}.png",std::process::id()));let f=Frame{w:32,h:16,d:(0..512).flat_map(|i|[i as f32/511.,0.25,0.75,(i%32) as f32/31.]).collect()};let mut old=image_encoder_command(32,16,base.to_str().unwrap()).stdin(Stdio::piped()).spawn().unwrap();old.stdin.take().unwrap().write_all(&to_rgba8(&f)).unwrap();assert!(old.wait().unwrap().success());write_image(&f,after.to_str().unwrap()).unwrap();assert_eq!(std::fs::read(&base).unwrap(),std::fs::read(&after).unwrap());let decode=|path:&std::path::Path|Command::new("ffmpeg").args(["-v","error","-i"]).arg(path).args(["-f","rawvideo","-pix_fmt","rgba","-"]).output().unwrap().stdout;let a=decode(&base);let b=decode(&after);let hash=|v:&[u8]|{let mut h=std::collections::hash_map::DefaultHasher::new();v.hash(&mut h);h.finish()};assert_eq!(hash(&a),hash(&b));assert_eq!(a,b);assert!(b.chunks_exact(4).any(|p|p[3]>0&&p[3]<255));std::fs::remove_file(base).unwrap();std::fs::remove_file(after).unwrap();}
+#[test]fn stuck_image_child_deadline_reaps(){let pid=std::env::temp_dir().join(format!("kino-image-stuck-pid-{}",std::process::id()));let mut cmd=Command::new("sh");cmd.args(["-c",&format!("echo $$ > {}; exec sleep 30",pid.display())]);let f=Frame{w:512,h:512,d:vec![0.25;512*512*4]};let start=std::time::Instant::now();assert!(write_image_command(&f,&mut cmd,std::time::Duration::from_millis(100)).unwrap_err().contains("deadline"));assert!(start.elapsed()<std::time::Duration::from_secs(2));let id=std::fs::read_to_string(&pid).unwrap();assert!(!std::path::Path::new(&format!("/proc/{}",id.trim())).exists());std::fs::remove_file(pid).unwrap();}
+#[test]fn image_argv_is_unchanged(){let cmd=image_encoder_command(32,16,"alpha.png");let argv:Vec<_>=cmd.get_args().map(|v|v.to_string_lossy().to_string()).collect();assert_eq!(argv,vec!["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s","32x16","-i","-","-frames:v","1","alpha.png"]);}
 }

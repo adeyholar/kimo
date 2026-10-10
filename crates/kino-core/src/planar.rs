@@ -324,7 +324,7 @@ pub fn adaptive_matte(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f
     let i = (((t - sp.src_start) * fps).round() as i64 - sp.f0 as i64).clamp(0, seq.mats.len() as i64 - 1) as usize; let lt = (t - c.start).max(0.0); let q = pin_quad(c, lt)?;
     let hm = solve_h(&q, &UNIT)?; let mut m = vec![1f32; w * h]; let mat = &seq.mats[i];
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN); for p in &q { x0 = x0.min(p[0]); y0 = y0.min(p[1]); x1 = x1.max(p[0]); y1 = y1.max(p[1]); }
-    for y in y0.max(0.0) as usize..=(y1.min(h as f64 - 1.0).max(0.0) as usize) { for x in x0.max(0.0) as usize..=(x1.min(w as f64 - 1.0).max(0.0) as usize) { let (u, v) = ap(&hm, x as f64 + 0.5, y as f64 + 0.5); if u < 0.0 || v < 0.0 || u >= 1.0 || v >= 1.0 { continue; }
+    for y in y0.max(0.0) as usize..=(y1.min(h as f64 - 1.0).max(0.0) as usize) { for x in x0.max(0.0) as usize..=(x1.min(w as f64 - 1.0).max(0.0) as usize) { let (u, v) = ap(&hm, x as f64 + 0.5, y as f64 + 0.5); let (u, v) = (u.clamp(0.0, 0.9999), v.clamp(0.0, 0.9999)); // edge-extend: the antialiased quad rim must be cut like the pixels just inside it
         let (fx, fy) = ((u * seq.pw as f64 - 0.5).clamp(0.0, seq.pw as f64 - 1.001), (v * seq.ph as f64 - 0.5).clamp(0.0, seq.ph as f64 - 1.001)); let (ix, iy) = (fx as usize, fy as usize); let (ax, ay) = ((fx - ix as f64) as f32, (fy - iy as f64) as f32);
         let s = |xx: usize, yy: usize| mat[yy * seq.pw + xx] as f32 / 255.0; m[y * w + x] = s(ix, iy) * (1.0 - ax) * (1.0 - ay) + s(ix + 1, iy) * ax * (1.0 - ay) + s(ix, iy + 1) * (1.0 - ax) * ay + s(ix + 1, iy + 1) * ax * ay; } }
     Some(m)
