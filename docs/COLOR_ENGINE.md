@@ -295,3 +295,6 @@ MCP pipeline setter rejects unknown settings instead of silently ignoring typos;
 
 ## Stale wrapper cleanup
 `set_effect_encoding(clear=true)` works after the managed pipeline is disabled, so a stale wrapper can be removed without temporarily re-enabling color management. Adding/configuring a wrapper still requires enabled management. Five helper tests pass including disable-then-clear.
+
+## Reusable actual-footage color contract smoke
+`examples/color_contract_smoke.py source.mp4 [--ocio]` exercises legacy preview, managed native-fit workingEXR+inspection/scopes/audit, SDR RGB16 and PQ/HLG RGB16 headers. Optional reference compare/PNG runs only with explicit--ocio and installed pinned dependency; no installation. Structured timings/results saved as evidence.json. Actual320x18010frame footage run completed; output tags match declared SDR/PQ/HLG transfers andGBRP16, legacy/reference PNG pixels inspected. This is integration smoke, not universalcameraformat or qualitycertification.
