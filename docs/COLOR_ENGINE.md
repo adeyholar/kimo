@@ -245,3 +245,12 @@ Media ffmpeg decoder is now held by a kill/reap-on-drop guard, covering native f
 
 ## Per-media declared input inspection
 Pipeline inspection now includes each media clip's effective base input gamut/transfer IDs, override/default provenance, invalid-ID flag and presence of animation that decode does not evaluate. This exposes the existing static declaration semantics without silently adding time-varying input transforms or inferring camera identity. Nested media included through flattened clip traversal.13pipeline tests pass, including distinctcamera input override and invalidID inspection.
+
+## Delivery probe bounded IO deadline
+Header inspection now captures stdout on a joined reader, retains at most1MiB and enforces a30second total stdout/process-exit deadline with100ms cancellation checks. Timeout/overflow/error kills and reaps the probe before joining. Tests exercise actual sleeping child reaping, oversized output, success and failed exit;9library+2delivery tests pass. This helper is for direct local commands whose stdout has no surviving descendant writers. General media decoder/encoder blocked IO is unchanged.
+
+## Explicit frame-level HDR metadata inspection
+`inspect_color_frame_metadata` adds a separate first-video-packet decode to read frame side data such as HEVC mastering-display and content-light SEI. It does not silently turn header-only inspection into frame decode. Some codecs/intervals return zero frames; missing metadata here does not prove whole-file absence. Bounded1MiB/30s capture applies. Actual10-frame320x180PQHEVC declaredP3/D65/1000nit/MaxCLL1000/FALL400 export0.623s: first frame confirms exact x265 rational mastering fields and content-light values. Three delivery tests pass including realHEVC export/SEI inspection. Declarations remain caller-supplied, not measured mastering.
+
+## Mastering setter precision preflight
+Quantized min/max distinction is now checked by mastering validation itself, so `set_hdr_mastering` rejects unrepresentable pairs before changing project state rather than waiting for x265 export. Four metadata tests pass, including no-mutation setter regression.

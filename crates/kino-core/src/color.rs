@@ -14,6 +14,7 @@ pub mod pipeline;
 pub mod wrapper;
 pub mod metadata;
 pub mod delivery;
+pub(crate) mod process;
 pub mod interchange;
 pub mod exposure;
 pub mod output_audit;

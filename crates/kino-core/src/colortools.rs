@@ -66,6 +66,7 @@ pub fn scope_png(f: &Frame, kind: &str, path: &str) -> Result<(), String> {
     ch.stdin.take().unwrap().write_all(&out).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(()) }
 
 pub fn commands() -> Vec<Command> { vec![
+    Command{name:"inspect_color_frame_metadata",description:"Explicit first-video-packet decode for frame-level static HDR SEI/side data. Some codecs yield noframe; no wholefile certification or measuredmetadata inference.",mutates:false,schema:obj(vec![("path",s("local video file"))],&["path"]),run:|_,a|crate::color::delivery::first_frame_metadata(sa(a,"path")?)},
     Command{name:"inspect_color_delivery",description:"Header-only local media inspection: codec/pixelformat, declared color tags/staticmetadata, audio and missingtagfields. No pixeldecode/calibration/inference or project mutation.",mutates:false,schema:obj(vec![("path",s("local exported video file"))],&["path"]),run:|_,a|crate::color::delivery::inspect(sa(a,"path")?)},
     Command{name:"inspect_color_pipeline",description:"Inspect current declared color domains, bound/wrapped effects and honest output/reference limitations. No media render, dependency probe or automatic transform selection.",mutates:false,schema:obj(vec![],&[]),run:|ss,_|crate::color::pipeline::inspect(&ss.project)},
     Command{name:"compare_aces2_reference",description:"Quantify configured Rec709/sRGB encodedfloat output vs pinned optionalACES2 SDRview. AP1working required; no qualityranking or mutation.",mutates:false,
