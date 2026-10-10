@@ -298,3 +298,15 @@ MCP pipeline setter rejects unknown settings instead of silently ignoring typos;
 
 ## Reusable actual-footage color contract smoke
 `examples/color_contract_smoke.py source.mp4 [--ocio]` exercises legacy preview, managed native-fit workingEXR+inspection/scopes/audit, SDR RGB16 and PQ/HLG RGB16 headers. Optional reference compare/PNG runs only with explicit--ocio and installed pinned dependency; no installation. Structured timings/results saved as evidence.json. Actual320x18010frame footage run completed; output tags match declared SDR/PQ/HLG transfers andGBRP16, legacy/reference PNG pixels inspected. This is integration smoke, not universalcameraformat or qualitycertification.
+
+## LUT declaration and read integrity
+LUT file reads stop at32MiB+1 even if a file grows after stat. Duplicate domain declarations or domain declarations after data now reject rather than silently redefining sample normalization. Direct LUT effect frame validation precedes file access, matching finite RGBA/alpha contract. Five LUT and two portability tests pass; interpolation math and valid LUT values unchanged.
+
+## LUT finite mix bounds
+Effect intensity blending now uses f64 weighted interpolation and checks output conversion, avoiding f32 subtraction overflow for extreme finite signed input. Zero intensity preserves the input exactly, even at f32 limits. Six LUT tests pass. Normal-value output rounding may differ at the last float bit; no new gamut/encoding inference.
+
+## Curve direct API preflight
+Curve lookup returns NaN for nonfinite inputs instead of underflowing its interval index and panicking. Effect API rejects malformed RGBA/invalid alpha before processing. Finite curve interpolation/extrapolation unchanged;5curve+2portability tests pass. Callers of scalar lookup still own interpreting nonfinite output.
+
+## Covariance positive-semidefinite evidence gate
+Lab transport checks normalized2x2principal minors and determinant, rejecting clearly indefinite symmetric source/reference covariances before regularization. Near-zero numerical tolerance1e-10 permits roundoff, flat/rank-deficient samples remain supported by explicit regularization. Seven matching tests pass, including indefinite2x2 and determinant-only cases. This validates covariance shape, not semantic shot quality.

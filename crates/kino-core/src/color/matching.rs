@@ -29,6 +29,7 @@ fn spd_power(mut a:Mat,power:f64)->Mat{
 }
 pub fn transport(src:&Stats,dst:&Stats,regularization:f64)->Result<Mat,String>{
     if [src,dst].iter().any(|s|s.count<4||s.mean.iter().chain(s.cov.iter().flatten()).any(|v|!v.is_finite())||(0..3).any(|i|s.cov[i][i]<0.||(0..3).any(|j|(s.cov[i][j]-s.cov[j][i]).abs()>1e-9))){return Err("Lab transport needs finite symmetric covariance and4samples".into())}
+    for s in [src,dst]{let c=s.cov;let scale=c.iter().flatten().fold(0f64,|m,v|m.max(v.abs())).max(1e-12);let a:Mat=c.map(|r|r.map(|v|v/scale));let det=a[0][0]*(a[1][1]*a[2][2]-a[1][2]*a[2][1])-a[0][1]*(a[1][0]*a[2][2]-a[1][2]*a[2][0])+a[0][2]*(a[1][0]*a[2][1]-a[1][1]*a[2][0]);if [(0,1),(0,2),(1,2)].iter().any(|&(i,j)|a[i][i]*a[j][j]-a[i][j]*a[j][i]< -1e-10)||det< -1e-10{return Err("Lab transport covariance must be positive semidefinite".into())}}
     if !regularization.is_finite()||!(1e-8..=0.1).contains(&regularization){return Err("regularization outside 1e-8..0.1".into())}
     let reg=|a:Mat|std::array::from_fn(|i|std::array::from_fn(|j|a[i][j]+if i==j{regularization}else{0.}));let cs=reg(src.cov);let ct=reg(dst.cov);let root=spd_power(cs,0.5);let ir=spd_power(cs,-0.5);
     let a=mm(ir,mm(spd_power(mm(root,mm(ct,root)),0.5),ir));if a.iter().flatten().any(|v|!v.is_finite()||v.abs()>100.){return Err("unstable match; use a richer sample or stronger regularization".into())}Ok(a)

@@ -5,13 +5,13 @@ use std::collections::BTreeMap;
 impl Lut{
     pub fn parse(text:&str)->Result<Self,String>{
         if text.len()>32*1024*1024{return Err("LUT exceeds 32 MiB".into())}
-        let(mut n,mut data,mut min,mut max)=(0usize,Vec::new(),[0.;3],[1.;3]);
+        let(mut n,mut data,mut min,mut max)=(0usize,Vec::new(),[0.;3],[1.;3]);let(mut seen_min,mut seen_max)=(false,false);
         for line in text.lines(){let line=line.split('#').next().unwrap_or("").trim();if line.is_empty(){continue}let tok:Vec<_>=line.split_whitespace().collect();
             match tok[0]{
                 "TITLE"=>continue,
                 "LUT_1D_SIZE"=>return Err("1D .cube not supported by this 3D parser".into()),
                 "LUT_3D_SIZE"=>{if n!=0||tok.len()!=2{return Err("invalid/duplicate LUT size".into())}n=tok[1].parse().map_err(|_|"invalid LUT size")?;if !(2..=65).contains(&n){return Err("LUT size must be 2..65".into())}},
-                "DOMAIN_MIN"|"DOMAIN_MAX"=>{let v=parse3(&tok[1..])?;if tok[0]=="DOMAIN_MIN"{min=v}else{max=v}},
+                "DOMAIN_MIN"|"DOMAIN_MAX"=>{if !data.is_empty(){return Err("LUT domain must precede data".into())}let v=parse3(&tok[1..])?;if tok[0]=="DOMAIN_MIN"{if seen_min{return Err("duplicate LUT domain minimum".into())}seen_min=true;min=v}else{if seen_max{return Err("duplicate LUT domain maximum".into())}seen_max=true;max=v}},
                 _=>{if n==0{return Err("LUT size must precede data".into())}if data.len()>=n*n*n{return Err("too many LUT rows".into())}data.push(parse3(&tok)?)}
             }
         }
@@ -27,12 +27,14 @@ impl Lut{
 }
 fn parse3(tok:&[&str])->Result<[f32;3],String>{if tok.len()!=3{return Err("expected three LUT numbers".into())}let mut v=[0.;3];for j in 0..3{v[j]=tok[j].parse::<f32>().map_err(|_|"invalid LUT number")?;if !v[j].is_finite()||v[j].abs()>1e6{return Err("nonfinite/out-of-range LUT value".into())}}Ok(v)}
 pub fn apply(pr:&Params,strings:&BTreeMap<String,String>,f:&mut Frame,t:f64)->Result<(),String>{
-    let path=strings.get("path").ok_or("lut needs strings.path")?;let meta=std::fs::metadata(path).map_err(|e|e.to_string())?;if meta.len()>32*1024*1024{return Err("LUT exceeds 32 MiB".into())}
+    super::frame::validate(f)?;let path=strings.get("path").ok_or("lut needs strings.path")?;let meta=std::fs::metadata(path).map_err(|e|e.to_string())?;if meta.len()>32*1024*1024{return Err("LUT exceeds 32 MiB".into())}
     // Cache bounded to eight entries, keyed by path+size+mtime to avoid stale same-path LUTs.
     use std::sync::{Mutex,OnceLock,Arc};static CACHE:OnceLock<Mutex<BTreeMap<String,Arc<Lut>>>>=OnceLock::new();
     let key=format!("{path}:{}:{:?}",meta.len(),meta.modified().ok());let cache=CACHE.get_or_init(Default::default);let l={let mut cache=cache.lock().map_err(|_|"LUT cache poisoned")?;
-        if let Some(l)=cache.get(&key){l.clone()}else{let l=Arc::new(Lut::parse(&std::fs::read_to_string(path).map_err(|e|e.to_string())?)?);if cache.len()>=8{cache.clear()}cache.insert(key,l.clone());l}};
+        if let Some(l)=cache.get(&key){l.clone()}else{let l=Arc::new(Lut::parse(&read_bounded(path)?)?);if cache.len()>=8{cache.clear()}cache.insert(key,l.clone());l}};
     let amount=p(pr,"intensity",1.,t);if !amount.is_finite(){return Err("invalid LUT intensity".into())}let amount=amount.clamp(0.,1.);
-    for px in f.d.chunks_exact_mut(4){if px[..3].iter().any(|v|!v.is_finite()){return Err("nonfinite LUT input".into())}let out=l.sample([px[0],px[1],px[2]]);for j in 0..3{px[j]+=(out[j]-px[j])*amount}}
+    for px in f.d.chunks_exact_mut(4){if px[..3].iter().any(|v|!v.is_finite()){return Err("nonfinite LUT input".into())}let out=l.sample([px[0],px[1],px[2]]);for j in 0..3{let v=px[j] as f64*(1.-amount as f64)+out[j] as f64*amount as f64;if !v.is_finite()||v.abs()>f32::MAX as f64{return Err("LUT interpolation overflow".into())}px[j]=v as f32}}
     Ok(())
 }
+
+fn read_bounded(path:&str)->Result<String,String>{use std::io::Read;let mut bytes=Vec::new();std::fs::File::open(path).map_err(|e|e.to_string())?.take(32*1024*1024+1).read_to_end(&mut bytes).map_err(|e|e.to_string())?;if bytes.len()>32*1024*1024{return Err("LUT exceeds32MiB while reading".into())}String::from_utf8(bytes).map_err(|e|e.to_string())}

@@ -15,12 +15,12 @@ impl Curve {
         }Ok(Self{x,y,m})
     }
     pub fn at(&self,v:f32)->f32{
-        let n=self.x.len();if v<=self.x[0]{return self.y[0]+(v-self.x[0])*self.m[0]}if v>=self.x[n-1]{return self.y[n-1]+(v-self.x[n-1])*self.m[n-1]}
+        if !v.is_finite(){return f32::NAN}let n=self.x.len();if v<=self.x[0]{return self.y[0]+(v-self.x[0])*self.m[0]}if v>=self.x[n-1]{return self.y[n-1]+(v-self.x[n-1])*self.m[n-1]}
         let i=self.x.partition_point(|x|*x<=v)-1;let h=self.x[i+1]-self.x[i];let t=(v-self.x[i])/h;let(t2,t3)=(t*t,t*t*t);
         (2.*t3-3.*t2+1.)*self.y[i]+(t3-2.*t2+t)*h*self.m[i]+(-2.*t3+3.*t2)*self.y[i+1]+(t3-t2)*h*self.m[i+1]
     }
 }
-pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String>{
+pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String>{super::frame::validate(f)?;
     let mut curves=Vec::new();
     for ch in ["m","r","g","b"]{let count=p(pr,&format!("{ch}_count"),2.,t);if !count.is_finite()||count.fract()!=0.||!(2. ..=32.).contains(&count){return Err("invalid curve count".into())}
         let pts:Vec<_>=(0..count as usize).map(|i|[p(pr,&format!("{ch}_x{i}"),i as f64/(count-1.) as f64,t),p(pr,&format!("{ch}_y{i}"),i as f64/(count-1.) as f64,t)]).collect();curves.push(Curve::new(&pts)?);
