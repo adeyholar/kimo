@@ -112,8 +112,13 @@ pub struct Track { pub id: String, pub clips: Vec<Clip>, #[serde(default)] pub l
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Asset { pub id: String, pub path: String, pub width: u32, pub height: u32, pub duration: f64, pub fps: f64 }
 
+/// Persisted auto-occluder anchor recipe: lets a reloaded project rebuild the surface reference frame from the source media.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OccSpec { pub src: String, pub src_start: f64, pub path: String, pub src_time: f64, pub q0: [[f64; 2]; 4], pub soft: f32, pub chroma: f32, pub w: usize, pub h: usize, #[serde(default)] pub adaptive: bool, #[serde(default)] pub f0: usize }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
+    #[serde(default)] pub occluders: BTreeMap<String, OccSpec>,
     #[serde(default)] pub color_pipeline: crate::color::pipeline::Pipeline,
     #[serde(default)] pub camera: BTreeMap<String, crate::keyframe::Prop>,
     pub name: String,
@@ -131,7 +136,7 @@ pub struct Project {
 
 impl Default for Project {
     fn default() -> Self {
-        Project { color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![] }
+        Project { occluders: BTreeMap::new(), color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![] }
     }
 }
 

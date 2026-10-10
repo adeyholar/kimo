@@ -274,6 +274,56 @@ pub fn track_mesh(p: &Project, clip_id: &str, q0: Quad, nx: usize, ny: usize, f0
 pub struct Anchor { pub src: String, pub src_start: f64, pub frame: Vec<u8>, pub q0: Quad, pub w: usize, pub h: usize, pub soft: f32, pub chroma: f32 }
 static ANCHORS: std::sync::Mutex<Option<std::collections::HashMap<String, Anchor>>> = std::sync::Mutex::new(None);
 pub fn set_anchor(target: &str, a: Anchor) { let mut g = ANCHORS.lock().unwrap(); g.get_or_insert_with(Default::default).insert(target.to_string(), a); }
+/// Rebuild a missing anchor (project reloaded) from its persisted recipe by grabbing the reference frame from the source media. Tries once per target.
+pub fn rebuild_anchor(target: &str, sp: &crate::model::OccSpec, w: usize, h: usize) {
+    static TRIED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+    { let mut g = TRIED.lock().unwrap(); let set = g.get_or_insert_with(Default::default); if !set.insert(target.to_string()) { return; } }
+    if sp.w != w || sp.h != h { return; }
+    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-ss", &format!("{:.6}", sp.src_time), "-i", &sp.path, "-frames:v", "1", "-vf", &format!("scale={}:{}", w, h), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output();
+    if let Ok(o) = out { if o.stdout.len() == w * h * 4 { set_anchor(target, Anchor { src: sp.src.clone(), src_start: sp.src_start, frame: o.stdout, q0: sp.q0, w, h, soft: sp.soft, chroma: sp.chroma }); } }
+}
+
+/// Adaptive occluder: a running model of the visible surface, built in plane (rectified) space while stepping the clip frame by frame. Pixels that differ
+/// sharply from the model are occluders and do not update it; everything else updates it (so key press, focus and light change on the surface are absorbed).
+/// The whole per-frame matte sequence is computed once per target (streaming decode, plane-resolution only) and cached.
+pub struct MatteSeq { pw: usize, ph: usize, mats: Vec<Vec<u8>> }
+static SEQS: std::sync::Mutex<Option<std::collections::HashMap<String, std::sync::Arc<MatteSeq>>>> = std::sync::Mutex::new(None);
+pub fn clear_seq(target: &str) { if let Some(m) = SEQS.lock().unwrap().as_mut() { m.remove(target); } }
+fn build_seq(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f64) -> Option<MatteSeq> {
+    let (w, h) = (sp.w, sp.h); let n = ((c.duration * fps).ceil() as usize).clamp(1, 4000); let t_of = |i: usize| sp.src_start + (sp.f0 + i) as f64 / fps - c.start;
+    let q0 = pin_quad(c, t_of(0).max(0.0))?; let len = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let (lw, lh) = ((len(q0[0], q0[1]) + len(q0[3], q0[2])) / 2.0, (len(q0[0], q0[3]) + len(q0[1], q0[2])) / 2.0); let pw = 256usize; let ph = ((pw as f64 * lh / lw.max(1.0)).round() as usize).clamp(48, 512);
+    let mut child = std::process::Command::new("ffmpeg").args(["-v", "error", "-ss", &format!("{:.6}", sp.src_time), "-i", &sp.path, "-vf", &format!("fps={},scale={}:{}", fps, w, h), "-frames:v", &n.to_string(), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
+    let mut out = child.stdout.take()?; let mut buf = vec![0u8; w * h * 4]; let mut mats: Vec<Vec<u8>> = vec![]; let mut model: Vec<f32> = vec![]; use std::io::Read;
+    let (lo, hi) = (0.07 / sp.soft.max(0.2), 0.16 / sp.soft.max(0.2));
+    for i in 0..n { if out.read_exact(&mut buf).is_err() { break; } crate::guard::check();
+        let q = match pin_quad(c, t_of(i).max(0.0)) { Some(q) => q, None => break }; let m8 = crate::shards::sq2quad([(q[0][0], q[0][1]), (q[1][0], q[1][1]), (q[2][0], q[2][1]), (q[3][0], q[3][1])]);
+        let mut rect = vec![0f32; pw * ph * 3]; for y in 0..ph { for x in 0..pw { let (px, py) = crate::shards::hmap(&m8, (x as f64 + 0.5) / pw as f64, (y as f64 + 0.5) / ph as f64); let (px, py) = (px.clamp(0.0, w as f64 - 1.001), py.clamp(0.0, h as f64 - 1.001)); let (ix, iy) = (px as usize, py as usize); let (fx, fy) = ((px - ix as f64) as f32, (py - iy as f64) as f32);
+            for j in 0..3 { let s = |xx: usize, yy: usize| buf[(yy * w + xx) * 4 + j] as f32 / 255.0; rect[(y * pw + x) * 3 + j] = s(ix, iy) * (1.0 - fx) * (1.0 - fy) + s(ix + 1, iy) * fx * (1.0 - fy) + s(ix, iy + 1) * (1.0 - fx) * fy + s(ix + 1, iy + 1) * fx * fy; } } }
+        if model.is_empty() { model = rect.clone(); }
+        let mut diff = vec![0f32; pw * ph]; for y in 0..ph { for x in 0..pw { let mut best = f32::MAX; for oy in -1i32..=1 { for ox in -1i32..=1 { let (xx, yy) = ((x as i32 + ox).clamp(0, pw as i32 - 1) as usize, (y as i32 + oy).clamp(0, ph as i32 - 1) as usize);
+            let (a, b) = ((y * pw + x) * 3, (yy * pw + xx) * 3); let mut m = 0f32; for j in 0..3 { m = m.max((rect[a + j] - model[b + j]).abs()); }
+            if sp.chroma > 0.0 { let yc = 0.299 * rect[a] + 0.587 * rect[a + 1] + 0.114 * rect[a + 2]; let ya = 0.299 * model[b] + 0.587 * model[b + 1] + 0.114 * model[b + 2]; let dch = (((rect[a] - yc) - (model[b] - ya)).abs().max(((rect[a + 2] - yc) - (model[b + 2] - ya)).abs()) * 2.5).min(1.0); m = m * (1.0 - sp.chroma) + dch * sp.chroma; }
+            best = best.min(m); } } diff[y * pw + x] = best; } }
+        let mut t1 = vec![0f32; pw * ph]; let mut t2 = vec![0f32; pw * ph]; crate::masks::box_pass(&diff, &mut t1, pw, ph, 2, true); crate::masks::box_pass(&t1, &mut t2, pw, ph, 2, false);
+        let occ: Vec<f32> = t2.iter().map(|&d| { let x = ((d - lo) / (hi - lo)).clamp(0.0, 1.0); x * x * (3.0 - 2.0 * x) }).collect();
+        // dilate the occluder by 2 plane px before deciding what may update the model, so soft finger edges never leak into it
+        let mut upd = vec![0f32; pw * ph]; for y in 0..ph { for x in 0..pw { let mut mx = 0f32; for dy in -2i32..=2 { for dx in -2i32..=2 { let (xx, yy) = ((x as i32 + dx).clamp(0, pw as i32 - 1) as usize, (y as i32 + dy).clamp(0, ph as i32 - 1) as usize); mx = mx.max(occ[yy * pw + xx]); } } upd[y * pw + x] = mx; } }
+        for k in 0..pw * ph { let a = 0.35 * (1.0 - upd[k]); for j in 0..3 { model[k * 3 + j] += (rect[k * 3 + j] - model[k * 3 + j]) * a; } }
+        mats.push(occ.iter().map(|&o| ((1.0 - o) * 255.0).round() as u8).collect()); }
+    let _ = child.kill(); let _ = child.wait(); if mats.is_empty() { None } else { Some(MatteSeq { pw, ph, mats }) }
+}
+/// Image-space coverage matte (1 = surface visible) for the adaptive mode at timeline time `t`; None when it cannot be built.
+pub fn adaptive_matte(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f64, t: f64, w: usize, h: usize) -> Option<Vec<f32>> {
+    let seq = { let mut g = SEQS.lock().unwrap(); let map = g.get_or_insert_with(Default::default); if let Some(s) = map.get(&c.id) { Some(s.clone()) } else { drop(g); let s = build_seq(c, sp, fps).map(std::sync::Arc::new); if let Some(s) = &s { SEQS.lock().unwrap().get_or_insert_with(Default::default).insert(c.id.clone(), s.clone()); } s } }?;
+    let i = (((t - sp.src_start) * fps).round() as i64 - sp.f0 as i64).clamp(0, seq.mats.len() as i64 - 1) as usize; let lt = (t - c.start).max(0.0); let q = pin_quad(c, lt)?;
+    let hm = solve_h(&q, &UNIT)?; let mut m = vec![1f32; w * h]; let mat = &seq.mats[i];
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN); for p in &q { x0 = x0.min(p[0]); y0 = y0.min(p[1]); x1 = x1.max(p[0]); y1 = y1.max(p[1]); }
+    for y in y0.max(0.0) as usize..=(y1.min(h as f64 - 1.0).max(0.0) as usize) { for x in x0.max(0.0) as usize..=(x1.min(w as f64 - 1.0).max(0.0) as usize) { let (u, v) = ap(&hm, x as f64 + 0.5, y as f64 + 0.5); if u < 0.0 || v < 0.0 || u >= 1.0 || v >= 1.0 { continue; }
+        let (fx, fy) = ((u * seq.pw as f64 - 0.5).clamp(0.0, seq.pw as f64 - 1.001), (v * seq.ph as f64 - 0.5).clamp(0.0, seq.ph as f64 - 1.001)); let (ix, iy) = (fx as usize, fy as usize); let (ax, ay) = ((fx - ix as f64) as f32, (fy - iy as f64) as f32);
+        let s = |xx: usize, yy: usize| mat[yy * seq.pw + xx] as f32 / 255.0; m[y * w + x] = s(ix, iy) * (1.0 - ax) * (1.0 - ay) + s(ix + 1, iy) * ax * (1.0 - ay) + s(ix, iy + 1) * (1.0 - ax) * ay + s(ix + 1, iy + 1) * ax * ay; } }
+    Some(m)
+}
 pub fn anchor_src(target: &str) -> Option<(String, f64)> { ANCHORS.lock().unwrap().as_ref()?.get(target).map(|a| (a.src.clone(), a.src_start)) }
 
 /// Coverage matte (1 = surface visible, 0 = occluder) for the tracked quad `q` in the current source frame `cur` (rgba u8, same size as the anchor).
