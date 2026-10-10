@@ -32,8 +32,8 @@ if sys.argv[1]=='plate':
 else:
     k=Kino(); C=k.call; C("project_set",width=W,height=H,fps=FPS); a=C("import_media",path="/tmp/wallplate.mp4")["asset_id"]; t=C("add_track")["track_id"]
     m=C("add_clip",track_id=t,source_type="media",asset_id=a,start=0,duration=D)["clip_id"]
-    t2=C("add_track")["track_id"]; tx=C("add_text",track_id=t2,text="LOCKED\nTO WALL",start=0,duration=D,size=230,color=[0.85,0.05,0.35],stroke_width=0)["clip_id"]
-    q0=gt(0); r=C("track_planar",clip_id=m,corners=[v/s for p in q0 for v,s in zip(p,(W,H))],target_clip_id=tx,light=0.0,return_quads=True)
+    t2=C("add_track")["track_id"]; tx=C("add_text",track_id=t2,text="LOCKED\nTO WALL",start=0,duration=D,size=230,color=[0.85,0.05,0.35])["clip_id"]
+    q0=gt(0); r=C("track_planar",clip_id=m,corners=[v/s for p in q0 for v,s in zip(p,(W,H))],target_clip_id=tx,light=0.0,occluder_matte=True,return_quads=True)
     errs=[]
     for i,qd in enumerate(r["quads"]):
         g=gt(i); e=[math.hypot(qd[2*j]-g[j][0],qd[2*j+1]-g[j][1]) for j in range(4)]; errs.append(sum(e)/4)

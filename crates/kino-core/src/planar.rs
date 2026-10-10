@@ -146,3 +146,27 @@ pub fn pin_render(c: &Clip, f: &Frame, lt: f64, fps: f64) -> Option<Frame> {
         for i in 0..f.w * f.h { let a = g.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += g.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; } } }
     for i in 0..f.w * f.h { let a = acc.d[i * 4 + 3]; if a > 1e-6 { for j in 0..3 { acc.d[i * 4 + j] /= a; } acc.d[i * 4 + 3] = a / n as f32; } } Some(acc)
 }
+
+// ---- occluder auto-matte -------------------------------------------------------------------------------------------------------------
+/// Session-held anchor for a pinned layer: the source frame the track started on, used at render time to see what covers the surface.
+pub struct Anchor { pub src: String, pub src_start: f64, pub frame: Vec<u8>, pub q0: Quad, pub w: usize, pub h: usize, pub soft: f32 }
+static ANCHORS: std::sync::Mutex<Option<std::collections::HashMap<String, Anchor>>> = std::sync::Mutex::new(None);
+pub fn set_anchor(target: &str, a: Anchor) { let mut g = ANCHORS.lock().unwrap(); g.get_or_insert_with(Default::default).insert(target.to_string(), a); }
+pub fn anchor_src(target: &str) -> Option<(String, f64)> { ANCHORS.lock().unwrap().as_ref()?.get(target).map(|a| (a.src.clone(), a.src_start)) }
+
+/// Coverage matte (1 = surface visible, 0 = occluder) for the tracked quad `q` in the current source frame `cur` (rgba u8, same size as the anchor).
+pub fn occluder_matte(target: &str, cur: &[u8], q: &Quad, gain: f32) -> Option<Vec<f32>> {
+    let g = ANCHORS.lock().unwrap(); let a = g.as_ref()?.get(target)?; let (w, h) = (a.w, a.h); if cur.len() < w * h * 4 { return None; }
+    let hm = solve_h(q, &a.q0)?; let mut diff = vec![0f32; w * h]; let mut inq = vec![false; w * h];
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN); for p in q { x0 = x0.min(p[0]); y0 = y0.min(p[1]); x1 = x1.max(p[0]); y1 = y1.max(p[1]); }
+    let (bx0, by0, bx1, by1) = (x0.max(0.0) as usize, y0.max(0.0) as usize, (x1.min(w as f64 - 1.0)).max(0.0) as usize, (y1.min(h as f64 - 1.0)).max(0.0) as usize);
+    for y in by0..=by1 { for x in bx0..=bx1 { let (u, v) = ap(&hm, x as f64 + 0.5, y as f64 + 0.5); if u < 1.0 || v < 1.0 || u > w as f64 - 2.0 || v > h as f64 - 2.0 { continue; }
+        let (ix, iy) = (u as usize, v as usize); let (fx, fy) = ((u - ix as f64) as f32, (v - iy as f64) as f32); let mut m = 0f32;
+        for j in 0..3 { let s = |xx: usize, yy: usize| a.frame[(yy * w + xx) * 4 + j] as f32; let av = s(ix, iy) * (1.0 - fx) * (1.0 - fy) + s(ix + 1, iy) * fx * (1.0 - fy) + s(ix, iy + 1) * (1.0 - fx) * fy + s(ix + 1, iy + 1) * fx * fy;
+            m = m.max((cur[(y * w + x) * 4 + j] as f32 - av * gain).abs() / 255.0); } diff[y * w + x] = m; inq[y * w + x] = true; } }
+    let mut t1 = vec![0f32; w * h]; let mut t2 = vec![0f32; w * h]; crate::masks::box_pass(&diff, &mut t1, w, h, 3, true); crate::masks::box_pass(&t1, &mut t2, w, h, 3, false);
+    let (lo, hi) = (0.07 / a.soft.max(0.2), 0.16 / a.soft.max(0.2)); let mut m: Vec<f32> = t2.iter().map(|&d| { let x = ((d - lo) / (hi - lo)).clamp(0.0, 1.0); 1.0 - x * x * (3.0 - 2.0 * x) }).collect();
+    // grow the occluder by 2px and feather
+    let mut mn = m.clone(); for y in 2..h.saturating_sub(2) { for x in 2..w.saturating_sub(2) { if !inq[y * w + x] { continue; } let mut v = 1f32; for dy in -2i32..=2 { for dx in -2i32..=2 { v = v.min(m[((y as i32 + dy) as usize) * w + (x as i32 + dx) as usize]); } } mn[y * w + x] = v; } }
+    crate::masks::box_pass(&mn, &mut t1, w, h, 1, true); crate::masks::box_pass(&t1, &mut m, w, h, 1, false); for i in 0..w * h { if !inq[i] { m[i] = 1.0; } } Some(m)
+}
