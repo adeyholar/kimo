@@ -223,7 +223,7 @@ Scene3D additions (V1): shadows:true (1536 px shadow map per directional light, 
 ## Motion program (queued, requested: all motion features of Premiere, After Effects, Resolve Studio, plus kino-exclusive)
 Status honest: nothing below is done unless marked. Existing: motion blur (shutter-angle, per layer), point/ring tracker, stabilizer, speed ramp, particles, physics, Scene3D.
 - [ ] 1. Track mattes (alpha/luma/inverted), collapse transforms. DONE V1: precomps (group_clips / ungroup_clip: nested tracks on a local clock, group transform/effects/mask/opacity/keyframes apply to the whole group; gaps: no editing of grouped clips in place, no time remap of the group, no continuous rasterization, nested audio not mixed)
-- [ ] 2. Expressions (wiggle, loopIn/Out, time, valueAtTime, linkage), bezier graph-editor handles, spatial motion paths with auto-orient, text animators
+- [~] 2. Expressions V1 DONE: op stack per property/effect param (wiggle w/ octaves+seed, loop_in/out cycle|pingpong|offset|continue, sin, inertia, posterize_time, clamp, round) via set_expression; cubic-bezier key handles via set_keyframe_bezier (overshoot ok). Gaps: no free-form expression interpreter (linkage, valueAtTime, index), no per-axis 2D wiggle correlation, no handle UI/ separate in/out influence. TODO still: spatial motion paths with auto-orient, text animators polish
 - [ ] 3. Echo, posterize time, frame blending, optical-flow interpolation and slow-mo, optical-flow motion blur for footage, time displacement, rolling-shutter repair
 - [ ] 4. Motion blur for Scene3D geometry and 3D layers, per-effect blur
 - [ ] 5. Planar/homography tracker, mask tracking, occlusion re-acquire, 3D camera solve, face tracking, warp stabilizer parity, object removal
