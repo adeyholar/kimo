@@ -17,7 +17,7 @@ pub fn input(p:&Project,c:&Clip,f:&mut Frame)->Result<(),String>{let q=&p.color_
     transform(f,g,q.working_gamut,t,0,q.reference_white,false,false)
 }
 pub fn output(p:&Project,f:&mut Frame)->Result<(),String>{let q=&p.color_pipeline;if !q.enabled{return Ok(())}q.validate()?;transform(f,q.working_gamut,q.output_gamut,0,q.output_transfer,q.reference_white,q.tone_map,q.gamut_compress)}
-pub fn rgba16(f:&Frame)->Result<Vec<u8>,String>{if f.w==0||f.h==0||f.w.checked_mul(f.h).and_then(|v|v.checked_mul(4))!=Some(f.d.len()){return Err("invalid RGBA16 frame shape".into())}crate::guard::reserve(f.d.len().checked_mul(2).ok_or("RGBA16 size overflow")?);let mut b=Vec::with_capacity(f.d.len()*2);for v in &f.d{if !v.is_finite(){return Err("nonfinite output".into())}b.extend_from_slice(&((v.clamp(0.,1.)*65535.+0.5) as u16).to_le_bytes())}Ok(b)}
+pub fn rgba16(f:&Frame)->Result<Vec<u8>,String>{super::frame::validate(f)?;if f.w==0||f.h==0||f.w.checked_mul(f.h).and_then(|v|v.checked_mul(4))!=Some(f.d.len()){return Err("invalid RGBA16 frame shape".into())}crate::guard::reserve(f.d.len().checked_mul(2).ok_or("RGBA16 size overflow")?);let mut b=Vec::with_capacity(f.d.len()*2);for(i,v) in f.d.iter().enumerate(){if i%262144==0{crate::guard::check()}if !v.is_finite(){return Err("nonfinite output".into())}b.extend_from_slice(&((v.clamp(0.,1.)*65535.+0.5) as u16).to_le_bytes())}Ok(b)}
 
 /// High-bit streaming export. PQ: Rec2020/PQ 10-bit HEVC tagged HDR10-compatible,
 /// but no dynamic metadata and no implied HDR mastering certification.

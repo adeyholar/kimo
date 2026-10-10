@@ -325,3 +325,15 @@ Shared frame preflight now checks the call guard before scanning input. Linear g
 
 ### LUT parser bounded token memory
 The .cube parser takes at most five tokens from each row before enforcing the existing row grammar, avoiding a huge temporary token vector on a single hostile line. Valid size declarations preflight and reserve the exact 3D table capacity. Parsing checks cancellation every 4096 lines and applying a LUT checks every 65536 pixels. Seven focused LUT tests cover valid vertices/domains, invalid headers, huge token rows and extended finite mix. TITLE remains ignored, not interpreted as executable content.
+
+### Exposure quantile allocation integrity
+Exposure analysis/comparison now allocate their declared maximum f64 sample capacity after memory preflight, instead of growing a Vec beyond that estimate on non-power-of-two frame sizes. Guard checks bracket quantile sorting (the sort itself is not interruptible). Six exposure behavior tests and an isolated budget test pass; insufficient capacity fails before allocating the sample vector.
+
+### RGBA16 boundary alpha contract
+The direct RGBA16 output packer validates finite RGBA and alpha0..1 before allocating output bytes, while finite signed/over-range RGB still clamps at this integer delivery boundary. Cancellation is checked every 65536 pixels during packing. Fifteen pipeline tests pass, including the exact extended-RGB clamp/quarter-alpha quantization result and invalid-alpha rejection. This is not a policy change for valid rendered frames.
+
+### Lab transport control integrity
+Direct Lab effect calls reject nonfinite strength/gamut-compress controls before mutation rather than allowing infinity to clamp or NaN comparisons to select a mode. Finite strength still follows the existing 0..1 clamp. Nine Lab tests pass, including both controls at NaN/positive/negative infinity. No matching-policy or default change.
+
+### Direct managed-control rejection matrix
+A reusable regression iterates the catalogs for managed conversion, linear grade, white adaptation, gamut ray, shoulder, curves, CDL and Lab matching. Each declared numeric control is set independently to NaN, positive infinity and negative infinity. All 138 combinations must return an error before writing any pixels. This complements JSON input sanitization and the existing extreme-finite/frame-shape tests, not random fuzzing or proof for every effect.
