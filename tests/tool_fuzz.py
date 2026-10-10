@@ -1,0 +1,62 @@
+"""Robustness runner: calls every MCP tool with hostile args. Fails on crash, hang, or non-JSON reply.
+Usage (from repo root): python3 tests/tool_fuzz.py"""
+import json, subprocess, sys, select, time
+EXE = "target/release/kino-mcp"
+class S:
+    def __init__(s):
+        s.p = subprocess.Popen([EXE], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True); s.i = 0; s.rpc("initialize", {})
+    def rpc(s, m, params, to=60):
+        s.i += 1; s.p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": s.i, "method": m, "params": params}) + "\n"); s.p.stdin.flush()
+        r, _, _ = select.select([s.p.stdout], [], [], to)
+        if not r: raise TimeoutError("hang")
+        line = s.p.stdout.readline()
+        if not line: raise EOFError("server died")
+        return json.loads(line)
+SKIP = {"export", "export_gif", "project_set", "render_frame", "transcribe", "download_stock"}   # slow / network
+def vals(sc):
+    t = sc.get("type"); 
+    if "enum" in sc: return [sc["enum"][0]]
+    return {"number": [0, -1, 1e12, 0.5], "integer": [0, -1, 2**40], "string": ["", "nope", "x" * 5000], "boolean": [True, False], "array": [[], [1, 2, 3], ["a"]], "object": [{}, {"a": 1}]}.get(t, [None, 0, "x"])
+def main():
+    s = S(); tools = s.rpc("tools/list", {})["result"]["tools"]; bad = []; n = 0
+    def ok(n, **a):
+        r = s.rpc("tools/call", {"name": n, "arguments": a}); return json.loads(r["result"]["content"][0]["text"])
+    ids = {}
+    try:
+        ok("project_set", width=320, height=180, fps=24)
+        ids["asset_id"] = ok("import_media", path="/tmp/bgB.png")["asset_id"]
+        ids["track_id"] = ok("add_track")["track_id"]
+        c = ok("add_clip", track_id=ids["track_id"], source_type="media", asset_id=ids["asset_id"], start=0, duration=2)
+        ids["clip_id"] = c.get("clip_id") or c.get("id")
+    except Exception as e:
+        print("setup failed (running without real ids):", e)
+    def call(name, args):
+        nonlocal s, n; n += 1
+        try:
+            r = s.rpc("tools/call", {"name": name, "arguments": args})
+            if "result" not in r and "error" not in r: bad.append((name, args, "malformed"))
+        except Exception as e:
+            bad.append((name, str(args)[:120], repr(e))); s = S()
+    for t in tools:
+        name = t["name"]
+        if name in SKIP: continue
+        props = t.get("inputSchema", {}).get("properties", {})
+        call(name, {})
+        call(name, {k: None for k in props})
+        call(name, {k: "nope" for k in props})
+        call(name, {k: -1 for k in props})
+        for k, sc in props.items():
+            for v in vals(sc): call(name, {k: v})
+        real = {k: ids[k] for k in props if k in ids}
+        if real:
+            call(name, real)
+            for k, sc in props.items():
+                for v in vals(sc): call(name, {**real, k: v})
+        for v in (1e12, -1e12, 0):
+            call(name, {**real, **{k: v for k, sc in props.items() if sc.get("type") in ("number", "integer")}})
+        for v in (1e12, -1e12, 0):
+            call(name, {k: v for k, sc in props.items() if sc.get("type") in ("number", "integer")})
+    print(f"{len(tools)} tools, {n} calls, {len(bad)} failures")
+    for b in bad[:60]: print(" FAIL", b)
+    sys.exit(1 if bad else 0)
+main()

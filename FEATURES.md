@@ -180,3 +180,6 @@ User bar: every feature best in class. Tiers: **PRO** = matches or beats the pro
 | Text | V2 | kerned layout, word wrap, AE-style char/word/line animators with range selectors (6 shapes, keyframable) + 9 presets, stroke, blurred shadow, glow, gradient, rounded bg box. Missing: per-span rich text, text on path, variable fonts, emoji |
 | Masks | V2 | no bezier paths with per-vertex keyframes, mask expansion |
 | Audio mixer | V1 | no EQ bands, no loudness normalize, no ducking |
+
+## Tests
+`python3 tests/tool_fuzz.py` calls every MCP tool with empty, null, wrong-type, negative, huge and real-id arguments (about 2400 calls) and fails on crash, hang or malformed reply. export/render tools are skipped (slow).

@@ -41,9 +41,9 @@ pub fn registry() -> Vec<Command> {
     Command { name: "project_set", description: "Set project canvas size and frame rate (and optional name).", mutates: true,
         schema: obj(vec![("width", n("pixels")), ("height", n("pixels")), ("fps", n("frames per second")), ("name", s("project name"))], &[]),
         run: |ss, a| { let p = &mut ss.project;
-            if let Some(v) = a.get("width").and_then(|v| v.as_u64()) { p.width = v as u32; }
-            if let Some(v) = a.get("height").and_then(|v| v.as_u64()) { p.height = v as u32; }
-            if let Some(v) = a.get("fps").and_then(|v| v.as_f64()) { p.fps = v; }
+            if let Some(v) = a.get("width").and_then(|v| v.as_u64()) { if !(16..=16384).contains(&v) { return Err(format!("width {v} out of range 16..16384")); } p.width = v as u32; }
+            if let Some(v) = a.get("height").and_then(|v| v.as_u64()) { if !(16..=16384).contains(&v) { return Err(format!("height {v} out of range 16..16384")); } p.height = v as u32; }
+            if let Some(v) = a.get("fps").and_then(|v| v.as_f64()) { if !(1.0..=480.0).contains(&v) { return Err(format!("fps {v} out of range 1..480")); } p.fps = v; }
             if let Some(v) = a.get("name").and_then(|v| v.as_str()) { p.name = v.into(); }
             Ok(json!({"width":p.width,"height":p.height,"fps":p.fps})) } },
     Command { name: "import_media", description: "Import a video file as an asset (probes size/duration). Returns asset id.", mutates: true,
@@ -128,7 +128,7 @@ pub fn registry() -> Vec<Command> {
             tc.props.insert("x".into(), kx); tc.props.insert("y".into(), ky); if rigid { tc.props.insert("rotation".into(), kr); tc.props.insert("scale".into(), ks); } let e = &tr[n-1]; Ok(json!({"frames":n,"end_px":[e.x, e.y],"end_rotation_deg":e.rot_deg,"end_scale":e.scale})) } },
     Command { name: "stabilize", description: "Two-pass stabilizer: robust similarity (translation + rotation + scale) camera-path estimate from a patch grid, Gaussian path smoothing, adaptive zoom to hide borders. smooth = sigma in frames (bigger = steadier, ~10 default); lock=true holds the camera fixed (tripod); rotation=false corrects translation only. Writes x/y/rotation/scale keyframes.", mutates: true,
         schema: obj(vec![("clip_id", s("media clip")), ("smooth", n("sigma in frames, default 10")), ("lock", json!({"type":"boolean"})), ("rotation", json!({"type":"boolean"}))], &["clip_id"]),
-        run: |ss, a| { let id = str_arg(a, "clip_id")?.to_string(); let off = crate::tracking::stabilize(&ss.project, &id, opt_num(a, "smooth", 10.0), a.get("lock").and_then(|v| v.as_bool()).unwrap_or(false), a.get("rotation").and_then(|v| v.as_bool()).unwrap_or(true))?;
+        run: |ss, a| { let id = str_arg(a, "clip_id")?.to_string(); let off = crate::tracking::stabilize(&ss.project, &id, opt_num(a, "smooth", 10.0).clamp(0.0, 300.0), a.get("lock").and_then(|v| v.as_bool()).unwrap_or(false), a.get("rotation").and_then(|v| v.as_bool()).unwrap_or(true))?;
             let c = ss.project.find_clip_mut(&id).unwrap(); let (mut kx, mut ky, mut kr, mut ks) = (Prop::new(0.0), Prop::new(0.0), Prop::new(0.0), Prop::new(1.0)); let (mut mx, mut mr, mut mz) = (0f64, 0f64, 1f64);
             for s_ in &off { kx.set_key(s_.t, s_.dx, Ease::Linear); ky.set_key(s_.t, s_.dy, Ease::Linear); kr.set_key(s_.t, s_.rot_deg, Ease::Linear); ks.set_key(s_.t, s_.scale, Ease::Linear); mx = mx.max(s_.dx.abs()).max(s_.dy.abs()); mr = mr.max(s_.rot_deg.abs()); mz = mz.max(s_.scale); }
             c.props.insert("x".into(), kx); c.props.insert("y".into(), ky); c.props.insert("rotation".into(), kr); c.props.insert("scale".into(), ks); Ok(json!({"frames":off.len(),"max_translation_px":mx,"max_rotation_deg":mr,"max_zoom":mz})) } },
