@@ -1,0 +1,2 @@
+use kino_core::{effects::{Frame,Params,apply},model::Effect,color::wrapper::configure};
+#[test]fn identity_encoding_sandwich(){let mut e=Effect{id:"e".into(),kind:"saturation".into(),params:Params::new(),strings:Default::default()};configure(&mut e,3,0,1).unwrap();let c=[0.1,0.2,0.3,0.6];let mut f=Frame{w:1,h:1,d:c.to_vec()};apply(&e.kind,&e.params,&e.strings,&mut f,0.,0).unwrap();for j in 0..4{assert!((f.d[j]-c[j]).abs()<2e-7)}}

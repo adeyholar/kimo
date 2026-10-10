@@ -296,5 +296,13 @@ pub fn global_motion(p: &Project, clip_id: &str, f0: usize, f1: usize) -> Result
         if v.len() == n { per.push(v); } }
     if per.is_empty() { return Err("global motion: no region could be tracked".into()); }
     let med = |mut x: Vec<f64>| { x.sort_by(|a, b| a.partial_cmp(b).unwrap()); let m = x.len(); if m % 2 == 1 { x[m / 2] } else { 0.5 * (x[m / 2 - 1] + x[m / 2]) } };
-    Ok((0..n).map(|i| { let mut o = [0f64; 4]; for k in 0..4 { o[k] = med(per.iter().map(|r| r[i][k]).collect()); } o }).collect())
+    // Consensus on per-frame increments: regions that disagree with the majority (burst, exposure jump, occluder) are rejected;
+    // with fewer than 2 agreeing regions the last good velocity is carried (coast) so a burst cannot drag the trajectory.
+    let tol = [3.0, 3.0, 0.02, 0.6]; let mut out = vec![[0f64; 4]; n]; for k in 0..4 { out[0][k] = med(per.iter().map(|r| r[0][k]).collect()); } let mut vel = [0f64; 4]; let mut damp = 1.0;
+    for i in 1..n { let incs: Vec<[f64; 4]> = per.iter().map(|r| { let mut d = [0f64; 4]; for k in 0..4 { d[k] = r[i][k] - r[i - 1][k]; } d }).collect();
+        let m: Vec<f64> = (0..4).map(|k| med(incs.iter().map(|d| d[k]).collect())).collect();
+        let good: Vec<&[f64; 4]> = incs.iter().filter(|d| (0..4).all(|k| (d[k] - m[k]).abs() <= tol[k])).collect();
+        if good.len() >= 2 || (per.len() == 1) { for k in 0..4 { vel[k] = if per.len() == 1 { incs[0][k] } else { good.iter().map(|d| d[k]).sum::<f64>() / good.len() as f64 }; } damp = 1.0; } else { damp *= 0.8; for k in 0..4 { vel[k] *= 0.8; } let _ = damp; }
+        for k in 0..4 { out[i][k] = out[i - 1][k] + vel[k]; } }
+    Ok(out)
 }

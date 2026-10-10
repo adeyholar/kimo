@@ -92,6 +92,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
     let lt = c.display_time(lt_in);
     let (w, h) = (p.width as usize, p.height as usize);
     let mut f = Frame::new(w, h);
+    let mut source_linear=false;
     match &c.source {
         Source::Solid { color } => for i in 0..w*h { f.d[i*4]=color[0] as f32; f.d[i*4+1]=color[1] as f32; f.d[i*4+2]=color[2] as f32; f.d[i*4+3]=1.0; },
         Source::Gradient { c1, c2 } => for y in 0..h { let k = y as f64 / h as f64; for x in 0..w { let i=(y*w+x)*4; for j in 0..3 { f.d[i+j] = (c1[j]*(1.0-k)+c2[j]*k) as f32; } f.d[i+3]=1.0; } },
@@ -141,11 +142,14 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
             if let Some(b)=fr.get_float(idx){f.d.copy_from_slice(b)}else if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
             let fb = prop(c, "flow_blur", lt) as f32;
             if fb > 0.0 { let nxt = fr.get(idx + 1).map(|b| (b, false)).or_else(|| if idx > 0 { fr.get(idx - 1).map(|b| (b, true)) } else { None });
-                if let Some((nb, rev)) = nxt { let mut g2 = Frame::new(w, h); for (i, v) in nb.iter().enumerate() { g2.d[i] = *v as f32 / 255.0; } let q = (prop(c, "flow_quality", lt) as usize).max(3);
-                    let src = Frame { w, h, d: f.d.clone() }; f = crate::flow::flow_blur(&src, &g2, if rev { fb } else { fb }, q); } }
+                if let Some((nb, rev)) = nxt { let mut g2 = Frame::new(w, h); let next_idx=if rev{idx.saturating_sub(1)}else{idx+1};
+                    if let Some(b)=fr.get_float(next_idx){g2.d.copy_from_slice(b)}else{for (i,v) in nb.iter().enumerate(){g2.d[i]=*v as f32/255.;}}
+                    if p.color_pipeline.enabled {let a=crate::color::pipeline::input(p,c,&mut f);let b=crate::color::pipeline::input(p,c,&mut g2);source_linear=true;if a.is_err()||b.is_err(){f.d.fill(f32::NAN);}}
+                    let q = (prop(c, "flow_quality", lt) as usize).clamp(3,6);
+                    let src = Frame { w, h, d: f.d.clone() }; f = crate::flow::flow_blur(&src, &g2, fb.clamp(0.,2.), q); } }
         },
     }
-    if p.color_pipeline.enabled && !matches!(c.source, Source::Precomp{..}|Source::Adjustment) {
+    if p.color_pipeline.enabled && !source_linear && !matches!(c.source, Source::Precomp{..}|Source::Adjustment) {
         if crate::color::pipeline::input(p,c,&mut f).is_err(){f.d.fill(f32::NAN);}
     }
     f
@@ -217,7 +221,7 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
 /// `transparent`: start from a clear canvas (used for precomps) instead of opaque black.
 pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) -> Result<Frame, String> {
     p.color_pipeline.validate()?;
-    if p.color_pipeline.enabled && flat_clips(&p.tracks,0.).iter().any(|c|c.props.get("flow_blur").map(|v|v.at(t-c.start)>0.).unwrap_or(false)) {return Err("source optical-flow blur is not float-color-aware yet; disable flow_blur in managed projects".into())}
+    for c in flat_clips(&p.tracks,0.) {for e in c.effects {if let Some(w)=e.strings.get("wrapper_working_gamut"){if !p.color_pipeline.enabled||w.parse::<usize>().ok()!=Some(p.color_pipeline.working_gamut){return Err("effect encoding wrapper no longer matches project working gamut; reconfigure or clear it".into())}}}}
     let (w, h) = (p.width as usize, p.height as usize);
     let mut out = Frame::new(w, h);
     if !transparent { for i in 0..w*h { out.d[i*4+3] = 1.0; } } // opaque black canvas

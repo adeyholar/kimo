@@ -77,3 +77,9 @@ Limits: legacy color/HSL/keyers/film effects assume display encoding; explicitly
 
 ### High-bit still / honest preview
 `render_high_bit_still` writes configured encoded samples to true 16-bit RGBA PNG (rgba64be). Precision fixture keeps all 1024 input levels; 0.097 s, metadata checked. Ordinary 8-bit `render_frame` PNG refuses PQ/HLG project output so a raw PQ image is not mistaken for a good-looking SDR preview. Select SDR output for a display preview; use the high-bit still when you need encoded values. FFV1 retains RGB matrix tagging (gbr), while HEVC uses BT2020 YUV conversion. HLG output here is an OETF encoding; no display OOTF adaptation based on target peak luminance is implemented.
+
+### Per-effect encoding wrapper
+`set_effect_encoding` wraps a display-referred effect with working-linear -> requested gamut/transfer -> effect -> working-linear. Explicit only, no guessed color state. Changing working gamut or disabling the project makes old wrappers fail until reconfigured/cleared. Portable LUT bake rejects wrappers because it has no working-project context. Real 50-frame 640x360 SCUMBLE film_print in sRGB wrapper: 3.829 s including audio/encode; clip inspected. This improves workflow safety, not film-stock accuracy. Identity sandwich test <2e-7 f32; invalid settings/working-gamut changes rejected. No automatic pipeline-wide legacy-effect migration.
+
+### Float optical-flow source neighbours
+Managed flow_blur now reads both source frames from the high-precision cache, converts both to working linear before flow/radiance accumulation, and avoids a second decode transform. Managed projects no longer reject it. Quality/shutter bounded. Actual SCUMBLE 25-frame320x180 proof: 0.845s, inspected. Constant HDR/negative radiance invariance unit test passes. This fixes color precision, not optical-flow tracking quality: coarse Lucas-Kanade still has occlusion/aperture/fast-motion gaps and no cut detector.

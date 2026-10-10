@@ -11,6 +11,7 @@ pub mod cdl;
 pub mod blur;
 pub mod linear;
 pub mod pipeline;
+pub mod wrapper;
 
 type C = (&'static str, f64, &'static str);
 pub type Entry = (&'static str, &'static str, &'static [C]);
