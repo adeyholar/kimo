@@ -46,12 +46,19 @@ pub fn mix(p: &Project) -> Vec<f32> {
     out
 }
 
+struct WavTemp{path:std::path::PathBuf}
+impl Drop for WavTemp{fn drop(&mut self){let _=std::fs::remove_file(&self.path);}}
+fn wav_size(samples:usize)->Result<u32,String>{let bytes=samples.checked_mul(2).ok_or("WAV size overflow")?;if bytes>u32::MAX as usize-36{return Err("WAV exceeds RIFF32 size limit".into())}Ok(bytes as u32)}
 pub fn write_wav(path: &str, pcm: &[f32]) -> Result<(), String> {
-    let mut b = Vec::with_capacity(44 + pcm.len() * 2); let data = (pcm.len() * 2) as u32;
-    b.extend(b"RIFF"); b.extend((36 + data).to_le_bytes()); b.extend(b"WAVEfmt "); b.extend(16u32.to_le_bytes()); b.extend(1u16.to_le_bytes()); b.extend(2u16.to_le_bytes());
-    b.extend((SR as u32).to_le_bytes()); b.extend((SR as u32 * 4).to_le_bytes()); b.extend(4u16.to_le_bytes()); b.extend(16u16.to_le_bytes()); b.extend(b"data"); b.extend(data.to_le_bytes());
-    for v in pcm { b.extend(((v * 32767.0) as i16).to_le_bytes()); }
-    std::fs::write(path, b).map_err(|e| e.to_string())
+    use std::io::Write;
+    let data=wav_size(pcm.len())?;for(i,v)in pcm.iter().enumerate(){if i%32768==0{crate::guard::check()}if !v.is_finite(){return Err("WAV requires finite PCM".into())}}
+    crate::guard::reserve(65536+44);
+    let target=std::path::Path::new(path);let parent=target.parent().filter(|p|!p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+    let mut temp=None;for _ in 0..100{let n=NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed);let q=parent.join(format!(".kino-wav-{}-{n}.tmp",std::process::id()));match std::fs::OpenOptions::new().write(true).create_new(true).open(&q){Ok(file)=>{temp=Some((WavTemp{path:q},file));break},Err(e)if e.kind()==std::io::ErrorKind::AlreadyExists=>continue,Err(e)=>return Err(e.to_string())}}
+    let (temp,mut file)=temp.ok_or("cannot create unique WAV temporary file")?;
+    let mut header=Vec::with_capacity(44);header.extend(b"RIFF");header.extend((36+data).to_le_bytes());header.extend(b"WAVEfmt ");header.extend(16u32.to_le_bytes());header.extend(1u16.to_le_bytes());header.extend(2u16.to_le_bytes());header.extend((SR as u32).to_le_bytes());header.extend((SR as u32*4).to_le_bytes());header.extend(4u16.to_le_bytes());header.extend(16u16.to_le_bytes());header.extend(b"data");header.extend(data.to_le_bytes());file.write_all(&header).map_err(|e|e.to_string())?;
+    let mut bytes=Vec::with_capacity(65536);for chunk in pcm.chunks(32768){crate::guard::check();bytes.clear();for v in chunk{bytes.extend(((v*32767.) as i16).to_le_bytes());}file.write_all(&bytes).map_err(|e|e.to_string())?;}file.flush().map_err(|e|e.to_string())?;drop(file);crate::guard::check();std::fs::rename(&temp.path,target).map_err(|e|e.to_string())
 }
 
 /// Onset detector on a short-window RMS envelope. Returns (beat times in seconds, bpm).
@@ -88,4 +95,9 @@ pub fn limit(pcm: &mut [f32], ceiling_db: f64) {
     let att = 1.0 - (-3.0 / la.max(1) as f32).exp(); let mut cur = 1f32;
     for i in 0..n { let t = g[i]; if t < cur { cur += (t - cur) * att; } else { cur = t + (cur - t) * rel; } let gain = cur.min(1.0).max(0.0); pcm[i * 2] *= gain; pcm[i * 2 + 1] *= gain; }
     for v in pcm.iter_mut() { *v = v.clamp(-ceil, ceil); }
+}
+#[cfg(test)]mod wav_tests{use super::*;
+fn prior(pcm:&[f32])->Vec<u8>{let data=(pcm.len()*2) as u32;let mut b=Vec::new();b.extend(b"RIFF");b.extend((36+data).to_le_bytes());b.extend(b"WAVEfmt ");b.extend(16u32.to_le_bytes());b.extend(1u16.to_le_bytes());b.extend(2u16.to_le_bytes());b.extend((SR as u32).to_le_bytes());b.extend((SR as u32*4).to_le_bytes());b.extend(4u16.to_le_bytes());b.extend(16u16.to_le_bytes());b.extend(b"data");b.extend(data.to_le_bytes());for v in pcm{b.extend(((v*32767.) as i16).to_le_bytes());}b}
+#[test]fn wav_byte_identity_empty_single_and_chunks(){let path=std::env::temp_dir().join(format!("kino-wav-proof-{}.wav",std::process::id()));for pcm in [vec![],vec![0.25],(0..70001).map(|i|i as f32/17000.-2.).collect()]{write_wav(path.to_str().unwrap(),&pcm).unwrap();assert_eq!(std::fs::read(&path).unwrap(),prior(&pcm));}std::fs::remove_file(path).unwrap();}
+#[test]fn invalid_wav_leaves_target_untouched(){let path=std::env::temp_dir().join(format!("kino-wav-invalid-{}.wav",std::process::id()));std::fs::write(&path,b"keep").unwrap();for v in [f32::NAN,f32::INFINITY]{assert!(write_wav(path.to_str().unwrap(),&[v]).is_err());assert_eq!(std::fs::read(&path).unwrap(),b"keep");}std::fs::remove_file(&path).unwrap();assert!(write_wav(path.to_str().unwrap(),&[f32::NAN]).is_err());assert!(!path.exists());assert!(wav_size(usize::MAX).is_err());assert!(wav_size((u32::MAX as usize-36)/2+1).is_err());}
 }
