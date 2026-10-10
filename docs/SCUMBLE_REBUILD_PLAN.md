@@ -22,7 +22,7 @@ EXISTS = in kino now and usable. PART = engine has it, shot needs tweaks. MISSIN
 | 8.9-9.7 | photo with boxes, threshold-ink flash frame | threshold effect, media plate | EXISTS |
 | 9.7-10.6 | DRAW ME A BOX | text animator, outline text, stroke, ghost-scale echo | PART (3D extruded heavy text MISSING) |
 | 10.6-11.8 | FILL UP A SPOT (box fills with photo, text pop) | scan-wipe fill, add_box_expand, text pop | PART |
-| 11.8-12.5 | yellow silhouette flashes (3 shots, 6 frames each) | alpha-key silhouette fill, confetti pixels | MISSING (silhouette fill tool) |
+| 11.8-12.5 | yellow silhouette flashes (3 shots, 6 frames each) | silhouette_fill effect, add_glitch_confetti | DONE (see examples/scumble_silhouettes.py) |
 | 12.5-13.7 | silhouette on speed lines, tiled glitch | speed_lines generator, rgb_split, glitch_blocks | MISSING (speed_lines) |
 | 13.7-15.6 | NO MONTHLY BILL / NO LOCK-IN SHOP stamp, flamingos | rubber-stamp text, rotation jitter, colored cutout | MISSING (stamp text) |
 | 15.6-17.4 | orange silhouette bursting with rays | speed_lines, silhouette fill | MISSING |

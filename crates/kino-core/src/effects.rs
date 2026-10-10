@@ -37,6 +37,7 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
     ("posterize", "Reduce color levels", &[("levels", 5.0, "2..32")]),
     ("sepia", "Sepia tone", &[("amount", 1.0, "0..1")]),
     ("color_isolate", "Black & white except one hue (keep gun/scope color)", &[("hue", 190.0, "degrees 0..360"), ("range", 40.0, "degrees"), ("softness", 25.0, "degrees"), ("bw_amount", 1.0, "0..1")]),
+    ("silhouette_fill", "Flat-color silhouette of the clip's alpha (segmentation-mask look): replaces RGB with a solid color, keeps alpha, optional outline ring", &[("r",1.0,"fill R"),("g",0.85,"fill G"),("b",0.1,"fill B"),("amount",1.0,"0..1 mix toward the flat color"),("outline",0.0,"outline px @720p, 0=none"),("or",1.0,"outline R"),("og",1.0,"outline G"),("ob",1.0,"outline B")]),
     ("shake", "Camera shake / impact (translation jitter)", &[("amount", 8.0, "px"), ("speed", 24.0, "Hz")]),
     ("impact_shake", "Beat/impact camera shake: damped spring kicks at hit times (strings.hits=\"t1,t2,..\" clip-local seconds), x/y/rotation/zoom; measured from the SCUMBLE reference", &[("amount", 29.0, "px @720p, x kick"), ("amount_y", 9.0, "px @720p, y kick"), ("decay", 27.0, "1/s, exp decay (0.34/frame at 25fps)"), ("frequency", 12.5, "Hz, 12.5 flips sign every frame at 25fps"), ("rotation", 0.0, "deg kick"), ("zoom", 0.0, "scale kick, e.g. 0.03")]),
     ("mirror", "Mirror half of frame", &[("axis", 0.0, "0=horizontal(left->right), 1=vertical(top->bottom)")]),
@@ -178,6 +179,16 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
         "zoom_blur" => { let a = p(params, "amount", 0.06, t); let src = f.d.clone(); let (w, h) = (f.w as f32, f.h as f32); let n = 8;
             for y in 0..f.h { for x in 0..f.w { let mut acc = [0f32; 4]; for k in 0..n { let s = 1.0 - a * k as f32 / n as f32; let sx = ((x as f32 - w/2.0) * s + w/2.0).clamp(0.0, w-1.0) as usize; let sy = ((y as f32 - h/2.0) * s + h/2.0).clamp(0.0, h-1.0) as usize; for j in 0..4 { acc[j] += src[(sy*f.w+sx)*4+j]; } }
                 for j in 0..4 { f.d[(y*f.w+x)*4+j] = acc[j] / n as f32; } } } }
+        "silhouette_fill" => { let (w, h) = (f.w, f.h); let (r, g, b, am) = (p(params, "r", 1.0, t), p(params, "g", 0.85, t), p(params, "b", 0.1, t), p(params, "amount", 1.0, t).clamp(0.0, 1.0));
+            let ow = (p(params, "outline", 0.0, t) * h as f32 / 720.0).round().max(0.0) as isize; let (or_, og, ob) = (p(params, "or", 1.0, t), p(params, "og", 1.0, t), p(params, "ob", 1.0, t));
+            if ow > 0 { // separable max filter of alpha = dilated mask; ring = dilated minus original
+                let a0: Vec<f32> = (0..w*h).map(|i| f.d[i*4+3]).collect(); let mut tmp = vec![0.0f32; w*h]; let mut dil = vec![0.0f32; w*h];
+                for y in 0..h { for x in 0..w { let mut m = 0.0f32; for k in -ow..=ow { let xx = x as isize + k; if xx >= 0 && (xx as usize) < w { m = m.max(a0[y*w+xx as usize]); } } tmp[y*w+x] = m; } }
+                for y in 0..h { for x in 0..w { let mut m = 0.0f32; for k in -ow..=ow { let yy = y as isize + k; if yy >= 0 && (yy as usize) < h { m = m.max(tmp[yy as usize*w+x]); } } dil[y*w+x] = m; } }
+                for i in 0..w*h { let a = a0[i]; let ring = (dil[i] - a).max(0.0);
+                    if a > 0.0 { for (j, c) in [r, g, b].iter().enumerate() { f.d[i*4+j] = f.d[i*4+j] * (1.0 - am) + c * am; } }
+                    if ring > 0.0 { let na = a + ring * (1.0 - a); for (j, c) in [or_, og, ob].iter().enumerate() { f.d[i*4+j] = (f.d[i*4+j] * a + c * ring * (1.0 - a)) / na.max(1e-6); } f.d[i*4+3] = na; } }
+            } else { for i in 0..w*h { if f.d[i*4+3] > 0.0 { for (j, c) in [r, g, b].iter().enumerate() { f.d[i*4+j] = f.d[i*4+j] * (1.0 - am) + c * am; } } } } }
         "luma_key" => { let (th, so, kb) = (p(params, "threshold", 0.2, t), p(params, "softness", 0.1, t).max(0.001), p(params, "keep_bright", 1.0, t) > 0.5);
             for i in 0..f.w*f.h { let l = lum([f.d[i*4], f.d[i*4+1], f.d[i*4+2]]); let k = ((l - th) / so).clamp(0.0, 1.0); f.d[i*4+3] *= if kb { k } else { 1.0 - k }; } }
         "ripple" => { let (a, wl, sp, cx, cy) = (p(params, "amplitude", 8.0, t), p(params, "wavelength", 60.0, t), p(params, "speed", 2.0, t), p(params, "cx", 0.5, t) * f.w as f32, p(params, "cy", 0.5, t) * f.h as f32); let src = f.d.clone(); let (w, h) = (f.w, f.h);
