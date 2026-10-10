@@ -7,15 +7,15 @@ use std::process::{Command, Stdio};
 /// Decoded frames for media clips, keyed by clip id. Frames are RGBA8 at project size, project fps,
 /// with speed already applied.
 /// A decoded window of consecutive frames, contiguous in memory. `first` is the global frame index of buf[0].
-pub struct Frames { pub linear_buf: Option<Vec<f32>>, pub buf: Vec<u8>, pub fs: usize, pub first: usize }
+pub struct Frames { pub quantized: std::sync::OnceLock<Vec<u8>>, pub linear_buf: Option<Vec<f32>>, pub buf: Vec<u8>, pub fs: usize, pub first: usize }
 impl Frames {
     pub fn get_float(&self,g:usize)->Option<&[f32]>{let b=self.linear_buf.as_ref()?;let n=self.len();if n==0{return None}let i=g.saturating_sub(self.first).min(n-1);Some(&b[i*self.fs..(i+1)*self.fs])}
-    pub fn len(&self) -> usize { if self.fs == 0 { 0 } else { self.buf.len() / self.fs } }
+    pub fn len(&self) -> usize { if self.fs == 0 { 0 } else { self.linear_buf.as_ref().map(|b|b.len()).unwrap_or(self.buf.len()) / self.fs } }
     pub fn covers(&self, a: usize, b: usize) -> bool { self.len() > 0 && ((a >= self.first && b < self.first + self.len()) || (self.len() == 1 && self.first == 0)) }
     /// Global-index lookup, clamped into the window.
-    pub fn get(&self, g: usize) -> Option<&[u8]> { let n = self.len(); if n == 0 { return None; } let i = g.saturating_sub(self.first).min(n - 1); Some(&self.buf[i * self.fs..(i + 1) * self.fs]) }
+    pub fn get(&self, g: usize) -> Option<&[u8]> { let n = self.len(); if n == 0 { return None; } let i = g.saturating_sub(self.first).min(n - 1); let buf=if let Some(f)=&self.linear_buf{self.quantized.get_or_init(||f.iter().map(|v|(v.clamp(0.,1.)*255.+0.5) as u8).collect())}else{&self.buf};Some(&buf[i * self.fs..(i + 1) * self.fs]) }
 }
-impl std::ops::Index<usize> for Frames { type Output = [u8]; fn index(&self, i: usize) -> &[u8] { &self.buf[i * self.fs..(i + 1) * self.fs] } }
+impl std::ops::Index<usize> for Frames { type Output = [u8]; fn index(&self, i: usize) -> &[u8] { self.get(self.first+i).expect("no decoded frame") } }
 pub struct Cache { frames: HashMap<String, (String, Frames)>, pub size: (u32, u32, f64) }
 impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new(), size: (0, 0, 0.0) } } pub fn frames_of(&self, id: &str) -> Option<&Frames> { self.frames.get(id).map(|x| &x.1) } }
 
@@ -47,13 +47,19 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     let is_img = ["png","jpg","jpeg","webp","bmp"].iter().any(|e| path.to_lowercase().ends_with(e));
     let loop_args: Vec<&str> = if is_img { vec!["-loop", "1"] } else { vec![] };
     let fs = (w * h * 4) as usize;
+    let per_frame=fs.checked_mul(if p.color_pipeline.enabled{5}else{1}).ok_or("decode size overflow")?;
+    let estimate=per_frame.checked_mul(n.max(1)).ok_or("decode allocation overflow")?;
+    if estimate>decode_cache_limit(){return Err("decode request exceeds bounded cache; reduce size/duration or use windowed timing".into())}
+    crate::guard::reserve(estimate);
     let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"])
         .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
     let mut buf = Vec::with_capacity(fs * n.max(1) * if p.color_pipeline.enabled {2}else{1}); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let status=child.wait().map_err(|e|e.to_string())?;if !status.success(){return Err("media decode failed".into())}
-    let linear_buf=if p.color_pipeline.enabled {let values:Vec<f32>=buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect();buf=values.iter().map(|v|(v*255.+0.5) as u8).collect();Some(values)}else{None};
+    let linear_buf=if p.color_pipeline.enabled {let values:Vec<f32>=buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect();buf=Vec::new();Some(values)}else{None};
     let k = buf.len() / fs; buf.truncate(k * fs);
-    Ok(Frames { linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
+    Ok(Frames { quantized:Default::default(),linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
 }
+
+fn decode_cache_limit()->usize{(crate::guard::limits().mem_bytes/3).min(256*1024*1024).max(1024*1024)}
 
 pub fn prepare(p: &Project, cache: &mut Cache) -> Result<(), String> { prepare_at(p, cache, None) }
 
@@ -77,10 +83,16 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
         let sig = format!("{asset}|{}|{}|{}|{:?}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()), p.color_pipeline);
         if let Some((s, fr)) = cache.frames.get(&c.id) { if *s == sig && fr.covers(ia, ib) { continue; } }
         let a = p.assets.get(asset).ok_or(format!("asset {asset} missing"))?;
-        if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, Frames { linear_buf: None, buf: vec![], fs: 0, first: 0 })); continue; }
+        if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, Frames { quantized:Default::default(),linear_buf: None, buf: vec![], fs: 0, first: 0 })); continue; }
         // whole-clip decode only for speed-ramped clips (index mapping is in source time); everything else is windowed
         let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(WINDOW).min(total - ia)) };
-        let fr = decode(p, c, &a.path, start, count)?; cache.frames.insert(c.id.clone(), (sig, fr));
+        let mut count=count;
+        if !all && c.speed_curve.is_none(){let per=(p.width as usize)*(p.height as usize)*4*if p.color_pipeline.enabled{5}else{1};count=count.min((decode_cache_limit()/per.max(1)).max(1));if count<ib-ia+1{return Err("active decode range exceeds cache budget".into())}}
+        cache.frames.remove(&c.id);
+        let fr = decode(p, c, &a.path, start, count)?;
+        let bytes=|fr:&Frames|fr.buf.len()+fr.linear_buf.as_ref().map(|b|b.len()*5).unwrap_or(0);
+        if cache.frames.values().map(|(_,f)|bytes(f)).sum::<usize>().saturating_add(bytes(&fr))>decode_cache_limit(){return Err("active media cache exceeds memory cap; reduce resolution or active clips".into())}
+        cache.frames.insert(c.id.clone(), (sig, fr));
     }
     Ok(())
 }
@@ -141,9 +153,9 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
             let idx = if c.speed_curve.is_some() { (c.source_time(lt) * p.fps) as usize } else { (lt * p.fps) as usize };
             if let Some(b)=fr.get_float(idx){f.d.copy_from_slice(b)}else if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
             let fb = prop(c, "flow_blur", lt) as f32;
-            if fb > 0.0 { let nxt = fr.get(idx + 1).map(|b| (b, false)).or_else(|| if idx > 0 { fr.get(idx - 1).map(|b| (b, true)) } else { None });
-                if let Some((nb, rev)) = nxt { let mut g2 = Frame::new(w, h); let next_idx=if rev{idx.saturating_sub(1)}else{idx+1};
-                    if let Some(b)=fr.get_float(next_idx){g2.d.copy_from_slice(b)}else{for (i,v) in nb.iter().enumerate(){g2.d[i]=*v as f32/255.;}}
+            if fb > 0.0 { let nxt=if fr.len()>0 {Some(idx+1)}else{None};
+                if let Some(next_idx) = nxt { let mut g2 = Frame::new(w, h); 
+                    if let Some(b)=fr.get_float(next_idx){g2.d.copy_from_slice(b)}else if let Some(nb)=fr.get(next_idx){for (i,v) in nb.iter().enumerate(){g2.d[i]=*v as f32/255.;}}
                     if p.color_pipeline.enabled {let a=crate::color::pipeline::input(p,c,&mut f);let b=crate::color::pipeline::input(p,c,&mut g2);source_linear=true;if a.is_err()||b.is_err(){f.d.fill(f32::NAN);}}
                     let q = (prop(c, "flow_quality", lt) as usize).clamp(3,6);
                     let src = Frame { w, h, d: f.d.clone() }; f = crate::flow::flow_blur(&src, &g2, fb.clamp(0.,2.), q); } }
