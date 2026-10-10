@@ -21,27 +21,75 @@ fn match_block(prev: &[f32], cur: &[f32], w: usize, h: usize, cx: f32, cy: f32, 
     (cx + dx as f32 + fx.clamp(-0.5, 0.5), cy + dy as f32 + fy.clamp(-0.5, 0.5), s / ((size/2) * (size/2)) as f32 / 4.0)
 }
 
-/// Track a point (normalized 0..1) through a media clip. Returns per-frame (clip_local_time, px_x, px_y).
-pub fn track_point(p: &Project, clip_id: &str, nx: f64, ny: f64, size: i32, range: i32) -> Result<Vec<(f64, f64, f64)>, String> {
-    let c = p.find_clip(clip_id).ok_or("no such clip")?; let mut cache = Cache::new(); prepare(p, &mut cache)?;
-    let frames = cache.frames_of(clip_id).ok_or("clip is not a media clip")?; let (w, h) = (p.width as usize, p.height as usize);
-    let mut out = vec![]; let (mut x, mut y) = (nx as f32 * w as f32, ny as f32 * h as f32);
-    let mut prev = gray(&frames[0], w, h); out.push((0.0, x as f64, y as f64));
-    for i in 1..frames.len() { let cur = gray(&frames[i], w, h);
-        let (nx2, ny2, _) = match_block(&prev, &cur, w, h, x, y, size, range); x = nx2; y = ny2; prev = cur; out.push((i as f64 / p.fps, x as f64, y as f64)); }
-    let _ = c; Ok(out)
+fn clip_gray(p: &Project, cache: &mut Cache, c: &Clip, i: usize) -> Result<Vec<f32>, String> {
+    let t = c.start + i as f64 / p.fps + 1e-4; crate::render::prepare_range(p, cache, t, t)?;
+    let fr = cache.frames_of(&c.id).ok_or("clip is not a media clip")?; let b = fr.get(i).ok_or("no frame")?; Ok(gray(b, p.width as usize, p.height as usize))
+}
+fn nframes(p: &Project, c: &Clip) -> usize { ((c.duration * p.fps).ceil() as usize).max(1) }
+
+/// Similarity transform (scale, rotation, translation) mapping points a -> b, least squares (Umeyama) with iterative outlier rejection.
+/// Returns (s, theta_rad, tx, ty) in pixel coords with q = s*R(theta)*p + t.
+pub fn fit_similarity(a: &[(f64, f64)], b: &[(f64, f64)]) -> (f64, f64, f64, f64) {
+    let mut keep: Vec<bool> = vec![true; a.len()]; let mut res = (1.0, 0.0, 0.0, 0.0);
+    for _ in 0..4 {
+        let idx: Vec<usize> = (0..a.len()).filter(|&i| keep[i]).collect(); if idx.len() < 2 { break; }
+        let n = idx.len() as f64; let (mut ax, mut ay, mut bx, mut by) = (0.0, 0.0, 0.0, 0.0); for &i in &idx { ax += a[i].0; ay += a[i].1; bx += b[i].0; by += b[i].1; } ax /= n; ay /= n; bx /= n; by /= n;
+        let (mut sxx, mut sxy, mut var) = (0.0, 0.0, 0.0); for &i in &idx { let (px, py, qx, qy) = (a[i].0 - ax, a[i].1 - ay, b[i].0 - bx, b[i].1 - by); sxx += px * qx + py * qy; sxy += px * qy - py * qx; var += px * px + py * py; }
+        let th = sxy.atan2(sxx); let sc = if var > 1e-9 { (sxx * sxx + sxy * sxy).sqrt() / var } else { 1.0 }; let (c, s_) = (th.cos(), th.sin());
+        let (tx, ty) = (bx - sc * (c * ax - s_ * ay), by - sc * (s_ * ax + c * ay)); res = (sc, th, tx, ty);
+        let errs: Vec<f64> = (0..a.len()).map(|i| { let (px, py) = (sc * (c * a[i].0 - s_ * a[i].1) + tx, sc * (s_ * a[i].0 + c * a[i].1) + ty); ((px - b[i].0).powi(2) + (py - b[i].1).powi(2)).sqrt() }).collect();
+        let mut sorted: Vec<f64> = idx.iter().map(|&i| errs[i]).collect(); sorted.sort_by(|x, y| x.partial_cmp(y).unwrap()); let med = sorted[sorted.len() / 2]; let lim = (med * 2.5).max(0.75);
+        for i in 0..a.len() { keep[i] = errs[i] <= lim; }
+    }
+    res
 }
 
-/// Estimate camera shake: global translation per frame from 5 patches (median), returns smoothed-compensation offsets (dx,dy) px per frame.
-pub fn stabilize(p: &Project, clip_id: &str, smooth: usize) -> Result<Vec<(f64, f64, f64)>, String> {
-    let mut cache = Cache::new(); prepare(p, &mut cache)?; let frames = cache.frames_of(clip_id).ok_or("not a media clip")?; let (w, h) = (p.width as usize, p.height as usize);
-    let pts = [(0.3, 0.3), (0.7, 0.3), (0.5, 0.5), (0.3, 0.7), (0.7, 0.7)];
-    let mut path = vec![(0f64, 0f64)]; let mut prev = gray(&frames[0], w, h);
-    for i in 1..frames.len() { let cur = gray(&frames[i], w, h); let mut dxs = vec![]; let mut dys = vec![];
-        for (px, py) in pts { let (cx, cy) = (px * w as f32, py * h as f32); let (x, y, _) = match_block(&prev, &cur, w, h, cx, cy, 48, 12); dxs.push((x - cx) as f64); dys.push((y - cy) as f64); }
-        dxs.sort_by(|a, b| a.partial_cmp(b).unwrap()); dys.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let l = path[i - 1]; path.push((l.0 + dxs[2], l.1 + dys[2])); prev = cur; }
-    let n = path.len(); let r = smooth.max(1);
-    Ok((0..n).map(|i| { let (a, b) = (i.saturating_sub(r), (i + r).min(n - 1)); let m = (b - a + 1) as f64;
-        let (sx, sy) = path[a..=b].iter().fold((0.0, 0.0), |s, q| (s.0 + q.0, s.1 + q.1)); (i as f64 / p.fps, sx / m - path[i].0, sy / m - path[i].1) }).collect())
+pub struct TrackSample { pub t: f64, pub x: f64, pub y: f64, pub rot_deg: f64, pub scale: f64 }
+
+/// Track a surface point (normalized) through a media clip using a ring of patches around it (translation + rotation + scale).
+/// `rigid` = false tracks translation only (single patch). Memory is windowed: only ~24 frames are decoded at a time.
+pub fn track_point(p: &Project, clip_id: &str, nx: f64, ny: f64, size: i32, range: i32, rigid: bool, radius: f64) -> Result<Vec<TrackSample>, String> {
+    let c = p.find_clip(clip_id).ok_or("no such clip")?.clone(); let mut cache = Cache::new(); let (w, h) = (p.width as usize, p.height as usize); let n = nframes(p, &c);
+    let (cx0, cy0) = (nx * w as f64, ny * h as f64); let r = radius * w.min(h) as f64;
+    let offs: Vec<(f64, f64)> = if rigid { vec![(0.0, 0.0), (r, 0.0), (-r, 0.0), (0.0, r), (0.0, -r), (r * 0.7, r * 0.7), (-r * 0.7, -r * 0.7), (r * 0.7, -r * 0.7), (-r * 0.7, r * 0.7)] } else { vec![(0.0, 0.0)] };
+    let mut cur_pts: Vec<(f64, f64)> = offs.iter().map(|o| (cx0 + o.0, cy0 + o.1)).collect(); let ref_pts = cur_pts.clone();
+    let mut prev = clip_gray(p, &mut cache, &c, 0)?; let mut out = vec![TrackSample { t: 0.0, x: cx0, y: cy0, rot_deg: 0.0, scale: 1.0 }];
+    for i in 1..n { let cur = clip_gray(p, &mut cache, &c, i)?;
+        for q in cur_pts.iter_mut() { let (x, y, _) = match_block(&prev, &cur, w, h, q.0 as f32, q.1 as f32, size, range); *q = (x as f64, y as f64); }
+        // similarity of the whole patch ring relative to the first frame; refit from the origin each frame to avoid drift accumulation
+        let (sc, th, tx, ty) = fit_similarity(&ref_pts, &cur_pts); let o = (sc * (th.cos() * cx0 - th.sin() * cy0) + tx, sc * (th.sin() * cx0 + th.cos() * cy0) + ty);
+        out.push(TrackSample { t: i as f64 / p.fps, x: o.0, y: o.1, rot_deg: th.to_degrees(), scale: sc }); prev = cur; }
+    Ok(out)
+}
+
+pub struct StabSample { pub t: f64, pub dx: f64, pub dy: f64, pub rot_deg: f64, pub scale: f64 }
+
+fn gauss_smooth(v: &[f64], sigma: f64) -> Vec<f64> { if sigma < 0.3 { return v.to_vec(); } let r = (sigma * 3.0).ceil() as i64; let n = v.len() as i64;
+    (0..n).map(|i| { let (mut s, mut ws) = (0.0, 0.0); for d in -r..=r { let j = (i + d).clamp(0, n - 1); let wgt = (-(d * d) as f64 / (2.0 * sigma * sigma)).exp(); s += v[j as usize] * wgt; ws += wgt; } s / ws }).collect() }
+
+/// Two-pass stabilizer. Pass 1: estimate frame-to-frame similarity transforms from a grid of patches (robust fit), accumulate the camera path.
+/// Pass 2: smooth the path (Gaussian, `smooth` = sigma in frames; `lock` = 1 holds the camera still), derive per-frame correction
+/// (translation, rotation, scale) and the adaptive zoom needed to hide borders.
+pub fn stabilize(p: &Project, clip_id: &str, smooth: f64, lock: bool, rotation: bool) -> Result<Vec<StabSample>, String> {
+    let c = p.find_clip(clip_id).ok_or("no such clip")?.clone(); let mut cache = Cache::new(); let (w, h) = (p.width as usize, p.height as usize); let n = nframes(p, &c);
+    let (gx, gy) = (6usize, 4usize); let mut pts = vec![]; for j in 0..gy { for i in 0..gx { pts.push(((i as f64 + 0.5) / gx as f64 * w as f64, (j as f64 + 0.5) / gy as f64 * h as f64)); } }
+    let (ccx, ccy) = (w as f64 / 2.0, h as f64 / 2.0);
+    // camera path as per-frame (log scale, angle, tx, ty) of content motion about the image center
+    let mut ls = vec![0f64; n]; let mut an = vec![0f64; n]; let mut tx = vec![0f64; n]; let mut ty = vec![0f64; n];
+    let mut prev = clip_gray(p, &mut cache, &c, 0)?;
+    for i in 1..n { let cur = clip_gray(p, &mut cache, &c, i)?; let mut a = vec![]; let mut b = vec![];
+        for &(px, py) in &pts { let (x, y, sc) = match_block(&prev, &cur, w, h, px as f32, py as f32, 40, 14); if sc < 40.0 { a.push((px - ccx, py - ccy)); b.push((x as f64 - ccx, y as f64 - ccy)); } }
+        let (sc, th, dx, dy) = if a.len() >= 4 { fit_similarity(&a, &b) } else { (1.0, 0.0, 0.0, 0.0) };
+        let (sc, th) = if rotation { (sc, th) } else { (1.0, 0.0) };
+        // compose: path_i = step ∘ path_{i-1} (about image center)
+        let (ps, pa, ptx, pty) = (ls[i - 1].exp(), an[i - 1], tx[i - 1], ty[i - 1]);
+        let (c_, s_) = (th.cos(), th.sin()); ls[i] = (ps * sc).ln(); an[i] = pa + th; tx[i] = sc * (c_ * ptx - s_ * pty) + dx; ty[i] = sc * (s_ * ptx + c_ * pty) + dy; prev = cur; }
+    let (sl, sa, stx, sty) = if lock { (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n]) } else { (gauss_smooth(&ls, smooth), gauss_smooth(&an, smooth), gauss_smooth(&tx, smooth), gauss_smooth(&ty, smooth)) };
+    // correction per frame: take frame i from the actual path to the smoothed path (small-angle decomposition)
+    let mut out: Vec<StabSample> = (0..n).map(|i| StabSample { t: i as f64 / p.fps, dx: stx[i] - tx[i], dy: sty[i] - ty[i], rot_deg: (sa[i] - an[i]).to_degrees(), scale: (sl[i] - ls[i]).exp() }).collect();
+    // adaptive zoom: smallest scale k so the corrected frame still covers the canvas at every frame
+    let mut k: Vec<f64> = out.iter().map(|s| { let (th, sc) = (s.rot_deg.to_radians(), s.scale); let (c_, s_) = (th.cos(), th.sin()); let mut kk = 1f64;
+        for &(cx, cy) in &[(-ccx, -ccy), (ccx, -ccy), (ccx, ccy), (-ccx, ccy)] { let (ux, uy) = (cx - s.dx, cy - s.dy); let (fx, fy) = ((c_ * ux + s_ * uy) / sc, (-s_ * ux + c_ * uy) / sc); kk = kk.max(fx.abs() / ccx).max(fy.abs() / ccy); } kk }).collect();
+    let r = (smooth * 1.5).ceil() as usize + 2; let mx: Vec<f64> = (0..n).map(|i| k[i.saturating_sub(r)..(i + r + 1).min(n)].iter().cloned().fold(1.0, f64::max)).collect(); k = gauss_smooth(&mx, smooth.max(2.0) * 0.5);
+    for i in 0..n { out[i].scale *= k[i].max(1.0) * 1.003; } Ok(out)
 }

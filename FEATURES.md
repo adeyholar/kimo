@@ -171,10 +171,10 @@ User bar: every feature best in class. Tiers: **PRO** = matches or beats the pro
 | Chroma key (old `chroma_key`) | V1 | superseded by `keyer` |
 | Keyer (`keyer`: screen gain+balance, clip black/white, core shrink, edge soften, despill + luma replace, edge unmix, matte view) | V2 | per-pixel screen color variation map (clean plate), garbage matte binding, motion-adaptive matte, hair-detail refinement (guided filter), tested on synthetic screen only |
 | Luma key | V1 | |
-| Stabilization | V1 | single pass translation only: no rotation/scale, no smoothing window, no rolling-shutter, decodes whole clip |
-| Tracking | V1 | translation point tracker only: no rotation/scale, no planar tracker, no re-acquire |
-| Motion blur | missing | shutter-angle blur from keyframed transforms and from tracked motion |
-| Renderer | V1 | CPU f32, bilinear sampling, no mip/anisotropic filtering for downscale, no GPU |
+| Stabilization (two-pass: 24-patch robust similarity fit with outlier rejection, Gaussian path smoothing, lock mode, adaptive zoom, translation+rotation+scale, windowed decode) | V2 | no rolling-shutter correction, no 3D/perspective (homography) model, no inpainting of borders instead of zoom, no tripod/pan-aware modes. Measured: frame-to-frame jitter 9.8 -> 3.5 on a synthetic shaky clip |
+| Tracking (ring of 9 patches, translation + rotation + scale, windowed decode, refit from frame 0 each frame) | V2 | no planar/homography tracker, no re-acquire after occlusion, no per-patch confidence UI, SAD matching (no ZNCC / optical flow refinement) |
+| Motion blur (`set_motion_blur`: shutter-angle multi-sample of x/y/scale/rotation, 4-16 samples) | V2 | no per-effect/param blur, no optical-flow blur for source footage, adjustment layers/text animators not covered |
+| Renderer | V1 | alpha-correct bilinear + 2x2..4x4 supersampling on transforms (done); still CPU f32, no mipmaps/Lanczos for large downscales, no GPU |
 | Transitions | V1 | 16 basic; no eased/curved variants, alignment options |
 | Particles | V1 | procedural 5 types, no forces/collisions/emitter shapes/textures |
 | Text | V1 | no animators, no stroke/shadow styles, no kerning/rich text |

@@ -130,23 +130,28 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
 
 fn prop(c: &Clip, k: &str, lt: f64) -> f64 { c.props.get(k).map(|x| x.at(lt)).unwrap_or(0.0) }
 
-/// Inverse-mapped bilinear transform (scale/rotate/translate around centre).
+/// Inverse-mapped transform (scale/rotate/translate around centre) with alpha-correct bilinear sampling and
+/// supersampling (2x2 for any resample, up to 4x4 when minifying) so downscaled and rotated layers are antialiased.
 fn transform(src: &Frame, scale: f64, rot_deg: f64, dx: f64, dy: f64) -> Frame {
     if (scale - 1.0).abs() < 1e-9 && rot_deg == 0.0 && dx == 0.0 && dy == 0.0 { return Frame { w: src.w, h: src.h, d: src.d.clone() }; }
     let (w, h) = (src.w, src.h); let mut o = Frame::new(w, h);
     let (cx, cy) = (w as f64/2.0, h as f64/2.0); let r = rot_deg.to_radians(); let (s, co) = (r.sin(), r.cos());
     let inv = 1.0 / scale.max(1e-6);
+    let pure_shift = (scale - 1.0).abs() < 1e-9 && rot_deg == 0.0 && dx.fract() == 0.0 && dy.fract() == 0.0;
+    let ns = if pure_shift { 1 } else { ((inv.ceil() as usize).max(2)).min(4) }; let nsf = ns as f64; let wgt = 1.0 / (ns * ns) as f32;
     for y in 0..h { for x in 0..w {
-        let px = x as f64 - cx - dx; let py = y as f64 - cy - dy;
-        let sx = (px*co + py*s)*inv + cx; let sy = (-px*s + py*co)*inv + cy;
-        if sx < 0.0 || sy < 0.0 || sx > (w-1) as f64 || sy > (h-1) as f64 { continue; }
-        let (x0, y0) = (sx.floor() as usize, sy.floor() as usize); let (x1, y1) = ((x0+1).min(w-1), (y0+1).min(h-1));
-        let (fx, fy) = ((sx - x0 as f64) as f32, (sy - y0 as f64) as f32);
-        for j in 0..4 {
-            let a = src.d[(y0*w+x0)*4+j]*(1.0-fx) + src.d[(y0*w+x1)*4+j]*fx;
-            let b = src.d[(y1*w+x0)*4+j]*(1.0-fx) + src.d[(y1*w+x1)*4+j]*fx;
-            o.d[(y*w+x)*4+j] = a*(1.0-fy) + b*fy;
-        }
+        let mut acc = [0f32; 4];
+        for sy_ in 0..ns { for sx_ in 0..ns {
+            let px = x as f64 + (sx_ as f64 + 0.5) / nsf - 0.5 - cx - dx; let py = y as f64 + (sy_ as f64 + 0.5) / nsf - 0.5 - cy - dy;
+            let sx = (px*co + py*s)*inv + cx; let sy = (-px*s + py*co)*inv + cy;
+            if sx < -0.5 || sy < -0.5 || sx > w as f64 - 0.5 || sy > h as f64 - 0.5 { continue; }
+            let (sx, sy) = (sx.clamp(0.0, (w-1) as f64), sy.clamp(0.0, (h-1) as f64));
+            let (x0, y0) = (sx.floor() as usize, sy.floor() as usize); let (x1, y1) = ((x0+1).min(w-1), (y0+1).min(h-1));
+            let (fx, fy) = ((sx - x0 as f64) as f32, (sy - y0 as f64) as f32);
+            let wts = [(x0, y0, (1.0-fx)*(1.0-fy)), (x1, y0, fx*(1.0-fy)), (x0, y1, (1.0-fx)*fy), (x1, y1, fx*fy)];
+            for (qx, qy, k) in wts { let i = (qy*w+qx)*4; let a = src.d[i+3]; let ka = k * a; acc[0] += src.d[i]*ka; acc[1] += src.d[i+1]*ka; acc[2] += src.d[i+2]*ka; acc[3] += ka; }
+        }}
+        let a = acc[3]; let oi = (y*w+x)*4; if a > 1e-6 { o.d[oi] = acc[0]/a; o.d[oi+1] = acc[1]/a; o.d[oi+2] = acc[2]/a; o.d[oi+3] = a * wgt; }
     }}
     o
 }
@@ -211,7 +216,12 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
         if let Some(tr_in) = &c.transition_in { if tr_in.kind == "zoom" && lt < tr_in.duration { sc *= 0.6 + 0.4 * (lt / tr_in.duration); } }
         let mut rot_extra = 0.0; if let Some(tr_in) = &c.transition_in { if tr_in.kind == "spin" && lt < tr_in.duration { let k = lt / tr_in.duration; rot_extra = (1.0 - k) * 180.0; sc *= 0.5 + 0.5 * k; } }
         let f = if let Some(cs) = &c.corners { corner_pin(&f, cs) } else { f };
-        let f = transform(&f, sc, prop(c, "rotation", lt) + rot_extra, dx, dy);
+        let f = if c.motion_blur > 0.0 { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h];
+            for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (prop(c, "x", lt2), prop(c, "y", lt2)); dx2 += dx - prop(c, "x", lt); dy2 += dy - prop(c, "y", lt);
+                let mut sc2 = prop(c, "scale", lt2); if sc != prop(c, "scale", lt) { sc2 *= sc / prop(c, "scale", lt).max(1e-9); } let tf = transform(&f, sc2, prop(c, "rotation", lt2) + rot_extra, dx2, dy2);
+                for i in 0..w * h { let a = tf.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += tf.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; wsum[i] += a; } } }
+            for i in 0..w * h { if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } acc }
+            else { transform(&f, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
         blend(&mut out, &f, op, &c.blend, mask.as_deref());
     }}
     Ok(out)

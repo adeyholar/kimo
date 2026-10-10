@@ -62,6 +62,9 @@ pub struct Clip {
     pub corners: Option<[[f64; 2]; 4]>,
     #[serde(default)]
     pub audio: Audio,
+    /// Motion blur shutter angle in degrees (0 = off, 180 = film standard).
+    #[serde(default)]
+    pub motion_blur: f64,
     /// Transition INTO this clip from the previous clip on the track.
     pub transition_in: Option<Transition>,
 }
