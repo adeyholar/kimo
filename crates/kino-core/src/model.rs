@@ -71,6 +71,12 @@ pub struct Clip {
     /// Motion blur shutter angle in degrees (0 = off, 180 = film standard).
     #[serde(default)]
     pub motion_blur: f64,
+    /// Echo / temporal smear (AE Echo, CC Wide Time, frame blending).
+    #[serde(default)]
+    pub echo: Option<Echo>,
+    /// Posterize time: quantize this clip's local time to N fps (0 = off).
+    #[serde(default)]
+    pub posterize_fps: f64,
     /// Rich text styling and per-character animators (text clips only).
     #[serde(default)]
     pub text_fx: Option<TextFx>,
@@ -174,3 +180,8 @@ pub struct TextAnimator {
     pub start: Prop, pub end: Prop, pub offset: Prop, pub smoothness: Prop,
     pub x: Prop, pub y: Prop, pub scale: Prop, pub rotation: Prop, pub opacity: Prop, pub tracking: Prop, pub blur: Prop,
 }
+
+/// Echo ghosts: `count` earlier (or later when spacing<0) copies of the layer at `spacing` seconds apart.
+/// mode: composite (ghosts fade by decay^k), add / screen (light trails), average (equal-weight frame blending = temporal smear).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Echo { pub count: u32, pub spacing: f64, pub decay: f64, pub mode: String }

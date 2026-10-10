@@ -143,22 +143,28 @@ fn prop(c: &Clip, k: &str, lt: f64) -> f64 { c.props.get(k).map(|x| x.at(lt)).un
 
 /// Inverse-mapped transform (scale/rotate/translate around centre) with alpha-correct bilinear sampling and
 /// supersampling (2x2 for any resample, up to 4x4 when minifying) so downscaled and rotated layers are antialiased.
-fn transform(src: &Frame, scale: f64, rot_deg: f64, dx: f64, dy: f64) -> Frame {
+/// Alpha bounding box (x0,y0,x1,y1) of a frame, None if fully transparent.
+fn alpha_bbox(src: &Frame) -> Option<(usize, usize, usize, usize)> { let (w, h) = (src.w, src.h); let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize); let mut any = false;
+    for y in 0..h { let row = &src.d[y * w * 4..(y + 1) * w * 4]; let mut first = None; let mut last = 0; for x in 0..w { if row[x * 4 + 3] > 0.0 { if first.is_none() { first = Some(x); } last = x; } } if let Some(f0) = first { any = true; x0 = x0.min(f0); x1 = x1.max(last); y0 = y0.min(y); y1 = y1.max(y); } }
+    if any { Some((x0, y0, x1, y1)) } else { None } }
+fn transform(src: &Frame, scale: f64, rot_deg: f64, dx: f64, dy: f64) -> Frame { transform_bb(src, alpha_bbox(src), scale, rot_deg, dx, dy) }
+thread_local! { static FAST_NS: std::cell::Cell<bool> = Default::default(); }
+thread_local! { static LAST_RECT: std::cell::Cell<Option<(usize, usize, usize, usize)>> = Default::default(); }
+fn transform_bb(src: &Frame, bb: Option<(usize, usize, usize, usize)>, scale: f64, rot_deg: f64, dx: f64, dy: f64) -> Frame {
     if (scale - 1.0).abs() < 1e-9 && rot_deg == 0.0 && dx == 0.0 && dy == 0.0 { return Frame { w: src.w, h: src.h, d: src.d.clone() }; }
     let (w, h) = (src.w, src.h); let mut o = Frame::new(w, h);
     let (cx, cy) = (w as f64/2.0, h as f64/2.0); let r = rot_deg.to_radians(); let (s, co) = (r.sin(), r.cos());
     let inv = 1.0 / scale.max(1e-6);
     let pure_shift = (scale - 1.0).abs() < 1e-9 && rot_deg == 0.0 && dx.fract() == 0.0 && dy.fract() == 0.0;
-    let ns = if pure_shift { 1 } else { ((inv.ceil() as usize).max(2)).min(4) }; let nsf = ns as f64; let wgt = 1.0 / (ns * ns) as f32;
+    let ns = if pure_shift || FAST_NS.with(|l| l.get()) { 1 } else { ((inv.ceil() as usize).max(2)).min(4) }; let nsf = ns as f64; let wgt = 1.0 / (ns * ns) as f32;
     // only visit output pixels that can receive content: forward-map the source's opaque bounding box
-    let (mut bx0, mut by0, mut bx1, mut by1) = (w, h, 0usize, 0usize); let mut any = false;
-    for y in 0..h { let row = &src.d[y * w * 4..(y + 1) * w * 4]; let mut first = None; let mut last = 0; for x in 0..w { if row[x * 4 + 3] > 0.0 { if first.is_none() { first = Some(x); } last = x; } } if let Some(f0) = first { any = true; bx0 = bx0.min(f0); bx1 = bx1.max(last); by0 = by0.min(y); by1 = by1.max(y); } }
-    if !any { return o; }
+    let (bx0, by0, bx1, by1) = match bb { Some(b) => b, None => return o };
     let (mut ox0, mut oy0, mut ox1, mut oy1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for (qx, qy) in [(bx0 as f64 - 1.0, by0 as f64 - 1.0), (bx1 as f64 + 2.0, by0 as f64 - 1.0), (bx0 as f64 - 1.0, by1 as f64 + 2.0), (bx1 as f64 + 2.0, by1 as f64 + 2.0)] {
         let (ux, uy) = ((qx - cx) * scale, (qy - cy) * scale); let fx = ux * co - uy * s + cx + dx; let fy = ux * s + uy * co + cy + dy; ox0 = ox0.min(fx); oy0 = oy0.min(fy); ox1 = ox1.max(fx); oy1 = oy1.max(fy); }
     let (rx0, ry0) = ((ox0.floor() - 2.0).max(0.0) as usize, (oy0.floor() - 2.0).max(0.0) as usize); let (rx1, ry1) = (((ox1.ceil() + 2.0).min(w as f64 - 1.0)).max(0.0) as usize, ((oy1.ceil() + 2.0).min(h as f64 - 1.0)).max(0.0) as usize);
     if ox1 < 0.0 || oy1 < 0.0 || ox0 > w as f64 || oy0 > h as f64 { return o; }
+    LAST_RECT.with(|l| l.set(Some((rx0, ry0, rx1, ry1))));
     for y in ry0..=ry1 { for x in rx0..=rx1 {
         let mut acc = [0f32; 4];
         for sy_ in 0..ns { for sx_ in 0..ns {
@@ -205,7 +211,11 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
     for tr in &p.tracks { for c in &tr.clips {
         if t < c.start || t >= c.start + c.duration { continue; }
         crate::guard::check();
-        let lt = t - c.start;
+        let lt0 = if c.posterize_fps > 0.0 { (((t - c.start) * c.posterize_fps + 1e-6).floor() / c.posterize_fps).max(0.0) } else { t - c.start };
+        let (ne, esp) = match &c.echo { Some(e) if !matches!(c.source, Source::Adjustment) => (e.count.min(64) as usize, e.spacing), _ => (0, 0.0) };
+        let avg = ne > 0 && matches!(c.echo.as_ref().map(|e| e.mode.as_str()), Some("average")); let mut eacc: Option<Frame> = if avg { Some(Frame::new(w, h)) } else { None };
+        for ek in (0..=ne).rev() {
+        let lt = lt0 - ek as f64 * esp; if lt < 0.0 || lt >= c.duration { continue; }
         if let Source::Adjustment = c.source {
             let mut adj = Frame { w, h, d: out.d.clone() };
             for e in &c.effects { effects::apply(&e.kind, &e.params, &e.strings, &mut adj, lt, seed)?; }
@@ -213,11 +223,13 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
             for i in 0..w*h { let k = op * mk.as_ref().map(|m| m.d[i*4+3]).unwrap_or(1.0); for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - k) + adj.d[i*4+j] * k; } }
             continue;
         }
-        let mut f = source_frame(p, c, lt, cache);
-        for e in &c.effects { effects::apply(&e.kind, &e.params, &e.strings, &mut f, lt, seed)?; }
+        let tp=std::time::Instant::now(); let mut f = source_frame(p, c, lt, cache); prof("source", tp);
+        let tp=std::time::Instant::now(); apply_effects_local(&c.effects, &mut f, lt, seed)?; prof("effects", tp);
         if let Some(m) = &c.mask { apply_mask(&mut f, m, lt); }
         let mut op = prop(c, "opacity", lt) as f32;
-        let (mut dx, mut dy) = (prop(c, "x", lt), prop(c, "y", lt));
+        let mut c_blend = c.blend.as_str();
+        if let (Some(e), true) = (&c.echo, ek > 0) { match e.mode.as_str() { "average" => {} m => { op *= e.decay.clamp(0.0, 1.0).powi(ek as i32) as f32; if m == "add" { c_blend = "add"; } else if m == "screen" { c_blend = "screen"; } } } }
+                let (mut dx, mut dy) = (prop(c, "x", lt), prop(c, "y", lt));
         let mut mask: Option<Box<dyn Fn(usize, usize) -> f32>> = None;
         let (mut sc, mut rot_extra) = (prop(c, "scale", lt), 0.0); let mut tplan: Option<crate::transitions::Plan> = None;
         if let Some(tr_in) = &c.transition_in { if lt < tr_in.duration {
@@ -231,20 +243,26 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 {
             let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(c, "rotation", lt) + rot_extra], scale: sc };
             let f3 = crate::three_d::render_layer(&f, &cam, &pose, prop(c, "backface", lt) != 0.0);
-            blend(&mut out, &f3, op, &c.blend, mask.as_deref()); if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } } continue;
+            blend(&mut out, &f3, op, c_blend, mask.as_deref()); if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } } continue;
         }
-        let moving = c.motion_blur > 0.0 && { let sh0 = c.motion_blur / 360.0 / p.fps; ["x", "y", "scale", "rotation"].iter().any(|k| (prop(c, k, lt - sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9 || (prop(c, k, lt + sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9) };
-        let f = if moving { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h];
+        let moving = c.motion_blur > 0.0 && ek == 0 && { let sh0 = c.motion_blur / 360.0 / p.fps; ["x", "y", "scale", "rotation"].iter().any(|k| (prop(c, k, lt - sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9 || (prop(c, k, lt + sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9) };
+        let tp=std::time::Instant::now(); let bbf = alpha_bbox(&f); let f = if moving { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h]; let mut u: Option<(usize, usize, usize, usize)> = None;
             for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (prop(c, "x", lt2), prop(c, "y", lt2)); dx2 += dx - prop(c, "x", lt); dy2 += dy - prop(c, "y", lt);
-                let mut sc2 = prop(c, "scale", lt2); if sc != prop(c, "scale", lt) { sc2 *= sc / prop(c, "scale", lt).max(1e-9); } let tf = transform(&f, sc2, prop(c, "rotation", lt2) + rot_extra, dx2, dy2);
-                for i in 0..w * h { let a = tf.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += tf.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; wsum[i] += a; } } }
-            for i in 0..w * h { if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } acc }
-            else { transform(&f, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
+                let mut sc2 = prop(c, "scale", lt2); if sc != prop(c, "scale", lt) { sc2 *= sc / prop(c, "scale", lt).max(1e-9); } LAST_RECT.with(|l| l.set(None)); FAST_NS.with(|l| l.set(true)); let tf = transform_bb(&f, bbf, sc2, prop(c, "rotation", lt2) + rot_extra, dx2, dy2); FAST_NS.with(|l| l.set(false));
+                if let Some((rx0, ry0, rx1, ry1)) = LAST_RECT.with(|l| l.get()) { u = Some(match u { Some((a, b, c2, d)) => (a.min(rx0), b.min(ry0), c2.max(rx1), d.max(ry1)), None => (rx0, ry0, rx1, ry1) });
+                for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; let a = tf.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += tf.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; wsum[i] += a; } } } } }
+            if let Some((rx0, ry0, rx1, ry1)) = u { for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } } } acc }
+            else { transform_bb(&f, bbf, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
+        prof("transform", tp);
         if let Some(cf) = tplan.as_ref().and_then(|pl| pl.compose.as_ref()) { out = cf(&out, &f); continue; }
         if let Source::ShardBurst(_) = &c.source { if let Some(d) = crate::shards::take_disp() { crate::shards::refract_canvas(&mut out, &d, &f); } }
-        blend(&mut out, &f, op, &c.blend, mask.as_deref());
+        if let Some(acc) = eacc.as_mut() { let wgt = op / (ne + 1) as f32; for i in 0..w * h { let a = f.d[i * 4 + 3] * wgt; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += f.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; } } continue; }
+        let tp=std::time::Instant::now(); blend(&mut out, &f, op, c_blend, mask.as_deref()); prof("blend", tp);
         if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } }
+        }
+        if let Some(mut acc) = eacc { for i in 0..w * h { let a = acc.d[i * 4 + 3]; if a > 1e-6 { for j in 0..3 { acc.d[i * 4 + j] /= a; } } } blend(&mut out, &acc, 1.0, &c.blend, None); }
     }}
+    prof_dump();
     Ok(out)
 }
 
@@ -347,3 +365,35 @@ pub fn dyn_text(text: &str, gt: f64, fps: f64) -> String {
     }
     out.push_str(rest); out
 }
+
+/// Local (spatially invariant) effects run on the layer's alpha bounding box plus a margin instead of the full canvas.
+/// Big win for small shapes with glow/blur/shadow (echo ghosts, particles, UI plates).
+fn apply_effects_local(effs: &[crate::model::Effect], f: &mut Frame, lt: f64, seed: u64) -> Result<(), String> {
+    const LOCAL: [&str; 7] = ["blur", "outer_glow", "drop_shadow", "glow", "choker", "feather_alpha", "outline"];
+    if effs.is_empty() { return Ok(()); }
+    let (w, h) = (f.w, f.h);
+    let mut bb: Option<(usize, usize, usize, usize)> = None; // x0,y0,x1,y1
+    let mut need = effs.iter().any(|e| LOCAL.contains(&e.kind.as_str()));
+    if need { let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize); for y in 0..h { let row = &f.d[y * w * 4..(y + 1) * w * 4]; let mut first = None; let mut last = 0; for x in 0..w { if row[x * 4 + 3] > 0.0 { if first.is_none() { first = Some(x); } last = x; } } if let Some(fx) = first { x0 = x0.min(fx); x1 = x1.max(last); y0 = y0.min(y); y1 = y1.max(y); } }
+        if x1 < x0 { need = false; } else { bb = Some((x0, y0, x1, y1)); } }
+    let mut i = 0;
+    while i < effs.len() {
+        let e = &effs[i];
+        if need && LOCAL.contains(&e.kind.as_str()) {
+            // run the whole consecutive run of local effects on one crop
+            let mut j = i; let mut mg = 0.0f64; while j < effs.len() && LOCAL.contains(&effs[j].kind.as_str()) { let rad = effs[j].params.get("radius").map(|p| p.at(lt)).unwrap_or(16.0).abs(); mg += rad * 3.0 + 12.0; j += 1; }
+            let (x0, y0, x1, y1) = bb.unwrap(); let m = mg.ceil() as usize;
+            let (cx0, cy0, cx1, cy1) = (x0.saturating_sub(m), y0.saturating_sub(m), (x1 + m).min(w - 1), (y1 + m).min(h - 1)); let (cw, ch) = (cx1 - cx0 + 1, cy1 - cy0 + 1);
+            let mut cf = Frame::new(cw, ch); for y in 0..ch { cf.d[y * cw * 4..(y + 1) * cw * 4].copy_from_slice(&f.d[((y + cy0) * w + cx0) * 4..((y + cy0) * w + cx0 + cw) * 4]); }
+            for e2 in &effs[i..j] { effects::apply(&e2.kind, &e2.params, &e2.strings, &mut cf, lt, seed)?; }
+            for y in 0..ch { f.d[((y + cy0) * w + cx0) * 4..((y + cy0) * w + cx0 + cw) * 4].copy_from_slice(&cf.d[y * cw * 4..(y + 1) * cw * 4]); }
+            i = j; continue;
+        }
+        effects::apply(&e.kind, &e.params, &e.strings, f, lt, seed)?; i += 1;
+    }
+    Ok(())
+}
+
+thread_local! { static PROF: std::cell::RefCell<std::collections::BTreeMap<&'static str, f64>> = Default::default(); }
+fn prof(k: &'static str, t: std::time::Instant) { if std::env::var("KINO_PROF").is_ok() { PROF.with(|p| *p.borrow_mut().entry(k).or_insert(0.0) += t.elapsed().as_secs_f64()); } }
+pub fn prof_dump() { PROF.with(|p| { let mut p = p.borrow_mut(); if !p.is_empty() { eprintln!("PROF {:?}", *p); p.clear(); } }); }
