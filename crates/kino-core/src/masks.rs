@@ -37,7 +37,7 @@ fn d_mode() -> String { "add".into() } fn d_true() -> bool { true }
 pub struct Matte { pub source: String, #[serde(default = "d_mm")] pub mode: String, #[serde(default)] pub hide_source: bool }
 fn d_mm() -> String { "alpha".into() }
 
-pub const KINDS: &[&str] = &["rect", "ellipse", "path", "linear", "radial", "luma", "color", "hsl", "difference", "wand", "scribble", "edge", "alpha", "noise"];
+pub const KINDS: &[&str] = &["rect", "ellipse", "path", "linear", "radial", "luma", "color", "hsl", "difference", "wand", "scribble", "edge", "alpha", "noise", "matte"];
 pub const MODES: &[&str] = &["add", "subtract", "intersect", "xor", "lighten", "darken", "difference", "none"];
 
 pub fn defaults(kind: &str) -> Vec<(&'static str, f64)> {
@@ -54,6 +54,7 @@ pub fn defaults(kind: &str) -> Vec<(&'static str, f64)> {
         "scribble" => vec![("soft", 0.15), ("smooth", 2.0)],
         "edge" => vec![("thr", 0.15), ("soft", 0.1), ("thickness", 2.0)],
         "alpha" => vec![("thr", 0.5), ("soft", 0.1)],
+        "matte" => vec![("start", 0.0), ("hold", 1.0)],
         "noise" => vec![("scale", 120.0), ("thr", 0.5), ("soft", 0.08), ("seed", 1.0), ("speed", 0.0)],
         _ => vec![],
     }
@@ -154,7 +155,7 @@ fn edt1(f: &mut [f64], n: usize, v: &mut [usize], z: &mut [f64], d: &mut [f64]) 
     k = 0; for q in 0..n { while z[k + 1] < q as f64 { k += 1; } let p = v[k]; d[q] = (q as f64 - p as f64).powi(2) + f[p]; }
 }
 /// Euclidean distance (px) from every pixel to the nearest pixel where `set` is true.
-fn edt(set: &[bool], w: usize, h: usize) -> Vec<f32> {
+pub(crate) fn edt(set: &[bool], w: usize, h: usize) -> Vec<f32> {
     const INF: f64 = 1e12; let mut g: Vec<f64> = set.iter().map(|&b| if b { 0.0 } else { INF }).collect(); let n = w.max(h); let (mut v, mut z, mut d, mut f) = (vec![0usize; n + 1], vec![0f64; n + 2], vec![0f64; n + 1], vec![0f64; n + 1]);
     for x in 0..w { for y in 0..h { f[y] = g[y * w + x]; } edt1(&mut f, h, &mut v, &mut z, &mut d); for y in 0..h { g[y * w + x] = d[y]; } }
     for y in 0..h { for x in 0..w { f[x] = g[y * w + x]; } edt1(&mut f, w, &mut v, &mut z, &mut d); for x in 0..w { g[y * w + x] = d[x]; } }
@@ -286,6 +287,7 @@ fn raw(l: &MaskLayer, f: &Frame, t: f64, ctx: &Ctx) -> Vec<f32> {
         "edge" => { let (thr, so, th) = (g(l, "thr", 0.15, t), g(l, "soft", 0.1, t) + 1e-4, g(l, "thickness", 2.0, t));
             for y in 1..h.saturating_sub(1) { for x in 1..w.saturating_sub(1) { let p = |xx: usize, yy: usize| lumf(f, yy * w + xx); let gx = -p(x-1,y-1) - 2.0*p(x-1,y) - p(x-1,y+1) + p(x+1,y-1) + 2.0*p(x+1,y) + p(x+1,y+1); let gy = -p(x-1,y-1) - 2.0*p(x,y-1) - p(x+1,y-1) + p(x-1,y+1) + 2.0*p(x,y+1) + p(x+1,y+1);
                 c[y * w + x] = sstep(thr, thr + so, (gx * gx + gy * gy).sqrt() / 4.0); } } morph(&mut c, w, h, th * hf / 720.0 / 2.0); }
+        "matte" => { if let Some(st) = l.strings.get("dir").and_then(|d| crate::matte::load(d)) { let fi = (t - g(l, "start", 0.0, t) as f64) * ctx.fps; if fi >= -0.5 || g(l, "hold", 1.0, t) > 0.5 { c = crate::matte::frame_alpha(&st, fi, w, h); if fi > (st.n - 1) as f64 + 0.5 && g(l, "hold", 1.0, t) < 0.5 { c.iter_mut().for_each(|v| *v = 0.0); } } } }
         "alpha" => { let (thr, so) = (g(l, "thr", 0.5, t), g(l, "soft", 0.1, t) / 2.0 + 1e-4); for i in 0..w * h { c[i] = sstep(thr - so, thr + so, f.d[i * 4 + 3]); } }
         "noise" => { let (sc, thr, so, seed, sp) = (g(l, "scale", 120.0, t).max(2.0) * hf / 720.0, g(l, "thr", 0.5, t), g(l, "soft", 0.08, t) + 1e-4, g(l, "seed", 1.0, t) as i64, g(l, "speed", 0.0, t));
             let tt = t as f32 * sp; for y in 0..h { for x in 0..w { let (u, v) = ((x as f32 + tt * sc) / sc, (y as f32 - tt * sc * 0.6) / sc); let n = 0.55 * vnoise(u, v, seed) + 0.3 * vnoise(u * 2.1, v * 2.1, seed + 7) + 0.15 * vnoise(u * 4.3, v * 4.3, seed + 13); c[y * w + x] = sstep(thr - so, thr + so, n); } } }

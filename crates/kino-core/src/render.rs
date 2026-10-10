@@ -383,7 +383,7 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
 
 thread_local! { static MATTE_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0); }
 /// Render one clip alone (full transforms/effects) on a transparent canvas: matte sources and difference references.
-fn render_clip_alone(p: &Project, id: &str, t: f64, cache: &Cache) -> Option<Frame> {
+pub fn render_clip_alone(p: &Project, id: &str, t: f64, cache: &Cache) -> Option<Frame> {
     if MATTE_DEPTH.with(|d| d.get()) >= 3 { return None; }
     let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?.clone();
     if t < c.start || t >= c.start + c.duration { return Some(Frame::new(p.width as usize, p.height as usize)); }
