@@ -239,3 +239,9 @@ A real optional OCIO child is stopped with SIGSTOP in the test, then a private s
 
 ## Decoder cleanup on cancellation
 Media ffmpeg decoder is now held by a kill/reap-on-drop guard, covering native float frame-loop cancellation and error paths before the existing explicit wait. A process unwind regression verifies reaping;7library,5cache and16interchange tests pass. Successful decode/cache behavior unchanged. Synchronous output reads remain a separate blocked-IO deadline limitation.
+
+## Header-only color delivery inspection
+`inspect_color_delivery(path)` reads local exported file headers through ffprobe, returning codecs/pixel formats, declared color tags/static side data, audio streams and absent/unspecified color fields. It does not decode/count frames or infer missing encoding. Local-file-only, bounded1MiB probe stdout and process cleanup; no independent synchronous probe-read deadline. Two fixture/path tests pass. ActualPQ RGB16/PCM deliverable inspected through MCP in0.103s with matching explicit tags. Tag presence is not proof pixels match, calibrated display/mastering or compliance.
+
+## Per-media declared input inspection
+Pipeline inspection now includes each media clip's effective base input gamut/transfer IDs, override/default provenance, invalid-ID flag and presence of animation that decode does not evaluate. This exposes the existing static declaration semantics without silently adding time-varying input transforms or inferring camera identity. Nested media included through flattened clip traversal.13pipeline tests pass, including distinctcamera input override and invalidID inspection.

@@ -13,6 +13,7 @@ pub mod linear;
 pub mod pipeline;
 pub mod wrapper;
 pub mod metadata;
+pub mod delivery;
 pub mod interchange;
 pub mod exposure;
 pub mod output_audit;
