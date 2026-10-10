@@ -24,7 +24,9 @@ fn decode(p: &Project, c: &Clip, path: &str) -> Result<Vec<Vec<u8>>, String> {
     let (w, h) = (p.width, p.height);
     let (speed, span) = if let Some(_) = c.speed_curve { (1.0, c.source_time(c.duration)) } else { (c.speed, c.duration * c.speed) };
     let vf = format!("setpts=PTS/{},fps={},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0,format=rgba", speed.max(0.01), p.fps);
-    let mut child = Command::new("ffmpeg").args(["-v","error","-ss",&format!("{}", c.in_point),"-t",&format!("{}", span),"-i",path,"-vf",&vf,"-f","rawvideo","-pix_fmt","rgba","-"])
+    let is_img = ["png","jpg","jpeg","webp","bmp","gif"].iter().any(|e| path.to_lowercase().ends_with(e)) && !path.to_lowercase().ends_with("gif");
+    let loop_args: Vec<&str> = if is_img { vec!["-loop", "1"] } else { vec![] };
+    let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(["-ss",&format!("{}", c.in_point),"-t",&format!("{}", span),"-i",path,"-vf",&vf,"-f","rawvideo","-pix_fmt","rgba","-"])
         .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
     let mut buf = Vec::new(); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let _ = child.wait();
     let fs = (w*h*4) as usize;
