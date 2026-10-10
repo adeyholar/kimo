@@ -1,0 +1,4 @@
+use kino_core::{color::shoulder,effects::{Frame,Params},keyframe::Prop};
+#[test]fn monotonic_continuous_shoulder(){let k=0.75;let peak=1.;assert_eq!(shoulder::map(k,k,peak),k);assert!((shoulder::map(k+1e-6,k,peak)-k-1e-6).abs()<1e-10);let mut prev=-1.;for i in 0..10000{let v=shoulder::map(i as f64/100.,k,peak);assert!(v>=prev&&v<=peak);prev=v;}}
+#[test]fn ratios_alpha_and_negative(){let mut f=Frame{w:2,h:1,d:vec![4.,2.,1.,0.5,-0.25,-0.5,-1.,1.]};shoulder::apply(&Params::new(),&mut f,0.).unwrap();assert!((f.d[0]/f.d[1]-2.).abs()<1e-6);assert!((f.d[1]/f.d[2]-2.).abs()<1e-6);assert_eq!(f.d[3],0.5);assert_eq!(f.d[4],-0.25);}
+#[test]fn hostile_shoulder(){for(k,v)in[("gamut",99.),("peak",0.),("knee",-1.),("amount",2.)]{let mut p=Params::new();p.insert(k.into(),Prop::new(v));let mut f=Frame::new(1,1);assert!(shoulder::apply(&p,&mut f,0.).is_err());}}
