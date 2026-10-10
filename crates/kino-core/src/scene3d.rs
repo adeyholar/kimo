@@ -22,7 +22,7 @@ fn dlk() -> String { "directional".into() } fn dli() -> f64 { 1.0 }
 pub struct Light { #[serde(default = "dlk")] pub kind: String, #[serde(default = "d3")] pub dir: [f64; 3], #[serde(default = "d3")] pub pos: [f64; 3], #[serde(default = "d1")] pub color: [f64; 3], #[serde(default = "dli")] pub intensity: f64 }
 fn dam() -> [f64; 3] { [0.08, 0.09, 0.11] }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Scene3D { #[serde(default)] pub objects: Vec<Obj>, #[serde(default)] pub lights: Vec<Light>, #[serde(default = "dam")] pub ambient: [f64; 3], #[serde(default)] pub dof: f64, #[serde(default)] pub focus: f64, #[serde(default)] pub ssaa: u32 }
+pub struct Scene3D { #[serde(default)] pub objects: Vec<Obj>, #[serde(default)] pub lights: Vec<Light>, #[serde(default = "dam")] pub ambient: [f64; 3], #[serde(default)] pub dof: f64, #[serde(default)] pub focus: f64, #[serde(default)] pub ssaa: u32, #[serde(default)] pub shadows: bool, #[serde(default)] pub ao: f64, #[serde(default)] pub env: f64 }
 
 type V3 = [f64; 3];
 struct Tri { p: [V3; 3], n: [V3; 3] }
@@ -76,6 +76,24 @@ fn world(objs: &[Obj], i: usize, t: f64, depth: usize) -> ([[f64; 3]; 3], V3, V3
         _ => (rm, p, s) }
 }
 
+struct Shadow { l: V3, u: V3, v: V3, u0: f64, v0: f64, su: f64, sv: f64, n: usize, d: Vec<f32> }
+impl Shadow {
+    fn build(l: V3, tris: &[&Tri]) -> Shadow {
+        let up = if l[1].abs() > 0.95 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] }; let u = norm(cross(up, l)); let v = norm(cross(l, u));
+        let (mut u0, mut u1, mut v0, mut v1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN); for t in tris { for p in &t.p { let (a, b) = (dotv(*p, u), dotv(*p, v)); u0 = u0.min(a); u1 = u1.max(a); v0 = v0.min(b); v1 = v1.max(b); } }
+        let n = 1536usize; let (su, sv) = ((n as f64 - 1.0) / (u1 - u0).max(1e-6), (n as f64 - 1.0) / (v1 - v0).max(1e-6)); let mut d = vec![f32::MIN; n * n];
+        for t in tris { let q = [0, 1, 2].map(|k| ((dotv(t.p[k], u) - u0) * su, (dotv(t.p[k], v) - v0) * sv, dotv(t.p[k], l))); let area = (q[1].0 - q[0].0) * (q[2].1 - q[0].1) - (q[2].0 - q[0].0) * (q[1].1 - q[0].1); if area.abs() < 1e-9 { continue; }
+            let (xa, xb) = (q[0].0.min(q[1].0).min(q[2].0).floor().max(0.0) as usize, q[0].0.max(q[1].0).max(q[2].0).ceil().min(n as f64 - 1.0) as usize); let (ya, yb) = (q[0].1.min(q[1].1).min(q[2].1).floor().max(0.0) as usize, q[0].1.max(q[1].1).max(q[2].1).ceil().min(n as f64 - 1.0) as usize);
+            for y in ya..=yb { for x in xa..=xb { let (px, py) = (x as f64 + 0.5, y as f64 + 0.5); let w0 = ((q[1].0 - px) * (q[2].1 - py) - (q[2].0 - px) * (q[1].1 - py)) / area; let w1 = ((q[2].0 - px) * (q[0].1 - py) - (q[0].0 - px) * (q[2].1 - py)) / area; let w2 = 1.0 - w0 - w1; if w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6 { continue; }
+                let z = (w0 * q[0].2 + w1 * q[1].2 + w2 * q[2].2) as f32; let i = y * n + x; if z > d[i] { d[i] = z; } } } }
+        Shadow { l, u, v, u0, v0, su, sv, n, d }
+    }
+    fn lit(&self, p: V3, bias: f64) -> f64 { let (fx, fy) = ((dotv(p, self.u) - self.u0) * self.su, (dotv(p, self.v) - self.v0) * self.sv); let z = dotv(p, self.l); let mut s = 0.0; let mut c = 0.0;
+        for dy in -1i32..=1 { for dx in -1i32..=1 { let (x, y) = (fx as i32 + dx, fy as i32 + dy); if x < 0 || y < 0 || x >= self.n as i32 || y >= self.n as i32 { s += 1.0; c += 1.0; continue; } let m = self.d[y as usize * self.n + x as usize] as f64; s += if z >= m - bias { 1.0 } else { 0.0 }; c += 1.0; } } s / c }
+}
+fn env_col(r: V3, lights: &[(V3, V3, f64, bool)]) -> V3 { let up = (-r[1]).clamp(-1.0, 1.0) * 0.5 + 0.5; let mut c = [0.02 + 0.10 * up, 0.03 + 0.14 * up, 0.05 + 0.2 * up];
+    for (lp, lc, li, point) in lights { if *point { continue; } let d = dotv(r, *lp).max(0.0).powi(24) * li * 2.5; for k in 0..3 { c[k] += lc[k] * d; } } c }
+
 pub fn render(sc: &Scene3D, f: &mut Frame, t: f64, cam: &Camera) {
     let (w, h) = (f.w, f.h); let ss = if sc.ssaa == 0 { 2 } else { sc.ssaa.min(4) as usize }; let (sw, sh) = (w * ss, h * ss); let cv = CamView::new(sw, sh, cam); let eye = cv.eye(); let fl = cv.focal() / ss as f64;
     let mut zb = vec![f32::INFINITY; sw * sh]; let mut cb = vec![0f32; sw * sh * 4]; // premultiplied color + coverage
@@ -91,6 +109,7 @@ pub fn render(sc: &Scene3D, f: &mut Frame, t: f64, cam: &Camera) {
     draws.sort_by(|a, b| { let (ao, bo) = (sc.objects[a.oi].opacity >= 0.999, sc.objects[b.oi].opacity >= 0.999); bo.cmp(&ao).then(b.zc.partial_cmp(&a.zc).unwrap_or(std::cmp::Ordering::Equal)).then(std::cmp::Ordering::Equal) });
     // opaque (true) first: cmp(bo,ao) puts opaque first; within group farther first (fine for z-buffer)
     let lights: Vec<(V3, V3, f64, bool)> = sc.lights.iter().map(|l| (if l.kind == "point" { l.pos } else { norm([-l.dir[0], -l.dir[1], -l.dir[2]]) }, l.color, l.intensity, l.kind == "point")).collect();
+    let shadows: Vec<Option<Shadow>> = if sc.shadows { let all: Vec<&Tri> = draws.iter().filter(|d| sc.objects[d.oi].opacity >= 0.999).flat_map(|d| d.tris.iter()).collect(); lights.iter().map(|l| if l.3 { None } else { Some(Shadow::build(l.0, &all)) }).collect() } else { lights.iter().map(|_| None).collect() };
     for d in &draws { let o = &sc.objects[d.oi]; let opaque = o.opacity >= 0.999; let rough = o.rough.clamp(0.04, 1.0); let shin = (2.0 / (rough * rough) - 2.0).clamp(2.0, 2000.0); let f0 = |c: f64| 0.04 * (1.0 - o.metal) + c * o.metal;
         for tri in &d.tris { let mut sp = [(0.0, 0.0, 0.0); 3]; let mut ok = true; for k in 0..3 { match cv.project(tri.p[k]) { Some(q) => sp[k] = q, None => ok = false } } if !ok { continue; }
             let area = (sp[1].0 - sp[0].0) * (sp[2].1 - sp[0].1) - (sp[2].0 - sp[0].0) * (sp[1].1 - sp[0].1); if area.abs() < 1e-9 { continue; }
@@ -104,10 +123,11 @@ pub fn render(sc: &Scene3D, f: &mut Frame, t: f64, cam: &Camera) {
                 if o.flat { n = norm(cross(sub(tri.p[1], tri.p[0]), sub(tri.p[2], tri.p[0]))); }
                 let vdir = norm(sub(eye, pw)); if dotv(n, vdir) < 0.0 { n = [-n[0], -n[1], -n[2]]; }
                 let nv = dotv(n, vdir).max(0.0); let mut col = [sc.ambient[0] * o.color[0], sc.ambient[1] * o.color[1], sc.ambient[2] * o.color[2]];
-                for (lp, lc, li, point) in &lights { let (l, att) = if *point { let dv = sub(*lp, pw); let d2 = dotv(dv, dv).max(1.0); (norm(dv), 1.0e5 / d2) } else { (*lp, 1.0) }; let ndl = dotv(n, l).max(0.0); if ndl <= 0.0 { continue; }
+                for (li_i, (lp, lc, li, point)) in lights.iter().enumerate() { let (l, att) = if *point { let dv = sub(*lp, pw); let d2 = dotv(dv, dv).max(1.0); (norm(dv), 1.0e5 / d2) } else { (*lp, 1.0) }; let ndl = dotv(n, l).max(0.0); if ndl <= 0.0 { continue; }
                     let hv = norm([l[0] + vdir[0], l[1] + vdir[1], l[2] + vdir[2]]); let ndh = dotv(n, hv).max(0.0); let vdh = dotv(vdir, hv).max(0.0); let fr = (1.0 - vdh).powi(5);
-                    let sp_ = ndh.powf(shin) * (shin + 8.0) / 25.0 * ndl; let li2 = li * att;
+                    let sp_ = ndh.powf(shin) * (shin + 8.0) / 25.0 * ndl; let shv = match &shadows[li_i] { Some(sm) => sm.lit([pw[0] + n[0] * 2.0, pw[1] + n[1] * 2.0, pw[2] + n[2] * 2.0], 3.0 + 5.0 * (1.0 - ndl)), None => 1.0 }; let li2 = li * att * shv;
                     for c in 0..3 { let fc = f0(o.color[c]) + (1.0 - f0(o.color[c])) * fr; col[c] += lc[c] * li2 * (o.color[c] * (1.0 - o.metal) * ndl / 1.0 + fc * sp_); } }
+                if sc.env > 0.0 { let rv = [2.0 * dotv(n, vdir) * n[0] - vdir[0], 2.0 * dotv(n, vdir) * n[1] - vdir[1], 2.0 * dotv(n, vdir) * n[2] - vdir[2]]; let ec = env_col([-rv[0], -rv[1], -rv[2]], &lights); let fr = 0.04 + 0.96 * (1.0 - nv).powi(5); let g = sc.env * fr * (1.0 - rough).powi(2) * (1.0 + 2.0 * o.metal); for c in 0..3 { col[c] += ec[c] * g * (0.5 + 0.5 * (o.metal * o.color[c] + (1.0 - o.metal))); } }
                 let rim = (1.0 - nv).powi(5) * (1.0 - rough) * 0.5; for c in 0..3 { col[c] += o.emissive[c] + rim * 0.5; }
                 let a = if opaque { 1.0 } else { (o.opacity + (1.0 - o.opacity) * rim * 2.0).clamp(0.0, 1.0) };
                 let i4 = o_ * 4; if opaque { zb[o_] = z as f32; for c in 0..3 { cb[i4 + c] = col[c] as f32; } cb[i4 + 3] = 1.0; } else { let ia = 1.0 - a as f32; for c in 0..3 { cb[i4 + c] = cb[i4 + c] * ia + col[c] as f32 * a as f32; } cb[i4 + 3] = cb[i4 + 3] * ia + a as f32; } } } } }
@@ -115,6 +135,10 @@ pub fn render(sc: &Scene3D, f: &mut Frame, t: f64, cam: &Camera) {
     let ssn = (ss * ss) as f32; let mut tmp = vec![0f32; w * h * 4];
     for y in 0..h { for x in 0..w { let mut acc = [0f32; 4]; let mut zs = 0.0f32; let mut zn = 0f32; for sy in 0..ss { for sx in 0..ss { let o = ((y * ss + sy) * sw + x * ss + sx) * 4; for c in 0..4 { acc[c] += cb[o + c]; } let z = zb[(y * ss + sy) * sw + x * ss + sx]; if z.is_finite() { zs += z; zn += 1.0; } } }
         let o = (y * w + x) * 4; for c in 0..4 { tmp[o + c] = acc[c] / ssn; } zout[y * w + x] = if zn > 0.0 { zs / zn } else { 1e9 }; } }
+    if sc.ao > 0.0 { let src = tmp.clone(); let taps: Vec<(f32, f32)> = (0..14).map(|i| { let a = i as f32 * 2.399963; let r = ((i as f32 + 0.5) / 14.0).sqrt(); (a.cos() * r, a.sin() * r) }).collect();
+        for y in 0..h { for x in 0..w { let z = zout[y * w + x]; if z > 1e8 { continue; } let rad = (60.0 * (cv.focal() as f32 / ss as f32 / z) * (h as f32 / 720.0) * 12.0).clamp(3.0, 40.0); let mut occ = 0.0f32;
+            for (tx, ty) in &taps { let (sx, sy) = (((x as f32 + tx * rad) as i32).clamp(0, w as i32 - 1) as usize, ((y as f32 + ty * rad) as i32).clamp(0, h as i32 - 1) as usize); let zn = zout[sy * w + sx]; let dz = z - zn; if dz > 4.0 && dz < 160.0 { occ += 1.0 - dz / 160.0; } }
+            let k = 1.0 - (sc.ao as f32 * occ / 14.0 * 1.6).clamp(0.0, 0.85); let o = (y * w + x) * 4; for c in 0..3 { tmp[o + c] = src[o + c] * k; } } } }
     let focus = if sc.focus > 0.0 { sc.focus } else { cv.focal() };
     if sc.dof > 0.0 { let src = tmp.clone(); let taps: Vec<(f32, f32)> = (0..24).map(|i| { let a = i as f32 * 2.399963; let r = ((i as f32 + 0.5) / 24.0).sqrt(); (a.cos() * r, a.sin() * r) }).collect();
         for y in 0..h { for x in 0..w { let z = zout[y * w + x] as f64; let zz = if z > 1e8 { focus * 4.0 } else { z }; let coc = (sc.dof * (zz - focus).abs() / zz * fl * 0.04 * (h as f64 / 720.0)).min(40.0) as f32; if coc < 0.6 { continue; }
