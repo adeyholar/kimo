@@ -213,6 +213,7 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
             for i in 0..w * h { if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } acc }
             else { transform(&f, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
         if let Some(cf) = tplan.as_ref().and_then(|pl| pl.compose.as_ref()) { out = cf(&out, &f); continue; }
+        if let Source::ShardBurst(_) = &c.source { if let Some(d) = crate::shards::take_disp() { crate::shards::refract_canvas(&mut out, &d, &f); } }
         blend(&mut out, &f, op, &c.blend, mask.as_deref());
         if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } }
     }}

@@ -200,3 +200,6 @@ Shard shading: Schlick fresnel and depth falloff params. Gaps: no real backgroun
 
 ## SCUMBLE hero shatter recreation (examples/scumble_shatter.py) - V1 (recreation, not parity)
 Composed from existing tools: keyboard bg with push-in and blur ramp, finger/key sprites, orange spark emitter, physics shard burst with camera fly-in and zoom-blur streaks, detection-box HUD. Gaps vs reference: finger/key/keyboard are drawn stand-ins (no real macro footage or 3D model), shards lack true refraction of the scene, no caustics, lighting is fake, no rigid-body interaction with the finger.
+
+## Background-aware refraction (shard burst refract:px) - V1
+The shard pass writes a screen-space displacement field (tilt x thickness, stronger on side walls, motion-blurred with the shards); the compositor bends the canvas behind the layer before blending. Gaps: single offset (no per-channel dispersion of the background), displacement clamped, shard layer only (not a general refractive material for any layer), no caustics.
