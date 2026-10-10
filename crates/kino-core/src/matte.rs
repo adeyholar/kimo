@@ -59,7 +59,8 @@ fn box2(s: &[f32], w: usize, h: usize) -> (Vec<f32>, usize, usize) { let (nw, nh
 fn solve6(mut a: [[f64; 7]; 6]) -> Option<[f64; 6]> { for i in 0..6 { let mut p = i; for r in i + 1..6 { if a[r][i].abs() > a[p][i].abs() { p = r; } } if a[p][i].abs() < 1e-12 { return None; } a.swap(i, p);
     for r in 0..6 { if r == i { continue; } let f = a[r][i] / a[i][i]; for c in i..7 { a[r][c] -= f * a[i][c]; } } } let mut x = [0f64; 6]; for i in 0..6 { x[i] = a[i][6] / a[i][i]; } Some(x) }
 /// Affine map prev -> cur (x' = A x + b) for the object `alpha` (in prev), as [a,b,c,d,tx,ty] with x' = (a x + b y + tx, c x + d y + ty).
-pub fn aff_step(gp: &[f32], gc: &[f32], alpha: &[f32], w: usize, h: usize, init: Option<[f64; 6]>) -> [f64; 6] {
+pub fn aff_step(gp: &[f32], gc: &[f32], alpha: &[f32], w: usize, h: usize, init: Option<[f64; 6]>) -> [f64; 6] { aff_step_l(gp, gc, alpha, w, h, init, false) }
+pub fn aff_step_l(gp: &[f32], gc: &[f32], alpha: &[f32], w: usize, h: usize, init: Option<[f64; 6]>, lock: bool) -> [f64; 6] {
     let mut pg = vec![(gp.to_vec(), w, h)]; let mut cg = vec![(gc.to_vec(), w, h)]; let mut pa = vec![(alpha.to_vec(), w, h)];
     for _ in 0..4 { let (a, aw, ah) = pg.last().unwrap().clone(); if aw < 48 || ah < 48 { break; } pg.push(box2(&a, aw, ah)); let (b, bw, bh) = cg.last().unwrap().clone(); cg.push(box2(&b, bw, bh)); let (c, cw, ch) = pa.last().unwrap().clone(); pa.push(box2(&c, cw, ch)); }
     let (mut m, mut cx, mut cy, mut tot) = ([1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0], 0f64, 0f64, 0f64);
@@ -79,7 +80,7 @@ pub fn aff_step(gp: &[f32], gc: &[f32], alpha: &[f32], w: usize, h: usize, init:
                 let j = [gx * xc, gx * yc, gy * xc, gy * yc, gx, gy]; for a in 0..6 { for b in 0..6 { ata[a][b] += wt * j[a] * j[b]; } atb[a] -= wt * j[a] * r; } err += wt * r * r; cnt += wt; }
             if cnt < 10.0 { break; } err /= cnt; if err > prev_err { lam *= 10.0; } else { lam = (lam * 0.5).max(1e-6); } prev_err = prev_err.min(err);
             let mut sys = [[0f64; 7]; 6]; for a in 0..6 { for b in 0..6 { sys[a][b] = ata[a][b] + if a == b { lam * (ata[a][a] + 1e-3) } else { 0.0 }; } sys[a][6] = atb[a]; }
-            if let Some(d) = solve6(sys) { let mut np = p; for k in 0..6 { np[k] += d[k]; } if (np[0] - 1.0).abs() < 0.6 && (np[3] - 1.0).abs() < 0.6 && np[1].abs() < 0.6 && np[2].abs() < 0.6 { p = np; } let mag: f64 = d.iter().map(|v| v * v).sum(); if mag < 1e-10 { break; } } else { break; } }
+            if let Some(mut d) = solve6(sys) { if lock { for k in 0..4 { d[k] = 0.0; } } let mut np = p; for k in 0..6 { np[k] += d[k]; } if (np[0] - 1.0).abs() < 0.6 && (np[3] - 1.0).abs() < 0.6 && np[1].abs() < 0.6 && np[2].abs() < 0.6 { p = np; } let mag: f64 = d.iter().map(|v| v * v).sum(); if mag < 1e-10 { break; } } else { break; } }
         m = [p[0], p[1], p[2], p[3], p[4] * s, p[5] * s]; }
     // convert centred form (x' = c + t + A (x - c)) to absolute: b = c + t - A c
     [m[0], m[1], m[2], m[3], cx + m[4] - m[0] * cx - m[1] * cy, cy + m[5] - m[2] * cx - m[3] * cy]
@@ -88,6 +89,31 @@ pub fn aff_step(gp: &[f32], gc: &[f32], alpha: &[f32], w: usize, h: usize, init:
 pub fn aff_warp(src: &[f32], w: usize, h: usize, m: &[f64; 6]) -> Vec<f32> { let det = m[0] * m[3] - m[1] * m[2]; if det.abs() < 1e-6 { return src.to_vec(); }
     let (ia, ib, ic, id) = (m[3] / det, -m[1] / det, -m[2] / det, m[0] / det); let mut o = vec![0f32; w * h];
     for y in 0..h { for x in 0..w { let (dx, dy) = (x as f64 - m[4], y as f64 - m[5]); let (sx, sy) = (ia * dx + ib * dy, ic * dx + id * dy); o[y * w + x] = if sx < -1.0 || sy < -1.0 || sx > w as f64 || sy > h as f64 { 0.0 } else { bil(src, w, h, sx as f32, sy as f32) }; } } o }
+
+/// Split the object into `k` compact regions (k-means on pixel coordinates); each region mask is a hard Voronoi cell of the object alpha.
+pub fn region_masks(alpha: &[f32], w: usize, h: usize, k: usize) -> Vec<Vec<f32>> {
+    let pts: Vec<(f32, f32, usize)> = (0..w * h).filter(|&i| alpha[i] > 0.5).map(|i| ((i % w) as f32, (i / w) as f32, i)).collect(); if k < 2 || pts.len() < 400 * k { return vec![alpha.to_vec()]; }
+    let mut c: Vec<(f32, f32)> = vec![(pts[0].0, pts[0].1)]; while c.len() < k { let mut best = (0f32, 0usize); for (j, p) in pts.iter().enumerate().step_by(7) { let d = c.iter().map(|q| (p.0 - q.0).powi(2) + (p.1 - q.1).powi(2)).fold(f32::MAX, f32::min); if d > best.0 { best = (d, j); } } c.push((pts[best.1].0, pts[best.1].1)); }
+    let mut lab = vec![0usize; pts.len()];
+    for _ in 0..10 { let mut acc = vec![(0f32, 0f32, 0f32); k]; for (j, p) in pts.iter().enumerate() { let mut b = (f32::MAX, 0); for (ci, q) in c.iter().enumerate() { let d = (p.0 - q.0).powi(2) + (p.1 - q.1).powi(2); if d < b.0 { b = (d, ci); } } lab[j] = b.1; acc[b.1].0 += p.0; acc[b.1].1 += p.1; acc[b.1].2 += 1.0; }
+        for ci in 0..k { if acc[ci].2 > 0.0 { c[ci] = (acc[ci].0 / acc[ci].2, acc[ci].1 / acc[ci].2); } } }
+    let mut out = vec![vec![0f32; w * h]; k]; for (j, p) in pts.iter().enumerate() { out[lab[j]][p.2] = alpha[p.2]; }
+    // soft pixels (edge) go to the nearest region too
+    for i in 0..w * h { if alpha[i] > 0.0 && alpha[i] <= 0.5 { let (x, y) = ((i % w) as f32, (i / w) as f32); let mut b = (f32::MAX, 0); for (ci, q) in c.iter().enumerate() { let d = (x - q.0).powi(2) + (y - q.1).powi(2); if d < b.0 { b = (d, ci); } } out[b.1][i] = alpha[i]; } }
+    out.into_iter().filter(|m| m.iter().filter(|&&v| v > 0.5).count() >= 150).collect()
+}
+/// One piecewise step: global affine from the seed template, then per-region affines initialised from it; regions that disagree wildly with the global motion fall back to it.
+pub fn pw_step(sg: &[f32], g1: &[f32], seed: &[f32], regs: &[Vec<f32>], mt: &mut [f64; 6], mr: &mut Vec<[f64; 6]>, w: usize, h: usize) -> Vec<f32> {
+    *mt = aff_step(sg, g1, seed, w, h, Some(*mt)); if regs.len() < 2 { return aff_warp(seed, w, h, mt); }
+    let mut out = vec![0f32; w * h];
+    for (r, reg) in regs.iter().enumerate() {
+        let init = { let mut i = *mt; if mr[r] != [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] { let _ = &mut i; } i }; let mut m = aff_step_l(sg, g1, reg, w, h, Some(init), true);
+        let (mut cx, mut cy, mut n) = (0f64, 0f64, 0f64); for i in (0..w * h).step_by(5) { if reg[i] > 0.5 { cx += (i % w) as f64; cy += (i / w) as f64; n += 1.0; } } if n > 0.0 { cx /= n; cy /= n; }
+        let (px, py) = (m[0] * cx + m[1] * cy + m[4], m[2] * cx + m[3] * cy + m[5]); let (gx, gy) = (mt[0] * cx + mt[1] * cy + mt[4], mt[2] * cx + mt[3] * cy + mt[5]);
+        if ((px - gx).powi(2) + (py - gy).powi(2)).sqrt() > 0.08 * w as f64 { m = *mt; } mr[r] = m;
+        let wr = aff_warp(reg, w, h, &m); for i in 0..w * h { if wr[i] > out[i] { out[i] = wr[i]; } } }
+    out
+}
 
 #[derive(Clone)]
 pub struct Opts { pub band: f32, pub temporal: f32, pub colour: f32, pub guide_r: usize }
@@ -128,11 +154,11 @@ pub fn track(frames: &[Vec<u8>], w: usize, h: usize, seeds: &[(usize, Vec<[f64; 
     let none: Vec<Option<Vec<f32>>> = vec![None; nf]; let mut fwd: Vec<Vec<Option<Vec<f32>>>> = vec![]; let mut bwd: Vec<Vec<Option<Vec<f32>>>> = vec![];
     for (k, s) in seeds.iter().enumerate() {
         let end_f = if k + 1 < seeds.len() { seeds[k + 1].0 } else { nf - 1 }; let mut chain = none.clone(); chain[s.0] = Some(seed_a[k].clone());
-        let sg: Vec<f32> = (0..w*h).map(|i| gray(&frames[s.0], i)).collect(); let mut mt = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0];
-        for t in s.0 + 1..=end_f { let prev = chain[t - 1].as_ref().unwrap(); let wp = if aff { let g1: Vec<f32> = (0..w*h).map(|i| gray(&frames[t], i)).collect(); mt = aff_step(&sg, &g1, &seed_a[k], w, h, Some(mt)); aff_warp(&seed_a[k], w, h, &mt) } else { warp(prev, w, h, &bf[t]) }; chain[t] = Some(refine(&wp, &frames[t], &anchors[k], w, h, o)); } fwd.push(chain);
+        let sg: Vec<f32> = (0..w*h).map(|i| gray(&frames[s.0], i)).collect(); let mut mt = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; let regs = region_masks(&seed_a[k], w, h, std::env::var("KINO_MATTE_REGIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(6)); let mut mr = vec![[1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; regs.len()];
+        for t in s.0 + 1..=end_f { let prev = chain[t - 1].as_ref().unwrap(); let wp = if aff { let g1: Vec<f32> = (0..w*h).map(|i| gray(&frames[t], i)).collect(); pw_step(&sg, &g1, &seed_a[k], &regs, &mut mt, &mut mr, w, h) } else { warp(prev, w, h, &bf[t]) }; chain[t] = Some(refine(&wp, &frames[t], &anchors[k], w, h, o)); } fwd.push(chain);
         let end_b = if k > 0 { seeds[k - 1].0 } else { 0 }; let mut chain = none.clone(); chain[s.0] = Some(seed_a[k].clone());
-        let mut mt = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0];
-        for t in (end_b..s.0).rev() { let prev = chain[t + 1].as_ref().unwrap(); let wp = if aff { let g1: Vec<f32> = (0..w*h).map(|i| gray(&frames[t], i)).collect(); mt = aff_step(&sg, &g1, &seed_a[k], w, h, Some(mt)); aff_warp(&seed_a[k], w, h, &mt) } else { warp(prev, w, h, &ff[t]) }; chain[t] = Some(refine(&wp, &frames[t], &anchors[k], w, h, o)); } bwd.push(chain); }
+        let mut mt = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; let regs = region_masks(&seed_a[k], w, h, std::env::var("KINO_MATTE_REGIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(6)); let mut mr = vec![[1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; regs.len()];
+        for t in (end_b..s.0).rev() { let prev = chain[t + 1].as_ref().unwrap(); let wp = if aff { let g1: Vec<f32> = (0..w*h).map(|i| gray(&frames[t], i)).collect(); pw_step(&sg, &g1, &seed_a[k], &regs, &mut mt, &mut mr, w, h) } else { warp(prev, w, h, &ff[t]) }; chain[t] = Some(refine(&wp, &frames[t], &anchors[k], w, h, o)); } bwd.push(chain); }
     // blend: between seeds k and k+1 use forward chain of k and backward chain of k+1 by distance
     let mut blended: Vec<Vec<f32>> = Vec::with_capacity(nf); let mut conf = vec![1.0f64; nf]; let mut warnings = vec![];
     for t in 0..nf { let prev = seeds.iter().rposition(|s| s.0 <= t); let next = seeds.iter().position(|s| s.0 >= t);

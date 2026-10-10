@@ -16,14 +16,18 @@ pub fn input(p:&Project,c:&Clip,f:&mut Frame)->Result<(),String>{let q=&p.color_
     transform(f,g,q.working_gamut,t,0,q.reference_white,false,false)
 }
 pub fn output(p:&Project,f:&mut Frame)->Result<(),String>{let q=&p.color_pipeline;if !q.enabled{return Ok(())}q.validate()?;transform(f,q.working_gamut,q.output_gamut,0,q.output_transfer,q.reference_white,q.tone_map,q.gamut_compress)}
-pub fn rgba16(f:&Frame)->Result<Vec<u8>,String>{let mut b=Vec::with_capacity(f.d.len()*2);for v in &f.d{if !v.is_finite(){return Err("nonfinite output".into())}b.extend_from_slice(&((v.clamp(0.,1.)*65535.+0.5) as u16).to_le_bytes())}Ok(b)}
+pub fn rgba16(f:&Frame)->Result<Vec<u8>,String>{if f.w==0||f.h==0||f.w.checked_mul(f.h).and_then(|v|v.checked_mul(4))!=Some(f.d.len()){return Err("invalid RGBA16 frame shape".into())}crate::guard::reserve(f.d.len().checked_mul(2).ok_or("RGBA16 size overflow")?);let mut b=Vec::with_capacity(f.d.len()*2);for v in &f.d{if !v.is_finite(){return Err("nonfinite output".into())}b.extend_from_slice(&((v.clamp(0.,1.)*65535.+0.5) as u16).to_le_bytes())}Ok(b)}
 
 /// High-bit streaming export. PQ: Rec2020/PQ 10-bit HEVC tagged HDR10-compatible,
 /// but no dynamic metadata and no implied HDR mastering certification.
+struct Encoder(std::process::Child);
+impl Drop for Encoder{fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();}}
 pub fn export_high(p:&Project,path:&str,format:&str,crf:u32)->Result<f64,String>{
     use std::process::{Command,Stdio};use std::io::Write;
     let (codec,pix)=match format{"hevc10"=>("libx265","yuv420p10le"),"ffv1_16"=>("ffv1","gbrp16le"),_=>return Err("format must be hevc10 or ffv1_16".into())};
     if crf>51{return Err("crf 0..51 required".into())}p.color_pipeline.validate()?;
+    let duration=p.duration();if p.width==0||p.height==0||!p.fps.is_finite()||p.fps<=0.||!duration.is_finite()||duration<=0.{return Err("high-bit export requires nonzero dimensions, positive finite fps and duration".into())}
+    if format=="hevc10"&&(p.width%2!=0||p.height%2!=0){return Err("HEVC420 requires even dimensions".into())}crate::guard::check_project(p,crate::guard::limits())?;
     let hdr=p.color_pipeline.enabled&&p.color_pipeline.output_transfer==6;
     if hdr&&p.color_pipeline.output_gamut!=1{return Err("PQ export requires Rec2020 output gamut=1".into())}
     if format=="ffv1_16"&&!path.to_lowercase().ends_with(".mkv"){return Err("ffv1_16 requires .mkv".into())}
@@ -34,9 +38,9 @@ pub fn export_high(p:&Project,path:&str,format:&str,crf:u32)->Result<f64,String>
     if hdr{if format=="hevc10" {cmd.args(["-vf","scale=out_color_matrix=bt2020:out_range=tv","-color_range","tv"]);}
     cmd.args(["-color_primaries","bt2020","-color_trc","smpte2084","-colorspace",if format=="hevc10"{"bt2020nc"}else{"gbr"}]);}else if p.color_pipeline.enabled&&p.color_pipeline.output_transfer==7&&p.color_pipeline.output_gamut==1{if format=="hevc10" {cmd.args(["-vf","scale=out_color_matrix=bt2020:out_range=tv","-color_range","tv"]);}
     cmd.args(["-color_primaries","bt2020","-color_trc","arib-std-b67","-colorspace",if format=="hevc10"{"bt2020nc"}else{"gbr"}]);}
-    let mut child=cmd.arg(path).stdin(Stdio::piped()).spawn().map_err(|e|e.to_string())?;let mut input=child.stdin.take().ok_or("no encoder input")?;let mut cache=crate::render::Cache::new();let count=(p.duration()*p.fps).round() as usize;
+    let mut child=Encoder(cmd.arg(path).stdin(Stdio::piped()).spawn().map_err(|e|e.to_string())?);let mut input=child.0.stdin.take().ok_or("no encoder input")?;let mut cache=crate::render::Cache::new();let count=(p.duration()*p.fps).round() as usize;
     let render_result=(||->Result<(),String>{for i in 0..count{crate::guard::check();let t=i as f64/p.fps;crate::render::prepare_at(p,&mut cache,Some(t))?;let mut f=crate::render::render_frame(p,t,&cache)?;output(p,&mut f)?;input.write_all(&rgba16(&f)?).map_err(|e|e.to_string())?}Ok(())})();drop(input);
-    if let Err(e)=render_result{let _=child.kill();let _=child.wait();return Err(e)}let st=child.wait().map_err(|e|e.to_string())?;if !st.success(){return Err("high-bit encoder failed".into())}
+    if let Err(e)=render_result{let _=child.0.kill();let _=child.0.wait();return Err(e)}let st=child.0.wait().map_err(|e|e.to_string())?;if !st.success(){return Err("high-bit encoder failed".into())}
     // Keep PCM audio intact in FFV1/MKV; AAC for MP4 HEVC.
     let pcm=crate::audio::mix(p);if pcm.iter().any(|v|v.abs()>1e-6){let wav=format!("{path}.tmp.wav");let video=format!("{path}.tmp.{}",if format=="ffv1_16"{"mkv"}else{"mp4"});crate::audio::write_wav(&wav,&pcm)?;std::fs::rename(path,&video).map_err(|e|e.to_string())?;let st=Command::new("ffmpeg").args(["-v","error","-y","-i",&video,"-i",&wav,"-c:v","copy","-c:a",if format=="ffv1_16"{"pcm_s16le"}else{"aac"},"-shortest",path]).status().map_err(|e|e.to_string())?;let _=std::fs::remove_file(video);let _=std::fs::remove_file(wav);if !st.success(){return Err("high-bit audio mux failed".into())}}
     Ok(count as f64/p.fps)
@@ -47,4 +51,8 @@ pub struct Input16{table:Vec<f64>,matrix:super::managed::Mat}
 impl Input16{
  pub fn new(p:&Project,c:&Clip)->Result<Self,String>{let q=&p.color_pipeline;q.validate()?;let g=c.props.get("input_gamut").map(|v|v.base).unwrap_or(q.input_gamut as f64);let t=c.props.get("input_transfer").map(|v|v.base).unwrap_or(q.input_transfer as f64);if g.fract()!=0.||t.fract()!=0.||!(0. ..=7.).contains(&g)||!(0. ..=8.).contains(&t){return Err("invalid clip input color".into())}crate::guard::reserve(65536*8);let table=(0..65536).map(|v|super::managed::decode(t as usize,(v as f32/65535.) as f64,q.reference_white as f32 as f64)).collect();Ok(Self{table,matrix:super::managed::conversion(g as usize,q.working_gamut)})}
  pub fn decode(&self,bytes:&[u8])->Result<Vec<f32>,String>{if bytes.len()%8!=0{return Err("invalid integer16 frame".into())}let mut out=Vec::with_capacity(bytes.len()/2);for px in bytes.chunks_exact(8){let word=|j:usize|u16::from_le_bytes([px[j*2],px[j*2+1]]) as usize;let c=super::managed::mv(self.matrix,[self.table[word(0)],self.table[word(1)],self.table[word(2)]]);if c.iter().any(|v|!v.is_finite()||v.abs()>f32::MAX as f64){return Err("integer input color overflow".into())}out.extend(c.map(|v|v as f32));out.push(word(3) as f32/65535.);}Ok(out)}
+}
+#[cfg(test)]mod encoder_lifecycle{
+ use super::*;
+ #[test]fn encoder_reaped_on_unwind(){let mut id=0;let r=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{let child=std::process::Command::new("sleep").arg("30").spawn().unwrap();id=child.id();let _encoder=Encoder(child);panic!("test cancellation unwind");}));assert!(r.is_err());assert!(!std::path::Path::new(&format!("/proc/{id}")).exists());}
 }

@@ -20,6 +20,7 @@ pub mod shoulder;
 pub mod neutral;
 pub mod adaptation;
 pub mod gamut_ray;
+pub mod ocio;
 
 type C = (&'static str, f64, &'static str);
 pub type Entry = (&'static str, &'static str, &'static [C]);
