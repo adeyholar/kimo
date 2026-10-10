@@ -2,6 +2,7 @@
 //! The MCP server lists and dispatches straight from `registry()`.
 use crate::effects::CATALOG;
 use crate::effects2::CATALOG2;
+use crate::color::catalog3;
 use crate::keyframe::{Ease, Prop};
 use crate::model::*;
 use crate::render;
@@ -35,7 +36,7 @@ fn clip<'a>(p: &'a mut Project, a: &Value) -> Result<&'a mut Clip, String> {
 }
 
 pub fn registry() -> Vec<Command> {
-    let eff_kinds: Vec<&str> = CATALOG.iter().chain(CATALOG2.iter()).map(|c| c.0).collect();
+    let eff_kinds: Vec<&str> = CATALOG.iter().chain(CATALOG2.iter()).chain(catalog3().iter()).map(|c| c.0).collect();
     let mut v: Vec<Command> = vec![
     Command { name: "project_set", description: "Set project canvas size and frame rate (and optional name).", mutates: true,
         schema: obj(vec![("width", n("pixels")), ("height", n("pixels")), ("fps", n("frames per second")), ("name", s("project name"))], &[]),
@@ -221,10 +222,10 @@ pub fn registry() -> Vec<Command> {
             pr.set_key(t, v, e); Ok(json!({"keys":pr.keys.len()})) } },
     Command { name: "list_effects", description: "List all available effects with parameters and defaults.", mutates: false,
         schema: obj(vec![], &[]),
-        run: |_, _| Ok(json!(CATALOG.iter().chain(CATALOG2.iter()).map(|(k, d, ps)| json!({"kind":k,"description":d,"params":ps.iter().map(|(n,dv,dd)| json!({"name":n,"default":dv,"description":dd})).collect::<Vec<_>>()})).collect::<Vec<_>>())) },
+        run: |_, _| Ok(json!(CATALOG.iter().chain(CATALOG2.iter()).chain(catalog3().iter()).map(|(k, d, ps)| json!({"kind":k,"description":d,"params":ps.iter().map(|(n,dv,dd)| json!({"name":n,"default":dv,"description":dd})).collect::<Vec<_>>()})).collect::<Vec<_>>())) },
     Command { name: "add_effect", description: "Add an effect to a clip (see list_effects). params is {name: number}. Effects run in order.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("kind", json!({"type":"string","enum":eff_kinds})), ("params", json!({"type":"object","additionalProperties":{"type":"number"}})), ("strings", json!({"type":"object","additionalProperties":{"type":"string"},"description":"string params, e.g. lut: {path:\"/x.cube\"}"}))], &["clip_id","kind"]),
-        run: |ss, a| { let kind = str_arg(a, "kind")?.to_string(); if !CATALOG.iter().chain(CATALOG2.iter()).any(|c| c.0 == kind) { return Err(format!("unknown effect '{kind}'")); }
+        run: |ss, a| { let kind = str_arg(a, "kind")?.to_string(); if !CATALOG.iter().chain(CATALOG2.iter()).chain(catalog3().iter()).any(|c| c.0 == kind) { return Err(format!("unknown effect '{kind}'")); }
             let eid = ss.project.gen_id("fx"); let mut params = std::collections::BTreeMap::new();
             let mut strings = std::collections::BTreeMap::new();
             if let Some(o) = a.get("strings").and_then(|v| v.as_object()) { for (k, v) in o { strings.insert(k.clone(), v.as_str().unwrap_or("").to_string()); } }
@@ -264,7 +265,7 @@ pub fn registry() -> Vec<Command> {
     Command { name: "redo", description: "Redo the last undone operation.", mutates: false,
         schema: obj(vec![], &[]),
         run: |ss, _| { let nx = ss.redo.pop().ok_or("nothing to redo")?; let cur = std::mem::replace(&mut ss.project, nx); ss.undo.push(cur); Ok(json!({"ok":true})) } },
-    ]; v.extend(crate::edit::commands()); v
+    ]; v.extend(crate::edit::commands()); v.extend(crate::colortools::commands()); v
 }
 
 pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {

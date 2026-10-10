@@ -11,3 +11,6 @@ pub mod audio;
 pub mod tracking;
 pub mod edit;
 pub mod effects2;
+pub mod color;
+pub mod keying;
+pub mod colortools;

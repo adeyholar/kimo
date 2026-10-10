@@ -155,3 +155,28 @@ Design rule: one registry in `crates/kino-core/src/commands.rs` + `edit.rs`; MCP
 - [ ] project format v2 with compositions, versioned migrations
 - [ ] MCP: batch tool (apply many ops atomically), describe_project summary for LLM context, templates (create_title, create_lower_third, create_trailer_titles, make_montage_from_folder)
 - [ ] GUI (deferred by the user)
+
+## E. Quality tiers (honest audit)
+User bar: every feature best in class. Tiers: **PRO** = matches or beats the pro tool, **V2** = correct maths, missing refinements, **V1** = works, simple maths. Nothing is PRO until verified on real footage against the reference tool's behavior.
+
+| Area | Tier | What is missing for PRO |
+|---|---|---|
+| Timeline edit tools (ripple/roll/slip/slide/lift/extract) | V2 | linked A/V, track targeting, sync locks, multi-track ripple |
+| Color primaries / log wheels / curves / hue curves | V2 | float pipeline is f32 per-pixel and display-referred by default; no scene-linear working space switch per project, curves have 9 knots (no free-form points), no gamut mapping |
+| Color space transforms (ACEScct, LogC3, S-Log3, sRGB, Rec.709) | V2 | transfer curves only: no primaries/gamut conversion (AP0/AP1, ARRI WG, S-Gamut3), no RRT/ODT, no OCIO config import |
+| Qualifier (HSL key) + Power window | V2 | no pen/bezier window, no mask tracking binding, matte has no denoise/shrink/grow controls |
+| Scopes (waveform, parade, vectorscope, histogram) | V2 | no IRE/nits scale labels, no 10-bit/HDR scopes, no CIE chromaticity |
+| Film print, halation, bleach bypass | V1 | no measured print-stock LUT/density curves (Kodak 2383 etc.), halation is box-blur based |
+| White balance picker, color match | V1 | RGB statistical transfer (not Lab/optimal transport), no shot-to-shot auto match with masks |
+| Chroma key (old `chroma_key`) | V1 | superseded by `keyer` |
+| Keyer (`keyer`: screen gain+balance, clip black/white, core shrink, edge soften, despill + luma replace, edge unmix, matte view) | V2 | per-pixel screen color variation map (clean plate), garbage matte binding, motion-adaptive matte, hair-detail refinement (guided filter), tested on synthetic screen only |
+| Luma key | V1 | |
+| Stabilization | V1 | single pass translation only: no rotation/scale, no smoothing window, no rolling-shutter, decodes whole clip |
+| Tracking | V1 | translation point tracker only: no rotation/scale, no planar tracker, no re-acquire |
+| Motion blur | missing | shutter-angle blur from keyframed transforms and from tracked motion |
+| Renderer | V1 | CPU f32, bilinear sampling, no mip/anisotropic filtering for downscale, no GPU |
+| Transitions | V1 | 16 basic; no eased/curved variants, alignment options |
+| Particles | V1 | procedural 5 types, no forces/collisions/emitter shapes/textures |
+| Text | V1 | no animators, no stroke/shadow styles, no kerning/rich text |
+| Masks | V2 | no bezier paths with per-vertex keyframes, mask expansion |
+| Audio mixer | V1 | no EQ bands, no loudness normalize, no ducking |
