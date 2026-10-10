@@ -114,6 +114,7 @@ pub struct Asset { pub id: String, pub path: String, pub width: u32, pub height:
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
+    #[serde(default)] pub color_pipeline: crate::color::pipeline::Pipeline,
     #[serde(default)] pub camera: BTreeMap<String, crate::keyframe::Prop>,
     pub name: String,
     pub width: u32,
@@ -130,7 +131,7 @@ pub struct Project {
 
 impl Default for Project {
     fn default() -> Self {
-        Project { camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![] }
+        Project { color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![] }
     }
 }
 

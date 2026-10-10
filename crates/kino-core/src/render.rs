@@ -7,8 +7,9 @@ use std::process::{Command, Stdio};
 /// Decoded frames for media clips, keyed by clip id. Frames are RGBA8 at project size, project fps,
 /// with speed already applied.
 /// A decoded window of consecutive frames, contiguous in memory. `first` is the global frame index of buf[0].
-pub struct Frames { pub buf: Vec<u8>, pub fs: usize, pub first: usize }
+pub struct Frames { pub linear_buf: Option<Vec<f32>>, pub buf: Vec<u8>, pub fs: usize, pub first: usize }
 impl Frames {
+    pub fn get_float(&self,g:usize)->Option<&[f32]>{let b=self.linear_buf.as_ref()?;let n=self.len();if n==0{return None}let i=g.saturating_sub(self.first).min(n-1);Some(&b[i*self.fs..(i+1)*self.fs])}
     pub fn len(&self) -> usize { if self.fs == 0 { 0 } else { self.buf.len() / self.fs } }
     pub fn covers(&self, a: usize, b: usize) -> bool { self.len() > 0 && ((a >= self.first && b < self.first + self.len()) || (self.len() == 1 && self.first == 0)) }
     /// Global-index lookup, clamped into the window.
@@ -41,15 +42,17 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     let (in_pt, speed, span) = if c.speed_curve.is_some() { (c.in_point, 1.0, c.source_time(c.duration)) } else { (c.in_point + a as f64 / p.fps * c.speed, c.speed, n as f64 / p.fps * c.speed) };
     let fit = c.props.get("fit").map(|q| q.at(0.0)).unwrap_or(0.0);
     let fitf = if fit >= 1.5 { format!("scale={w}:{h}") } else if fit >= 0.5 { format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}") } else { format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0") };
-    let vf = format!("setpts=PTS/{},fps={},{},format=rgba", speed.max(0.01), p.fps, fitf);
+    let pix=if p.color_pipeline.enabled{"rgba64le"}else{"rgba"};
+    let vf = format!("setpts=PTS/{},fps={},{},format={pix}", speed.max(0.01), p.fps, fitf);
     let is_img = ["png","jpg","jpeg","webp","bmp"].iter().any(|e| path.to_lowercase().ends_with(e));
     let loop_args: Vec<&str> = if is_img { vec!["-loop", "1"] } else { vec![] };
     let fs = (w * h * 4) as usize;
-    let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt","rgba","-"])
+    let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"])
         .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
-    let mut buf = Vec::with_capacity(fs * n.max(1)); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let _ = child.wait();
+    let mut buf = Vec::with_capacity(fs * n.max(1) * if p.color_pipeline.enabled {2}else{1}); child.stdout.take().unwrap().read_to_end(&mut buf).map_err(|e| e.to_string())?; let status=child.wait().map_err(|e|e.to_string())?;if !status.success(){return Err("media decode failed".into())}
+    let linear_buf=if p.color_pipeline.enabled {let values:Vec<f32>=buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect();buf=values.iter().map(|v|(v*255.+0.5) as u8).collect();Some(values)}else{None};
     let k = buf.len() / fs; buf.truncate(k * fs);
-    Ok(Frames { buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
+    Ok(Frames { linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
 }
 
 pub fn prepare(p: &Project, cache: &mut Cache) -> Result<(), String> { prepare_at(p, cache, None) }
@@ -71,10 +74,10 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
         let (ta, tb) = match c.time_mode { TimeMode::Normal => (t0, t1), TimeMode::Reverse => (c.start + c.duration - (t1 - c.start), c.start + c.duration - (t0 - c.start)), TimeMode::Freeze { at } => (c.start + at, c.start + at) };
         let (t0, t1) = (ta, tb);
         let (ia, ib) = if all || c.speed_curve.is_some() { (0, total - 1) } else { ((((t0 - c.start).max(0.0) * p.fps).floor() as usize).min(total - 1), (((t1 - c.start).max(0.0) * p.fps).ceil() as usize).min(total - 1)) };
-        let sig = format!("{asset}|{}|{}|{}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()));
+        let sig = format!("{asset}|{}|{}|{}|{:?}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()), p.color_pipeline);
         if let Some((s, fr)) = cache.frames.get(&c.id) { if *s == sig && fr.covers(ia, ib) { continue; } }
         let a = p.assets.get(asset).ok_or(format!("asset {asset} missing"))?;
-        if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, Frames { buf: vec![], fs: 0, first: 0 })); continue; }
+        if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, Frames { linear_buf: None, buf: vec![], fs: 0, first: 0 })); continue; }
         // whole-clip decode only for speed-ramped clips (index mapping is in source time); everything else is windowed
         let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(WINDOW).min(total - ia)) };
         let fr = decode(p, c, &a.path, start, count)?; cache.frames.insert(c.id.clone(), (sig, fr));
@@ -93,7 +96,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         Source::Solid { color } => for i in 0..w*h { f.d[i*4]=color[0] as f32; f.d[i*4+1]=color[1] as f32; f.d[i*4+2]=color[2] as f32; f.d[i*4+3]=1.0; },
         Source::Gradient { c1, c2 } => for y in 0..h { let k = y as f64 / h as f64; for x in 0..w { let i=(y*w+x)*4; for j in 0..3 { f.d[i+j] = (c1[j]*(1.0-k)+c2[j]*k) as f32; } f.d[i+3]=1.0; } },
         Source::Adjustment => {}
-        Source::Precomp { tracks } => { let mut sub = Project { tracks: tracks.clone(), assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 }; sub.name = c.id.clone(); if let Ok(fr) = render_frame_opts(&sub, lt, cache, true) { f = fr; } }
+        Source::Precomp { tracks } => { let mut sub = Project { color_pipeline: p.color_pipeline.clone(), tracks: tracks.clone(), assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 }; sub.name = c.id.clone(); if let Ok(fr) = render_frame_opts(&sub, lt, cache, true) { f = fr; } }
         Source::Shape { shape, width, height, fill, stroke_width, stroke_color, sides, corner_radius } => {
             let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0); let (hw, hh) = (width / 2.0, height / 2.0);
             // signed distance (negative inside)
@@ -135,12 +138,15 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         }
         Source::Media { .. } => if let Some(fr) = cache.frames_of(&c.id) {
             let idx = if c.speed_curve.is_some() { (c.source_time(lt) * p.fps) as usize } else { (lt * p.fps) as usize };
-            if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
+            if let Some(b)=fr.get_float(idx){f.d.copy_from_slice(b)}else if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
             let fb = prop(c, "flow_blur", lt) as f32;
             if fb > 0.0 { let nxt = fr.get(idx + 1).map(|b| (b, false)).or_else(|| if idx > 0 { fr.get(idx - 1).map(|b| (b, true)) } else { None });
                 if let Some((nb, rev)) = nxt { let mut g2 = Frame::new(w, h); for (i, v) in nb.iter().enumerate() { g2.d[i] = *v as f32 / 255.0; } let q = (prop(c, "flow_quality", lt) as usize).max(3);
                     let src = Frame { w, h, d: f.d.clone() }; f = crate::flow::flow_blur(&src, &g2, if rev { fb } else { fb }, q); } }
         },
+    }
+    if p.color_pipeline.enabled && !matches!(c.source, Source::Precomp{..}|Source::Adjustment) {
+        if crate::color::pipeline::input(p,c,&mut f).is_err(){f.d.fill(f32::NAN);}
     }
     f
 }
@@ -210,6 +216,8 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
 
 /// `transparent`: start from a clear canvas (used for precomps) instead of opaque black.
 pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) -> Result<Frame, String> {
+    p.color_pipeline.validate()?;
+    if p.color_pipeline.enabled && flat_clips(&p.tracks,0.).iter().any(|c|c.props.get("flow_blur").map(|v|v.at(t-c.start)>0.).unwrap_or(false)) {return Err("source optical-flow blur is not float-color-aware yet; disable flow_blur in managed projects".into())}
     let (w, h) = (p.width as usize, p.height as usize);
     let mut out = Frame::new(w, h);
     if !transparent { for i in 0..w*h { out.d[i*4+3] = 1.0; } } // opaque black canvas
@@ -273,21 +281,25 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         if let Some(mut acc) = eacc { for i in 0..w * h { let a = acc.d[i * 4 + 3]; if a > 1e-6 { for j in 0..3 { acc.d[i * 4 + j] /= a; } } } blend(&mut out, &acc, 1.0, &c.blend, None); }
     }}
     prof_dump();
+    if out.d.iter().any(|v|!v.is_finite()){return Err("render produced nonfinite pixels or invalid input color settings".into())}
     Ok(out)
 }
 
 pub fn to_rgba8(f: &Frame) -> Vec<u8> { f.d.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect() }
 
 pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<(), String> {
+    if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) {return Err("HDR output cannot be shown as an SDR PNG; select an SDR preview output or render_high_bit_still".into())}
     prepare_at(p, cache, Some(t))?;
-    let f = render_frame(p, t, cache)?;
+    let mut f = render_frame(p, t, cache)?;
+    crate::color::pipeline::output(p,&mut f)?;
     let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", p.width, p.height),"-i","-","-frames:v","1",path])
         .stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
-    ch.stdin.take().unwrap().write_all(&to_rgba8(&f)).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?;
+    ch.stdin.take().unwrap().write_all(&to_rgba8(&f)).map_err(|e| e.to_string())?; let st=ch.wait().map_err(|e| e.to_string())?;if !st.success(){return Err("PNG encoder failed".into())}
     Ok(())
 }
 
 pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
+    if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) { return Err("HDR delivery requires export_high_bit; legacy export is 8-bit SDR".into()); }
     let mut cache = Cache::new();
     let n = (p.duration() * p.fps).round() as usize;
     let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", p.width, p.height),"-r",&format!("{}", p.fps),"-i","-","-c:v","libx264","-pix_fmt","yuv420p","-crf",&crf.to_string(),path])
@@ -302,12 +314,12 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
         // work queue: nt workers pull frame indices, so one slow frame (shards) no longer idles the other cores
         let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
         std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
-            let res = render_frame(p, k as f64 / p.fps, cache).map(|f| to_rgba8(&f)); *slots[k - i].lock().unwrap() = Some(res); }); } });
+            let res = render_frame(p, k as f64 / p.fps, cache).and_then(|mut f| {crate::color::pipeline::output(p,&mut f)?;Ok(to_rgba8(&f))}); *slots[k - i].lock().unwrap() = Some(res); }); } });
         let frames: Vec<Result<Vec<u8>, String>> = slots.into_iter().map(|m| m.into_inner().unwrap().unwrap()).collect();
         for f in frames { si.write_all(&f?).map_err(|e| e.to_string())?; }
         i = end;
     }
-    drop(si); ch.wait().map_err(|e| e.to_string())?;
+    drop(si); let st=ch.wait().map_err(|e| e.to_string())?;if !st.success(){return Err("video encoder failed".into())}
     // mux mixed audio
     let pcm = crate::audio::mix(p);
     if pcm.iter().any(|v| v.abs() > 1e-6) {
@@ -326,7 +338,7 @@ fn render_clip_alone(p: &Project, id: &str, t: f64, cache: &Cache) -> Option<Fra
     let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?.clone();
     if t < c.start || t >= c.start + c.duration { return Some(Frame::new(p.width as usize, p.height as usize)); }
     let mut c = c; if let Some(m) = c.mask.as_mut() { m.matte = None; }
-    let sub = Project { tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![c], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 };
+    let sub = Project { color_pipeline: p.color_pipeline.clone(), tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![c], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 };
     MATTE_DEPTH.with(|d| d.set(d.get() + 1)); let r = render_frame_opts(&sub, t, cache, true).ok(); MATTE_DEPTH.with(|d| d.set(d.get() - 1)); r
 }
 

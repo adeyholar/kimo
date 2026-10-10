@@ -282,12 +282,19 @@ mod pose_tests { use super::*;
         let e = (0..4).map(|k| (pr[k][0] - tr[k][0]).hypot(pr[k][1] - tr[k][1])).fold(0.0, f64::max); eprintln!("pose pred max err px {e}"); assert!(e < 3.0, "err {e}"); }
 }
 
-/// Global (whole-frame) motion of a media clip relative to its first frame: per frame [dx px, dy px, scale, rotation deg], from tracking an inset full-frame quad.
+/// Global (whole-frame) motion of a media clip relative to its first frame: per frame [dx px, dy px, scale, rotation deg].
+/// Robust to moving foreground and flashes: five regions (four quadrants plus the full inset frame) are tracked independently, each fitted by a similarity transform, and the per-frame result is the median across regions.
 pub fn global_motion(p: &Project, clip_id: &str, f0: usize, f1: usize) -> Result<Vec<[f64; 4]>, String> {
-    let (w, h) = (p.width as f64, p.height as f64); let (mx, my) = (w * 0.12, h * 0.12); let q0: Quad = [[mx, my], [w - mx, my], [w - mx, h - my], [mx, h - my]];
-    let t = track(p, clip_id, q0, f0, f1, 4)?; let cen = |q: &Quad| ((q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4.0, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4.0);
-    let area = |q: &Quad| 0.5 * ((q[0][0] * q[1][1] - q[1][0] * q[0][1]) + (q[1][0] * q[2][1] - q[2][0] * q[1][1]) + (q[2][0] * q[3][1] - q[3][0] * q[2][1]) + (q[3][0] * q[0][1] - q[0][0] * q[3][1])).abs();
-    let ang = |q: &Quad| ((q[1][1] - q[0][1]) + (q[2][1] - q[3][1])).atan2((q[1][0] - q[0][0]) + (q[2][0] - q[3][0]));
-    let (c0, a0, g0) = (cen(&q0), area(&q0), ang(&q0));
-    Ok(t.quads.iter().map(|q| { let c = cen(q); [c.0 - c0.0, c.1 - c0.1, (area(q) / a0.max(1.0)).sqrt(), (ang(q) - g0).to_degrees()] }).collect())
+    let (w, h) = (p.width as f64, p.height as f64); let (mx, my) = (w * 0.10, h * 0.10); let (cw, ch) = (w / 2.0, h / 2.0);
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| -> Quad { [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] };
+    let regions = [rect(mx, my, w - mx, h - my), rect(mx, my, cw - 4.0, ch - 4.0), rect(cw + 4.0, my, w - mx, ch - 4.0), rect(mx, ch + 4.0, cw - 4.0, h - my), rect(cw + 4.0, ch + 4.0, w - mx, h - my)];
+    let fc = (w / 2.0, h / 2.0); let n = f1 + 1 - f0; let mut per: Vec<Vec<[f64; 4]>> = vec![]; // per region, per frame
+    for q0 in regions.iter() { let Ok(t) = track(p, clip_id, *q0, f0, f1, 4) else { continue }; let pc = ((q0[0][0] + q0[1][0] + q0[2][0] + q0[3][0]) / 4.0, (q0[0][1] + q0[1][1] + q0[2][1] + q0[3][1]) / 4.0);
+        let mut v = vec![]; for q in t.quads.iter() { let qc = ((q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4.0, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4.0); let (mut saa, mut sa, mut sb) = (1e-9, 0.0, 0.0);
+            for k in 0..4 { let (px, py, qx, qy) = (q0[k][0] - pc.0, q0[k][1] - pc.1, q[k][0] - qc.0, q[k][1] - qc.1); saa += px * px + py * py; sa += px * qx + py * qy; sb += px * qy - py * qx; }
+            let (a, b) = (sa / saa, sb / saa); let (rx, ry) = (fc.0 - pc.0, fc.1 - pc.1); let (tx, ty) = (qc.0 + a * rx - b * ry, qc.1 + b * rx + a * ry); v.push([tx - fc.0, ty - fc.1, a.hypot(b), b.atan2(a).to_degrees()]); }
+        if v.len() == n { per.push(v); } }
+    if per.is_empty() { return Err("global motion: no region could be tracked".into()); }
+    let med = |mut x: Vec<f64>| { x.sort_by(|a, b| a.partial_cmp(b).unwrap()); let m = x.len(); if m % 2 == 1 { x[m / 2] } else { 0.5 * (x[m / 2 - 1] + x[m / 2]) } };
+    Ok((0..n).map(|i| { let mut o = [0f64; 4]; for k in 0..4 { o[k] = med(per.iter().map(|r| r[i][k]).collect()); } o }).collect())
 }
