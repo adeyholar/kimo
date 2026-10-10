@@ -25,3 +25,4 @@ pub mod keying;
 pub mod colortools;
 
 pub mod guard;
+pub mod speedlines;
