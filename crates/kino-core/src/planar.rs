@@ -271,7 +271,7 @@ pub fn track_mesh(p: &Project, clip_id: &str, q0: Quad, nx: usize, ny: usize, f0
 
 // ---- occluder auto-matte -------------------------------------------------------------------------------------------------------------
 /// Session-held anchor for a pinned layer: the source frame the track started on, used at render time to see what covers the surface.
-pub struct Anchor { pub src: String, pub src_start: f64, pub frame: Vec<u8>, pub q0: Quad, pub w: usize, pub h: usize, pub soft: f32 }
+pub struct Anchor { pub src: String, pub src_start: f64, pub frame: Vec<u8>, pub q0: Quad, pub w: usize, pub h: usize, pub soft: f32, pub chroma: f32 }
 static ANCHORS: std::sync::Mutex<Option<std::collections::HashMap<String, Anchor>>> = std::sync::Mutex::new(None);
 pub fn set_anchor(target: &str, a: Anchor) { let mut g = ANCHORS.lock().unwrap(); g.get_or_insert_with(Default::default).insert(target.to_string(), a); }
 pub fn anchor_src(target: &str) -> Option<(String, f64)> { ANCHORS.lock().unwrap().as_ref()?.get(target).map(|a| (a.src.clone(), a.src_start)) }
@@ -283,9 +283,17 @@ pub fn occluder_matte(target: &str, cur: &[u8], q: &Quad, gain: f32) -> Option<V
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN); for p in q { x0 = x0.min(p[0]); y0 = y0.min(p[1]); x1 = x1.max(p[0]); y1 = y1.max(p[1]); }
     let (bx0, by0, bx1, by1) = (x0.max(0.0) as usize, y0.max(0.0) as usize, (x1.min(w as f64 - 1.0)).max(0.0) as usize, (y1.min(h as f64 - 1.0)).max(0.0) as usize);
     for y in by0..=by1 { for x in bx0..=bx1 { let (u, v) = ap(&hm, x as f64 + 0.5, y as f64 + 0.5); if u < 1.0 || v < 1.0 || u > w as f64 - 2.0 || v > h as f64 - 2.0 { continue; }
-        let (ix, iy) = (u as usize, v as usize); let (fx, fy) = ((u - ix as f64) as f32, (v - iy as f64) as f32); let mut m = 0f32;
-        for j in 0..3 { let s = |xx: usize, yy: usize| a.frame[(yy * w + xx) * 4 + j] as f32; let av = s(ix, iy) * (1.0 - fx) * (1.0 - fy) + s(ix + 1, iy) * fx * (1.0 - fy) + s(ix, iy + 1) * (1.0 - fx) * fy + s(ix + 1, iy + 1) * fx * fy;
-            m = m.max((cur[(y * w + x) * 4 + j] as f32 - av * gain).abs() / 255.0); } diff[y * w + x] = m; inq[y * w + x] = true; } }
+        // tolerant compare: the live pixel is matched against the anchor at +-1 px (warp/resample jitter on thin detail must not read as an occluder); the smallest difference wins
+        let mut best = f32::MAX;
+        for oy in -1i32..=1 { for ox in -1i32..=1 { let (uu, vv) = (u + ox as f64, v + oy as f64); if uu < 0.0 || vv < 0.0 || uu > w as f64 - 2.0 || vv > h as f64 - 2.0 { continue; }
+            let (ix, iy) = (uu as usize, vv as usize); let (fx, fy) = ((uu - ix as f64) as f32, (vv - iy as f64) as f32); let mut m = 0f32; let mut avs = [0f32; 3];
+            for j in 0..3 { let s = |xx: usize, yy: usize| a.frame[(yy * w + xx) * 4 + j] as f32; let av = s(ix, iy) * (1.0 - fx) * (1.0 - fy) + s(ix + 1, iy) * fx * (1.0 - fy) + s(ix, iy + 1) * (1.0 - fx) * fy + s(ix + 1, iy + 1) * fx * fy; avs[j] = av;
+                m = m.max((cur[(y * w + x) * 4 + j] as f32 - av * gain).abs() / 255.0); }
+            if a.chroma > 0.0 { // chroma compare: luminance/focus/glyph changes on a neutral surface do not count, a coloured occluder (skin, cloth) does
+                let c = |j: usize| cur[(y * w + x) * 4 + j] as f32; let yc = 0.299 * c(0) + 0.587 * c(1) + 0.114 * c(2); let ya = 0.299 * avs[0] + 0.587 * avs[1] + 0.114 * avs[2];
+                let dch = (((c(0) - yc) - (avs[0] - ya)).abs().max(((c(2) - yc) - (avs[2] - ya)).abs()) / 255.0 * 2.5).min(1.0); m = m * (1.0 - a.chroma) + dch * a.chroma; }
+            best = best.min(m); } }
+        diff[y * w + x] = if best == f32::MAX { 0.0 } else { best }; inq[y * w + x] = true; } }
     let mut t1 = vec![0f32; w * h]; let mut t2 = vec![0f32; w * h]; crate::masks::box_pass(&diff, &mut t1, w, h, 3, true); crate::masks::box_pass(&t1, &mut t2, w, h, 3, false);
     let (lo, hi) = (0.07 / a.soft.max(0.2), 0.16 / a.soft.max(0.2)); let mut m: Vec<f32> = t2.iter().map(|&d| { let x = ((d - lo) / (hi - lo)).clamp(0.0, 1.0); 1.0 - x * x * (3.0 - 2.0 * x) }).collect();
     // grow the occluder by 2px and feather
