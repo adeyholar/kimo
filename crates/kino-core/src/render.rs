@@ -56,7 +56,7 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     let float_source=p.color_pipeline.enabled&&[".exr",".pfm"].iter().any(|ext|path.to_lowercase().ends_with(ext));
     let native_fit=float_source||(p.color_pipeline.enabled&&p.color_pipeline.linear_resample);
     let pix=if float_source{"gbrapf32le"}else if p.color_pipeline.enabled{"rgba64le"}else{"rgba"};
-    let vf = format!("setpts=PTS/{},fps={},trim=start_frame={a}:end_frame={},{},format={pix}",speed.max(0.01),p.fps,a+n,fitf);
+    let vf = format!("setpts=PTS/{},fps={},trim=start_frame={a}:end_frame={},setpts=PTS-STARTPTS,{},format={pix}",speed.max(0.01),p.fps,a+n,fitf);
     let is_img = ["png","jpg","jpeg","webp","bmp","exr","tif","tiff","pfm"].iter().any(|e| path.to_lowercase().ends_with(e));
     let loop_args: Vec<&str> = if is_img { vec!["-loop", "1"] } else { vec![] };
     let fs = (w * h * 4) as usize;
@@ -68,7 +68,7 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     if estimate>decode_cache_limit(){return Err("decode request exceeds bounded cache; reduce size/duration or use windowed timing".into())}
     crate::guard::reserve(estimate);
     let exr_args:Vec<&str>=if path.to_lowercase().ends_with(".exr"){vec!["-apply_trc","linear"]}else{vec![]};
-    let vf=if native_fit{format!("setpts=PTS/{},fps={},trim=start_frame={a}:end_frame={},format={pix}",speed.max(0.01),p.fps,a+n)}else{vf};
+    let vf=if native_fit{format!("setpts=PTS/{},fps={},trim=start_frame={a}:end_frame={},setpts=PTS-STARTPTS,format={pix}",speed.max(0.01),p.fps,a+n)}else{vf};
     let mut child = DecodeProcess(Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(&exr_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"])
         .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?);
     let mut buf=Vec::new();
@@ -97,7 +97,10 @@ pub fn prepare(p: &Project, cache: &mut Cache) -> Result<(), String> { prepare_a
 pub fn prepare_at(p: &Project, cache: &mut Cache, t: Option<f64>) -> Result<(), String> { match t { Some(t) => prepare_range(p, cache, t, t), None => prepare_range(p, cache, f64::MIN, f64::MAX) } }
 
 /// Decode clips overlapping [t0, t1] and evict decoded clips outside it (bounds memory).
-pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result<(), String> {
+pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result<(), String> {prepare_window(p,cache,t0,t1,WINDOW)}
+/// Export-only bounded lookahead amortizes stable prefix decode without changing fps phase.
+pub fn prepare_export_range(p:&Project,cache:&mut Cache,t0:f64,t1:f64)->Result<(),String>{prepare_window(p,cache,t0,t1,256)}
+fn prepare_window(p: &Project, cache: &mut Cache, t0: f64, t1: f64, window:usize) -> Result<(), String> {
     if cache.size != (p.width, p.height, p.fps) { cache.frames.clear(); cache.size = (p.width, p.height, p.fps); }
     let all = t0 == f64::MIN;
     let flat = flat_clips(&p.tracks, 0.0);
@@ -122,7 +125,7 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
         if let Some(fr)=shared{cache.frames.insert(c.id.clone(),(sig,fr));continue}
         if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, std::sync::Arc::new(Frames { still:false,working_linear:false,quantized:Default::default(),linear_buf: None, buf: vec![], fs: 0, first: 0 }))); continue; }
         // whole-clip decode only for speed-ramped clips (index mapping is in source time); everything else is windowed
-        let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(WINDOW).min(total - ia)) };
+        let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(window).min(total - ia)) };
         let mut count=count;
         if !all && c.speed_curve.is_none(){let native=p.color_pipeline.enabled&&p.color_pipeline.linear_resample;let pixels=if native{let(dw,dh,_,_)=probe(&a.path)?;(dw as usize*dh as usize).max(p.width as usize*p.height as usize)}else{p.width as usize*p.height as usize};let per=pixels*4*if p.color_pipeline.enabled{8}else{1};count=count.min((decode_cache_limit()/media_count/per.max(1)).max(1));if count<ib-ia+1{return Err("active decode range exceeds cache budget".into())}}
         cache.frames.remove(&c.id);
@@ -365,7 +368,7 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     while i < n {
         crate::guard::check();
         let mut end = (i + nt * 4).min(n);
-        loop{let last=(end-1) as f64/p.fps;match prepare_range(p,&mut cache,i as f64/p.fps,last){Ok(())=>break,Err(e)if end-i>1&&(e.contains("cache budget")||e.contains("memory cap")||e.contains("bounded cache"))=>{end=i+(end-i).div_ceil(2);cache=Cache::new();},Err(e)=>return Err(e)}}
+        loop{let last=(end-1) as f64/p.fps;match prepare_export_range(p,&mut cache,i as f64/p.fps,last){Ok(())=>break,Err(e)if end-i>1&&(e.contains("cache budget")||e.contains("memory cap")||e.contains("bounded cache"))=>{end=i+(end-i).div_ceil(2);cache=Cache::new();},Err(e)=>return Err(e)}}
         // work queue: nt workers pull frame indices, so one slow frame (shards) no longer idles the other cores
         let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
         std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }

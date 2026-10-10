@@ -265,3 +265,11 @@ Absolute output-frame trim now runs immediately after stable fps resampling, bef
 
 ## Fractional/VFR phase regression
 Stable-window tests now also use30000/1001fps and variable-rate selected-frame fixtures, comparing cold spot windows against the full decoded timeline at four times with nonzero in_point. Both phase tests pass. These confirm deterministic sampling for these fixtures, not every demuxer/camera timestamp condition.
+
+## Reset trimmed output timestamps
+Stable fps phase is retained, but trimmed output timestamps must then reset to0 before rawvideo output. Otherwise default ffmpeg output synchronization may duplicate initial window frames on later windows. Added setpts=PTS-STARTPTS after trim in integer/nativefloat paths. Independent actual footage segment windows at24/100/250/400 and256-framechunks now byte-identical to full raw resample. Late-window/full decode fixture passes. Corrected20s320x180baseline export measured below in follow-up benchmark; no speculative speedup claim.
+
+## Bounded export lookahead amortization
+Legacy/8bit export now requests up to256decoded frames of lookahead, clipped by the existing per-media/cache memory budget and timeline end. Spot render keeps24framewindow; frame phase/PTSreset unchanged. This amortizes prefix decode after the correctness fix without retaining full unbounded clips. Four phase tests including spot/export window exact parity and five cache tests pass.
+
+Actual20s320x180500frameexport: fixed24framebaseline11.839s, bounded256lookahead3.810s (68%lesswalltime). All500decoded output frames are byte-identical, SHA256d17fcafa48e360c365c83198023c26ea5c8787badfa9414f806842e916fb73f4 for both exports. Earlier uncorrectedPTS prototype benchmark was rejected, not used as parity evidence. Larger lookahead may use more memory up to the unchanged cap; active-clip fallback still applies.
