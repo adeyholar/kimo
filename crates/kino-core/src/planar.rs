@@ -94,6 +94,39 @@ fn quad_valid(prev: &Quad, q: &Quad) -> bool {
     let sz = (prev[1][0] - prev[0][0]).hypot(prev[1][1] - prev[0][1]).max((prev[3][0] - prev[0][0]).hypot(prev[3][1] - prev[0][1])).max(20.0);
     (0..4).all(|k| (q[k][0] - prev[k][0]).hypot(q[k][1] - prev[k][1]) < 0.35 * sz.max(40.0))
 }
+
+// ---- plane-pose motion model (engine core for edge-on / off-frame prediction) ----------------------------------------------------------
+type V3 = [f64; 3];
+fn v_sub(a: V3, b: V3) -> V3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
+fn v_add(a: V3, b: V3) -> V3 { [a[0] + b[0], a[1] + b[1], a[2] + b[2]] }
+fn v_mul(a: V3, k: f64) -> V3 { [a[0] * k, a[1] * k, a[2] * k] }
+fn v_dot(a: V3, b: V3) -> f64 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }
+fn v_cross(a: V3, b: V3) -> V3 { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]] }
+fn v_norm(a: V3) -> f64 { v_dot(a, a).sqrt() }
+fn v_unit(a: V3) -> V3 { let n = v_norm(a).max(1e-12); v_mul(a, 1.0 / n) }
+/// Plane pose from a quad under an assumed pinhole focal `f` (principal point at the frame centre): rotation columns (e1,e2,e3), translation, plane size (a,b) in depth units.
+struct Pose { r: [V3; 3], t: V3, a: f64, b: f64 }
+fn pose_from_quad(q: &Quad, f: f64, cx: f64, cy: f64) -> Option<Pose> { let h = solve_h(&UNIT, q)?;
+    let kin = |c: usize| -> V3 { let (x, y, z) = (h[c], h[3 + c], if c == 0 { h[6] } else { h[7] }); [(x - cx * z) / f, (y - cy * z) / f, z] };
+    let (m1, m2) = (kin(0), kin(1)); let m3 = [(h[2] - cx) / f, (h[5] - cy) / f, 1.0];
+    let (a, b) = (v_norm(m1), v_norm(m2)); if a < 1e-9 || b < 1e-9 { return None; }
+    let (mut e1, mut e2) = (v_unit(m1), v_unit(m2)); let e3 = v_unit(v_cross(e1, e2)); e2 = v_unit(v_cross(e3, e1)); e1 = v_unit(v_cross(e2, e3)); let mut t = m3; let mut e3 = e3;
+    if t[2] < 0.0 { t = v_mul(t, -1.0); e1 = v_mul(e1, -1.0); e2 = v_mul(e2, -1.0); e3 = v_unit(v_cross(e1, e2)); }
+    Some(Pose { r: [e1, e2, e3], t: v_mul(t, 1.0 / a), a: 1.0, b: b / a }) }
+fn mat_mul_t(a: &[V3; 3], b: &[V3; 3]) -> [V3; 3] { // returns A * B^T where matrices are stored as columns: result columns c_j = A * (row j of B)... computed as R = A * B^-1
+    let bt = |i: usize, j: usize| b[i][j]; let mut o = [[0f64; 3]; 3]; for c in 0..3 { for r in 0..3 { o[c][r] = (0..3).map(|k| a[k][r] * bt(k, c)).sum(); } } o }
+fn rot_axis(m: &[V3; 3]) -> V3 { let tr = m[0][0] + m[1][1] + m[2][2]; let ang = ((tr - 1.0) * 0.5).clamp(-1.0, 1.0).acos(); let ax = [m[1][2] - m[2][1], m[2][0] - m[0][2], m[0][1] - m[1][0]]; let n = v_norm(ax); if n < 1e-9 { return [0.0; 3]; } v_mul(ax, ang / n) }
+fn rot_from(w: V3) -> [V3; 3] { let ang = v_norm(w); if ang < 1e-12 { return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]; } let k = v_mul(w, 1.0 / ang); let (c, s) = (ang.cos(), ang.sin()); let mut o = [[0f64; 3]; 3];
+    for j in 0..3 { let mut e = [0.0; 3]; e[j] = 1.0; let r = v_add(v_add(v_mul(e, c), v_mul(v_cross(k, e), s)), v_mul(k, v_dot(k, e) * (1.0 - c))); o[j] = r; } o }
+fn rot_apply(r: &[V3; 3], v: V3) -> V3 { v_add(v_add(v_mul(r[0], v[0]), v_mul(r[1], v[1])), v_mul(r[2], v[2])) }
+/// Predict the next quad from the last accepted quads by constant-velocity extrapolation in plane-pose space (rotation vector + translation), which stays physically consistent as the plane goes edge-on or leaves the frame.
+pub fn pose_predict(hist: &[Quad], w: usize, h: usize) -> Option<Quad> {
+    if hist.len() < 3 { return None; } let (f, cx, cy) = (std::env::var("KINO_F").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.9) * w as f64, w as f64 / 2.0, h as f64 / 2.0); let n = hist.len().min(5); let ps: Vec<Pose> = hist[hist.len() - n..].iter().filter_map(|q| pose_from_quad(q, f, cx, cy)).collect(); if ps.len() < 3 { return None; }
+    let mut wv = [0f64; 3]; let mut tv = [0f64; 3]; let m = ps.len() - 1; for i in 1..ps.len() { let dr = mat_mul_t(&ps[i].r, &ps[i - 1].r); let ww = rot_axis(&dr); wv = v_add(wv, ww); tv = v_add(tv, v_sub(ps[i].t, ps[i - 1].t)); }
+    let (wv, tv) = (v_mul(wv, 1.0 / m as f64), v_mul(tv, 1.0 / m as f64)); let last = &ps[ps.len() - 1]; let rn = { let d = rot_from(wv); let mut o = [[0f64; 3]; 3]; for j in 0..3 { o[j] = rot_apply(&d, last.r[j]); } o }; let tn = v_add(last.t, tv);
+    let mut q = [[0f64; 2]; 4]; for (k, (u, v)) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].iter().enumerate() { let pt = v_add(v_add(v_mul(rn[0], last.a * u), v_mul(rn[1], last.b * v)), tn); if pt[2] < 0.02 { return None; } q[k] = [f * pt[0] / pt[2] + cx, f * pt[1] / pt[2] + cy]; if !q[k][0].is_finite() || !q[k][1].is_finite() || q[k][0].abs() > 1e5 || q[k][1].abs() > 1e5 { return None; } }
+    Some(q) }
+
 pub struct Track { pub quads: Vec<Quad>, pub conf: Vec<f64>, pub gain: Vec<f64>, pub lost: Vec<bool> }
 
 /// Track the quad `q0` (pixel coords) through frames `[f0, f1]` of a media clip.
@@ -103,10 +136,11 @@ pub fn track(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels:
     let get = |cache: &mut crate::render::Cache, i: usize| -> Result<Vec<Img>, String> { let g = crate::tracking::clip_gray_pub(p, cache, &c, i)?; Ok(pyramid(g, w, h, levels)) };
     let p0 = get(&mut cache, f0)?; let anchor = make_tmpl(&p0, &q0);
     let mut out = Track { quads: vec![q0], conf: vec![1.0], gain: vec![1.0], lost: vec![false] };
-    let mut prev_pyr = p0; let (mut q, mut vel) = (q0, [[0f64; 2]; 4]); let mut lost = false; let mut prevq: Option<Quad> = None; let mut hist: Vec<f64> = vec![];
+    let mut prev_pyr = p0; let (mut q, mut vel) = (q0, [[0f64; 2]; 4]); let mut lost = false; let mut prevq: Option<Quad> = None; let mut hist: Vec<f64> = vec![]; let mut qh: Vec<Quad> = vec![q0];
     for i in f0 + 1..=f1 {
         let cur = get(&mut cache, i)?; let mut pred = q; for k in 0..4 { pred[k][0] += vel[k][0]; pred[k][1] += vel[k][1]; }
         if let (Some(pq), false) = (prevq, lost) { if let Some(g) = solve_h(&pq, &q) { let mut hp = q; let mut okh = true; for k in 0..4 { let (x, y) = ap(&g, q[k][0], q[k][1]); if !x.is_finite() || !y.is_finite() || (x - q[k][0]).abs() > 400.0 || (y - q[k][1]).abs() > 400.0 { okh = false; } hp[k] = [x, y]; } if okh { pred = hp; } } }
+        let pose_pred = pose_predict(&qh, w, h).filter(|pp| { let szp = (q[1][0] - q[0][0]).hypot(q[1][1] - q[0][1]).max((q[3][0] - q[0][0]).hypot(q[3][1] - q[0][1])).max(40.0); (0..4).all(|k| (pp[k][0] - pred[k][0]).hypot(pp[k][1] - pred[k][1]) < 1.5 * szp) });
         let recent = make_tmpl(&prev_pyr, &q);
         let mut best = Fit { q: pred, conf: 0.0, gain: 1.0 };
         if !lost { let fr = align(&cur, &recent, &pred, &iters, Some(&pred)); best = fr; }
@@ -121,8 +155,8 @@ pub fn track(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels:
         let mc = if hist.is_empty() { 0.0 } else { hist.iter().sum::<f64>() / hist.len() as f64 };
         let fa_ok = fa.conf >= 0.55 && quad_valid(&q, &fa.q) && (fa.conf >= 0.8 * mc || (near(&fa.q) && fa.conf >= 0.68 * mc)); let be_ok = !lost && best.conf >= 0.5 && quad_valid(&q, &best.q) && (best.conf >= 0.8 * mc || (near(&best.q) && best.conf >= 0.68 * mc));
         let (chosen, ok) = if fa_ok { (fa, true) } else if be_ok { (best, true) } else { (Fit { q: pred, conf: fa.conf.max(best.conf), gain: 1.0 }, false) };
-        if ok { let nv: Quad = { let mut v = [[0f64; 2]; 4]; for k in 0..4 { v[k] = [chosen.q[k][0] - q[k][0], chosen.q[k][1] - q[k][1]]; } v }; for k in 0..4 { vel[k] = [0.6 * nv[k][0] + 0.4 * vel[k][0], 0.6 * nv[k][1] + 0.4 * vel[k][1]]; } prevq = Some(q); q = chosen.q; lost = false; hist.push(chosen.conf); if hist.len() > 6 { hist.remove(0); } }
-        else { for k in 0..4 { vel[k] = [vel[k][0] * 0.85, vel[k][1] * 0.85]; } q = pred; lost = true; }
+        if ok { let nv: Quad = { let mut v = [[0f64; 2]; 4]; for k in 0..4 { v[k] = [chosen.q[k][0] - q[k][0], chosen.q[k][1] - q[k][1]]; } v }; for k in 0..4 { vel[k] = [0.6 * nv[k][0] + 0.4 * vel[k][0], 0.6 * nv[k][1] + 0.4 * vel[k][1]]; } prevq = Some(q); q = chosen.q; qh.push(q); if qh.len() > 8 { qh.remove(0); } lost = false; hist.push(chosen.conf); if hist.len() > 6 { hist.remove(0); } }
+        else { for k in 0..4 { vel[k] = [vel[k][0] * 0.85, vel[k][1] * 0.85]; } q = if lost { pose_pred.unwrap_or(pred) } else { pred }; qh.push(q); if qh.len() > 8 { qh.remove(0); } lost = true; }
         out.quads.push(q); out.conf.push(chosen.conf); out.gain.push(if ok { chosen.gain } else { *out.gain.last().unwrap() }); out.lost.push(lost); prev_pyr = cur;
     }
     Ok(out)
@@ -237,4 +271,13 @@ pub fn occluder_matte(target: &str, cur: &[u8], q: &Quad, gain: f32) -> Option<V
     // grow the occluder by 2px and feather
     let mut mn = m.clone(); for y in 2..h.saturating_sub(2) { for x in 2..w.saturating_sub(2) { if !inq[y * w + x] { continue; } let mut v = 1f32; for dy in -2i32..=2 { for dx in -2i32..=2 { v = v.min(m[((y as i32 + dy) as usize) * w + (x as i32 + dx) as usize]); } } mn[y * w + x] = v; } }
     crate::masks::box_pass(&mn, &mut t1, w, h, 1, true); crate::masks::box_pass(&t1, &mut m, w, h, 1, false); for i in 0..w * h { if !inq[i] { m[i] = 1.0; } } Some(m)
+}
+
+#[cfg(test)]
+mod pose_tests { use super::*;
+    fn proj(f: f64, cx: f64, cy: f64, r: &[V3; 3], t: V3, a: f64, b: f64) -> Quad { let mut q = [[0f64; 2]; 4]; for (k, (u, v)) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].iter().enumerate() { let p = v_add(v_add(v_mul(r[0], a * u), v_mul(r[1], b * v)), t); q[k] = [f * p[0] / p[2] + cx, f * p[1] / p[2] + cy]; } q }
+    #[test] fn pose_roundtrip_and_predict() { let (w, h) = (1280usize, 720usize); let f = 0.9 * w as f64; let (cx, cy) = (640.0, 360.0); let base = rot_from([0.1, 0.5, 0.05]);
+        let mk = |i: f64| { let d = rot_from([0.0, 0.03 * i, 0.0]); let mut r = [[0f64; 3]; 3]; for j in 0..3 { r[j] = rot_apply(&d, base[j]); } proj(f, cx, cy, &r, [-0.3 + 0.02 * i, -0.1, 3.0 - 0.05 * i], 0.5, 0.3) };
+        let hist: Vec<Quad> = (0..5).map(|i| mk(i as f64)).collect(); let pr = pose_predict(&hist, w, h).expect("pred"); let tr = mk(5.0);
+        let e = (0..4).map(|k| (pr[k][0] - tr[k][0]).hypot(pr[k][1] - tr[k][1])).fold(0.0, f64::max); eprintln!("pose pred max err px {e}"); assert!(e < 3.0, "err {e}"); }
 }

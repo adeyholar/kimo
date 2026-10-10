@@ -262,3 +262,8 @@ Status honest: nothing below is done unless marked. Existing: motion blur (shutt
 - `track_mesh`: engine-level 3-level image pyramid (coarse-to-fine, 4x/2x/1x) per-vertex photometric Gauss-Newton against the frame-0 patch, sequential with velocity prediction, aperture-safe ridge, neighbour-regularised. Tier: BETA+.
   Measured on a synthetic waving flag (9x6 grid, 100 frames, textured, motion blur): mean vertex error 3.3 px, median 2.2 px, p95 8.6 px (was 12.3 / 7.7 / 30 before pyramid + ridge). 40 of 54 vertices stay under 2 px. 3-4 vertices on horizontal stripes (aperture problem, x unconstrained) still slip 25-110 px late in the shot. Track 14 s for 100 frames.
   Known gaps: no per-vertex occlusion, no topology change, stripes-only regions drift along the stripe.
+
+### Plane-pose motion model (planar tracker core)
+- `pose_predict`: constant-velocity extrapolation of a tracked plane in pose space (rotation vector + translation, plane size fixed), used to coast through occlusion and when the surface leaves the frame. Unit-tested exact (1e-12 px) on a synthetic rotating plane. Tier: BETA.
+- Measured on the 3D overtake room: coast error at the end of the shot 1407 px -> 1179 px (the sign is fully off-frame there, so this is not visible in the composite). It does NOT extend how far the tracker survives: tracking still ends at about 3% visible, because the data is gone. Using the pose prediction as the always-on prior made tracking worse (noisy pose from 1-2 px quad noise), so it is only used while lost.
+- Focal length is assumed 0.9 x frame width (env KINO_F overrides, for tests). No focal self-calibration yet. Edge-on survival below about 3% visible is a data limit, not solved.
