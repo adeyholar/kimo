@@ -126,8 +126,7 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
             let bar = (f.h - vis_h)/2;
             for y in 0..f.h { if y < bar || y >= f.h - bar { for x in 0..f.w { let i=(y*f.w+x)*4; f.d[i]=0.0; f.d[i+1]=0.0; f.d[i+2]=0.0; f.d[i+3]=1.0; } } }
         }
-        "lut" => { let path = strings.get("path").ok_or("lut needs strings.path (.cube)")?; let l = load_lut(path)?; let a = p(params, "intensity", 1.0, t);
-            px(f, |c| { let o = l.sample(c); [c[0]+(o[0]-c[0])*a, c[1]+(o[1]-c[1])*a, c[2]+(o[2]-c[2])*a] }); }
+        "lut" => return crate::color::lut::apply(params, strings, f, t),
         "hsl" => {
             let g = |k: &str| p(params, k, 0.0, t);
             const BANDS: [(&str, f32); 6] = [("red",0.0),("yellow",60.0),("green",120.0),("cyan",180.0),("blue",240.0),("magenta",300.0)];
@@ -249,26 +248,6 @@ fn blur_axis(f: &mut Frame, r: usize, horiz: bool) {
     }
 }
 
-pub struct Lut { n: usize, d: Vec<[f32; 3]> }
-impl Lut { pub fn sample(&self, c: [f32; 3]) -> [f32; 3] {
-    let m = (self.n - 1) as f32; let f = |v: f32| v.clamp(0.0, 1.0) * m; let (r, g, b) = (f(c[0]), f(c[1]), f(c[2]));
-    let (r0, g0, b0) = (r.floor() as usize, g.floor() as usize, b.floor() as usize); let (r1, g1, b1) = ((r0+1).min(self.n-1), (g0+1).min(self.n-1), (b0+1).min(self.n-1));
-    let (fr, fg, fb) = (r-r0 as f32, g-g0 as f32, b-b0 as f32);
-    let at = |r: usize, g: usize, b: usize| self.d[r + g*self.n + b*self.n*self.n];
-    let mut o = [0f32; 3];
-    for j in 0..3 { let c00 = at(r0,g0,b0)[j]*(1.0-fr)+at(r1,g0,b0)[j]*fr; let c10 = at(r0,g1,b0)[j]*(1.0-fr)+at(r1,g1,b0)[j]*fr;
-        let c01 = at(r0,g0,b1)[j]*(1.0-fr)+at(r1,g0,b1)[j]*fr; let c11 = at(r0,g1,b1)[j]*(1.0-fr)+at(r1,g1,b1)[j]*fr;
-        o[j] = (c00*(1.0-fg)+c10*fg)*(1.0-fb) + (c01*(1.0-fg)+c11*fg)*fb; }
-    o } }
-static LUTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Lut>>>> = std::sync::OnceLock::new();
-fn load_lut(path: &str) -> Result<std::sync::Arc<Lut>, String> {
-    let m = LUTS.get_or_init(|| Default::default()); let mut g = m.lock().unwrap(); if let Some(l) = g.get(path) { return Ok(l.clone()); }
-    let t = std::fs::read_to_string(path).map_err(|e| format!("lut {path}: {e}"))?; let mut n = 0; let mut d = vec![];
-    for l in t.lines() { let l = l.trim(); if l.starts_with("LUT_3D_SIZE") { n = l.split_whitespace().nth(1).and_then(|x| x.parse().ok()).unwrap_or(0); }
-        else if l.chars().next().map(|c| c.is_ascii_digit() || c == '-' || c == '.').unwrap_or(false) { let v: Vec<f32> = l.split_whitespace().filter_map(|x| x.parse().ok()).collect(); if v.len() == 3 { d.push([v[0], v[1], v[2]]); } } }
-    if n == 0 || d.len() != n*n*n { return Err("bad .cube (need LUT_3D_SIZE and n^3 rows)".into()); }
-    let l = std::sync::Arc::new(Lut { n, d }); g.insert(path.into(), l.clone()); Ok(l)
-}
 pub(crate) fn rgb2hsl(c: [f32; 3]) -> (f32, f32, f32) {
     let (r, g, b) = (c[0].clamp(0.0,1.0), c[1].clamp(0.0,1.0), c[2].clamp(0.0,1.0)); let mx = r.max(g).max(b); let mn = r.min(g).min(b); let l = (mx+mn)/2.0; let d = mx-mn;
     if d < 1e-6 { return (0.0, 0.0, l); } let s = d / (1.0 - (2.0*l-1.0).abs()).max(1e-6);

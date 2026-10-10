@@ -58,6 +58,42 @@ pub fn scope_png(f: &Frame, kind: &str, path: &str) -> Result<(), String> {
     ch.stdin.take().unwrap().write_all(&out).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(()) }
 
 pub fn commands() -> Vec<Command> { vec![
+    Command { name:"export_grade_lut",description:"Bake one clip's supported pointwise color effects at a frozen timeline time into a .cube LUT (17/33/65 grid). Rejects spatial/unsupported effects rather than silently omitting them. Does not include masks, transforms or footage. Domain default 0..1.",mutates:false,
+        schema:obj(vec![("clip_id",s("clip")),("time",n("freeze parameter time")),("path",s("output .cube")),("size",n("17,33 or 65; default 33")),("domain_min",n("default 0")),("domain_max",n("default 1"))],&["clip_id","time","path"]),
+        run:|ss,a|{
+            let size=on(a,"size",33.);if ![17.,33.,65.].contains(&size){return Err("LUT size must be 17,33,65".into())}let n=size as usize;let lo=on(a,"domain_min",0.);let hi=on(a,"domain_max",1.);if !lo.is_finite()||!hi.is_finite()||lo>=hi||lo.abs()>16.||hi.abs()>16.{return Err("finite increasing LUT domain within +/-16 required".into())}
+            let c=ss.project.find_clip(sa(a,"clip_id")?).ok_or("no clip")?;
+            let allowed=["color_managed","point_curves","lab_match","cdl","color_space","primaries","log_wheels","rgb_curves","hue_curves","film_print","bleach_bypass","white_balance","color_transfer","tonemap","highlight_rolloff","split_toning","exposure","contrast","saturation","temperature","tint","color_wheels","curves","teal_orange","levels","brightness_contrast","channel_mixer","colorize","invert","sepia","lut","hsl"];
+            for e in &c.effects{if !allowed.contains(&e.kind.as_str())||e.strings.get("mask_layer").map(|v|!v.is_empty()).unwrap_or(false){return Err(format!("cannot bake spatial/masked/unsupported effect '{}'",e.kind))}}
+            let mut f=Frame::new(n*n,n);for b in 0..n{for g in 0..n{for r in 0..n{let i=((b*n+g)*n+r)*4;for (j,k) in [r,g,b].iter().enumerate(){f.d[i+j]=(lo+(hi-lo)* *k as f64/(n-1) as f64) as f32}f.d[i+3]=1.}}}
+            let t=na(a,"time")?-c.start;for e in &c.effects{crate::effects::apply(&e.kind,&e.params,&e.strings,&mut f,t,0)?}
+            if f.d.iter().any(|v|!v.is_finite()){return Err("grade produces nonfinite LUT values".into())}
+            let path=sa(a,"path")?;let file=std::fs::File::create(path).map_err(|e|e.to_string())?;let mut w=std::io::BufWriter::new(file);
+            writeln!(w,"TITLE \"Kino pointwise grade\"\nLUT_3D_SIZE {n}\nDOMAIN_MIN {lo} {lo} {lo}\nDOMAIN_MAX {hi} {hi} {hi}").map_err(|e|e.to_string())?;
+            for px in f.d.chunks_exact(4){writeln!(w,"{:.8} {:.8} {:.8}",px[0],px[1],px[2]).map_err(|e|e.to_string())?}w.flush().map_err(|e|e.to_string())?;
+            Ok(json!({"path":path,"size":n,"entries":n*n*n,"effects":c.effects.len(),"domain":[lo,hi],"frozen_time":t}))
+        } },
+    Command { name:"match_grade",description:"Perceptual sRGB/D65 shot grade matching: full Lab covariance optimal transport rather than independent RGB mean/std. Optional normalized sample regions; excludes transparent pixels. Adds lab_match. Not semantic matching or camera calibration.",mutates:true,
+        schema:obj(vec![("clip_id",s("source clip")),("ref_clip_id",s("reference clip")),("time",n("source timeline seconds")),("ref_time",n("reference timeline seconds")),("strength",n("0..1")),("regularization",n("1e-8..0.1, default 0.0001")),("source_region",json!({"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4})),("ref_region",json!({"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4}))],&["clip_id","ref_clip_id","time","ref_time"]),
+        run:|ss,a|{let id=sa(a,"clip_id")?;let rid=sa(a,"ref_clip_id")?;if id==rid{return Err("source and reference must differ".into())}
+            let region=|key:&str|->Result<Option<[f64;4]>,String>{match a.get(key){None=>Ok(None),Some(v)=>serde_json::from_value(v.clone()).map(Some).map_err(|e|e.to_string())}};
+            let fs=clip_frame(&ss.project,id,na(a,"time")?)?;let fr=clip_frame(&ss.project,rid,na(a,"ref_time")?)?;
+            let src=crate::color::matching::statistics(&fs,region("source_region")?)?;let dst=crate::color::matching::statistics(&fr,region("ref_region")?)?;let m=crate::color::matching::transport(&src,&dst,on(a,"regularization",0.0001))?;
+            let strength=on(a,"strength",1.);if !strength.is_finite()||!(0. ..=1.).contains(&strength){return Err("strength outside 0..1".into())}
+            let mut vals=Vec::new();for i in 0..3{vals.push((format!("s{i}"),src.mean[i]));vals.push((format!("t{i}"),dst.mean[i]));for j in 0..3{vals.push((format!("a{i}{j}"),m[i][j]));}}vals.push(("strength".into(),strength));
+            let v:Vec<_>=vals.iter().map(|(k,v)|(k.as_str(),*v)).collect();let fx=add_fx(&mut ss.project,id,"lab_match",&v)?;Ok(json!({"effect_id":fx,"source_samples":src.count,"reference_samples":dst.count,"source_lab_mean":src.mean,"reference_lab_mean":dst.mean,"transport":m,"assumption":"sRGB encoded / D65"}))} },
+    Command { name: "analyze_color", description: "Quantitative float RGB/luma histograms, waveform and BT709 CbCr density; un-clipped min/max/mean and under/over-range counts. No nits inference. Optionally isolate one clip.", mutates:false,
+        schema:obj(vec![("time",n("timeline seconds")),("clip_id",s("optional isolated clip")),("bins",n("16..4096 default 256")),("range_min",n("default 0")),("range_max",n("default 1"))],&["time"]),
+        run:|ss,a|{let bins=on(a,"bins",256.);if !bins.is_finite()||bins.fract()!=0.||!(16. ..=4096.).contains(&bins){return Err("invalid bins".into())}let f=any_frame(&ss.project,a.get("clip_id").and_then(Value::as_str),na(a,"time")?)?;crate::color::scopes::data(&f,bins as usize,on(a,"range_min",0.),on(a,"range_max",1.))} },
+    Command { name: "set_color_curve", description: "Add a free-position master/RGB PCHIP color curve. points is 2..32 increasing [x,y] pairs, channel m/r/g/b. Other channels remain identity. Extended values extrapolate linearly.", mutates: true,
+        schema: obj(vec![("clip_id",s("clip")),("channel",json!({"type":"string","enum":["m","r","g","b"]})),("points",json!({"type":"array","minItems":2,"maxItems":32,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}}}))], &["clip_id","channel","points"]),
+        run: |ss,a| { let ch=sa(a,"channel")?;if !["m","r","g","b"].contains(&ch){return Err("invalid curve channel".into())}
+            let pts:Vec<[f32;2]>=serde_json::from_value(a.get("points").ok_or("missing points")?.clone()).map_err(|e|e.to_string())?;
+            crate::color::curves::Curve::new(&pts)?;
+            let id=sa(a,"clip_id")?;if ss.project.find_clip(id).is_none(){return Err("no clip".into())}
+            let fx=ss.project.gen_id("fx");let mut params=std::collections::BTreeMap::new();params.insert(format!("{ch}_count"),Prop::new(pts.len() as f64));
+            for (i,pt) in pts.iter().enumerate(){params.insert(format!("{ch}_x{i}"),Prop::new(pt[0] as f64));params.insert(format!("{ch}_y{i}"),Prop::new(pt[1] as f64));}
+            ss.project.find_clip_mut(id).unwrap().effects.push(Effect{id:fx.clone(),kind:"point_curves".into(),params,strings:Default::default()});Ok(json!({"effect_id":fx,"points":pts.len()})) } },
     Command { name: "render_scope", description: "Render a video scope image of the frame (optionally one clip in isolation): waveform (luma), parade (RGB), vectorscope (Cb/Cr, BT.709, skin-tone line), histogram. Look at it to judge exposure, color casts and clipping.", mutates: false,
         schema: obj(vec![("time", n("timeline seconds")), ("scope", json!({"type":"string","enum":["waveform","parade","vectorscope","histogram"]})), ("path", s("output png")), ("clip_id", s("optional: scope this clip only"))], &["time","scope","path"]),
         run: |ss, a| { let f = any_frame(&ss.project, a.get("clip_id").and_then(|v| v.as_str()), na(a, "time")?)?; scope_png(&f, sa(a, "scope")?, sa(a, "path")?)?; Ok(json!({"path": sa(a, "path")?})) } },

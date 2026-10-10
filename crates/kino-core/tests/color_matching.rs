@@ -1,0 +1,5 @@
+use kino_core::color::matching::*;
+fn mm(a:[[f64;3];3],b:[[f64;3];3])->[[f64;3];3]{std::array::from_fn(|i|std::array::from_fn(|j|(0..3).map(|k|a[i][k]*b[k][j]).sum()))}
+#[test]fn lab_roundtrip(){for i in 0..1000{let c=[(i%17) as f64/16.,(i%31) as f64/30.,(i%43) as f64/42.];let d=from_lab(to_lab(c));for j in 0..3{assert!((c[j]-d[j]).abs()<2e-12)}}}
+#[test]fn full_covariance_transfer(){let a=Stats{mean:[0.;3],cov:[[0.1,0.02,0.01],[0.02,0.2,0.03],[0.01,0.03,0.15]],count:100};let b=Stats{mean:[0.;3],cov:[[0.2,0.04,-0.01],[0.04,0.1,0.02],[-0.01,0.02,0.05]],count:100};let m=transport(&a,&b,1e-8).unwrap();let mut reg=a.cov;for i in 0..3{reg[i][i]+=1e-8}let pred=mm(mm(m,reg),m);for i in 0..3{for j in 0..3{assert!((pred[i][j]-b.cov[i][j]-if i==j{1e-8}else{0.}).abs()<1e-10)}}}
+#[test]fn flat_regularized_and_hostile(){let a=Stats{mean:[0.;3],cov:[[0.;3];3],count:100};let m=transport(&a,&a,1e-4).unwrap();for i in 0..3{for j in 0..3{assert!((m[i][j]-if i==j{1.}else{0.}).abs()<1e-12)}}assert!(transport(&a,&a,0.).is_err());assert!(transport(&a,&a,f64::NAN).is_err());}

@@ -1,0 +1,3 @@
+use kino_core::{color::scopes::data,effects::Frame};
+#[test]fn no_silent_clip(){let f=Frame{w:3,h:1,d:vec![-0.1,0.,0.,1.,0.5,0.5,0.5,1.,2.,1.,1.,1.]};let v=data(&f,256,0.,1.).unwrap();assert_eq!(v["pixels"],3);assert_eq!(v["under_range"][0],1);assert_eq!(v["over_range"][0],1);assert_eq!(v["max"][0],2.);let n:u64=v["histogram"][0].as_array().unwrap().iter().map(|v|v.as_u64().unwrap()).sum();assert_eq!(n,1)}
+#[test]fn hostile_ranges(){let f=Frame{w:0,h:0,d:vec![]};for b in [0,1,4097,usize::MAX]{assert!(data(&f,b,0.,1.).is_err())}assert!(data(&f,256,1.,0.).is_err());assert!(data(&f,256,f64::NAN,1.).is_err());assert!(data(&f,256,0.,1.).unwrap()["mean"].is_null())}

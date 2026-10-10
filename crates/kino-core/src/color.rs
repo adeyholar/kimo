@@ -2,6 +2,12 @@
 //! film print emulation, halation, white balance, color transfer, tone mapping. Scopes live in `scope_png`.
 use crate::effects::{box_blur3, hsl2rgb, lum, p, rgb2hsl, Frame, Params};
 use std::sync::OnceLock;
+pub mod managed;
+pub mod curves;
+pub mod lut;
+pub mod scopes;
+pub mod matching;
+pub mod cdl;
 
 type C = (&'static str, f64, &'static str);
 pub type Entry = (&'static str, &'static str, &'static [C]);
@@ -44,6 +50,10 @@ pub fn catalog3() -> &'static [Entry] {
         v.push(("tonemap", "Tone mapping for HDR-ish / linear input. mode 0 ACES filmic fit, 1 Reinhard, 2 Hable filmic. Optionally applies sRGB encoding.", lv(vec![("mode", 0.0, "0..2"), ("exposure", 0.0, "stops"), ("encode_srgb", 1.0, "0/1")])));
         v.push(("highlight_rolloff", "Soft-clip highlights above a knee (avoid harsh digital clipping)", lv(vec![("knee", 0.8, "0..1"), ("softness", 0.5, "0..1")])));
         v.push(("split_toning", "Tint shadows and highlights with separate hues and a balance control", lv(vec![("shadow_hue", 210.0, "deg"), ("shadow_sat", 0.3, "0..1"), ("high_hue", 35.0, "deg"), ("high_sat", 0.3, "0..1"), ("balance", 0.0, "-1..1")])));
+        v.extend(managed::catalog());
+        v.extend(curves::catalog());
+        v.extend(matching::catalog());
+        v.extend(cdl::catalog());
         v.extend(crate::keying::catalog4());
         v
     })
@@ -93,6 +103,10 @@ fn matte_apply(f: &mut Frame, m: &[f32], pr: &Params, t: f64) {
 pub fn apply3(kind: &str, pr: &Params, f: &mut Frame, t: f64, _seed: u64) -> Result<(), String> {
     let g = |k: &str, d: f64| p(pr, k, d, t); let (w, h) = (f.w, f.h); let n = w * h;
     match kind {
+        "cdl" => return cdl::apply(pr, f, t),
+        "lab_match" => return matching::apply(pr, f, t),
+        "point_curves" => return curves::apply(pr, f, t),
+        "color_managed" => return managed::apply(pr, f, t),
         "color_space" => { let (a, b) = (g("from", 1.0) as u32, g("to", 0.0) as u32); for i in 0..n { for j in 0..3 { f.d[i * 4 + j] = from_lin(b, to_lin(a, f.d[i * 4 + j])); } } }
         "primaries" => {
             let lift = [g("lift_r", 0.0) + g("lift_m", 0.0), g("lift_g", 0.0) + g("lift_m", 0.0), g("lift_b", 0.0) + g("lift_m", 0.0)]; let gam = [g("gamma_r", 1.0) * g("gamma_m", 1.0), g("gamma_g", 1.0) * g("gamma_m", 1.0), g("gamma_b", 1.0) * g("gamma_m", 1.0)];
