@@ -195,3 +195,14 @@ Float fitting now normalizes premultiplied RGB for every positive weighted alpha
 
 ## Explicit reference-relative exposure suggestion
 `compare_linear_exposure(clip_id, ref_clip_id, time, ref_time, percentile=0.5)` samples two caller-selected managed scene-linear frames and returns an exposure-stop suggestion for `linear_grade`, without adding an effect. Statistic: positive luminance, alpha0.99..1, unweighted percentile with linear interpolation. Percentile0.1..0.9, minimum4samples per frame, suggestion bound20stops. No semantic match, physical exposure inference or automatic creative target. Changes in framing/subject/lighting can make the suggestion inappropriate. Synthetic4xreference returns exactly2stops across all8workinggamuts; zero/transparent reference and invalid percentile rejected.
+
+## Optional processor diagnostics
+OCIO stderr is drained concurrently but retained at most8KiB, then included in failure results after child cleanup. Missing dependency now reports its actual import error; simulated wrong version reports the pinned2.5.1 requirement. Missing-library MCP path fails in0.029s locally. Capture is bounded and never executes diagnostic text. Actual optional processor tests still pass; no dependency install or fallback transform.
+
+## Declared Rec709 high-bit SDR conversion and tags
+Enabled Rec709 output now explicitly uses BT709 limited-range RGB-to-YCbCr for HEVC10, and declares BT709 primaries/matrix. Supported exact transfer tags: linear, sRGB, BT709 OETF. Gamma2.4 and camera log encodings are not mislabeled as BT709 OETF. FFV1 RGB uses identity matrix and full range. FFmpeg option name for identity matrix is `rgb`, not the ffprobe output name `gbr`; corrected existing PQ/HLG FFV1 paths too. Legacy disabled pipeline unchanged.
+
+FFV1 encoded sRGB fixture decodes RGB16 within2e-5 and probe verifies tags. Actual10-frame320x180HEVC SDR export0.547s with10-bit420, explicit tags and retained audio. First decoded video frame visually inspected, scattering panels/lightbeam intact. Contact-sheet generation failed on the0.4sclip, so verification used the decoded first frame instead. This is signal identity tagging, not broadcast gamma2.4 mastering or color calibration.
+
+## PQ/HLG FFV1 regression evidence
+PQ and scene-HLG FFV1 RGB16 now have direct encoder/decoder regressions, confirming BT2020 primaries, identity RGB matrix, their exact declared transfer and decoded RGB within1.6e-5 of the configured output function. Actual10-frame320x180PQ RGB16 export0.426s with203declaredreferencewhite, no mastering metadata; probe confirms fullrangeGBRP16/PQ/BT2020 and retainedPCM audio. This is tagged integer interchange, not measured HDR/HLG display rendering; HLG still lacks display OOTF.11pipeline tests pass.

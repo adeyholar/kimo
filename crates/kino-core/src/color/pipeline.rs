@@ -36,8 +36,14 @@ pub fn export_high(p:&Project,path:&str,format:&str,crf:u32)->Result<f64,String>
     let mut encoder_params="pools=2:frame-threads=2:log-level=error".to_string();if let Some(m)=&p.color_pipeline.mastering{encoder_params.push(':');encoder_params.push_str(&m.x265()?);}
     if format=="hevc10"{cmd.args(["-crf",&crf.to_string(),"-x265-params",&encoder_params,"-tag:v","hvc1"]);}
     if hdr{if format=="hevc10" {cmd.args(["-vf","scale=out_color_matrix=bt2020:out_range=tv","-color_range","tv"]);}
-    cmd.args(["-color_primaries","bt2020","-color_trc","smpte2084","-colorspace",if format=="hevc10"{"bt2020nc"}else{"gbr"}]);}else if p.color_pipeline.enabled&&p.color_pipeline.output_transfer==7&&p.color_pipeline.output_gamut==1{if format=="hevc10" {cmd.args(["-vf","scale=out_color_matrix=bt2020:out_range=tv","-color_range","tv"]);}
-    cmd.args(["-color_primaries","bt2020","-color_trc","arib-std-b67","-colorspace",if format=="hevc10"{"bt2020nc"}else{"gbr"}]);}
+    cmd.args(["-color_primaries","bt2020","-color_trc","smpte2084","-colorspace",if format=="hevc10"{"bt2020nc"}else{"rgb"}]);}else if p.color_pipeline.enabled&&p.color_pipeline.output_transfer==7&&p.color_pipeline.output_gamut==1{if format=="hevc10" {cmd.args(["-vf","scale=out_color_matrix=bt2020:out_range=tv","-color_range","tv"]);}
+    cmd.args(["-color_primaries","bt2020","-color_trc","arib-std-b67","-colorspace",if format=="hevc10"{"bt2020nc"}else{"rgb"}]);}
+    // Declare only exact supported transfer identities, never call gamma2.4 BT709 OETF.
+    if p.color_pipeline.enabled && p.color_pipeline.output_gamut==0 {
+      if format=="hevc10"{cmd.args(["-vf","scale=out_color_matrix=bt709:out_range=tv","-color_range","tv"]);}else{cmd.args(["-color_range","pc"]);}
+      cmd.args(["-color_primaries","bt709","-colorspace",if format=="hevc10"{"bt709"}else{"rgb"}]);
+      let transfer=match p.color_pipeline.output_transfer{0=>Some("linear"),1=>Some("iec61966-2-1"),8=>Some("bt709"),_=>None};if let Some(t)=transfer{cmd.args(["-color_trc",t]);}
+    }
     let mut child=Encoder(cmd.arg(path).stdin(Stdio::piped()).spawn().map_err(|e|e.to_string())?);let mut input=child.0.stdin.take().ok_or("no encoder input")?;let mut cache=crate::render::Cache::new();let count=(p.duration()*p.fps).round() as usize;
     let render_result=(||->Result<(),String>{for i in 0..count{crate::guard::check();let t=i as f64/p.fps;crate::render::prepare_at(p,&mut cache,Some(t))?;let mut f=crate::render::render_frame(p,t,&cache)?;output(p,&mut f)?;input.write_all(&rgba16(&f)?).map_err(|e|e.to_string())?}Ok(())})();drop(input);
     if let Err(e)=render_result{let _=child.0.kill();let _=child.0.wait();return Err(e)}let st=child.0.wait().map_err(|e|e.to_string())?;if !st.success(){return Err("high-bit encoder failed".into())}
