@@ -148,17 +148,17 @@ fn variable_feather(pts: &[PathPt], closed: bool, base: &[f32], w: usize, h: usi
     out
 }
 
-fn edt1(f: &mut [f32], n: usize, v: &mut [usize], z: &mut [f32], d: &mut [f32]) {
-    let mut k = 0usize; v[0] = 0; z[0] = f32::MIN; z[1] = f32::MAX;
-    for q in 1..n { loop { let p = v[k]; let s = ((f[q] + (q * q) as f32) - (f[p] + (p * p) as f32)) / (2.0 * (q as f32 - p as f32)); if s <= z[k] && k > 0 { k -= 1; continue; } if s <= z[k] { k = 0; v[0] = q; z[0] = f32::MIN; z[1] = f32::MAX; break; } k += 1; v[k] = q; z[k] = s; z[k + 1] = f32::MAX; break; } }
-    k = 0; for q in 0..n { while z[k + 1] < q as f32 { k += 1; } let p = v[k]; d[q] = (q as f32 - p as f32).powi(2) + f[p]; }
+fn edt1(f: &mut [f64], n: usize, v: &mut [usize], z: &mut [f64], d: &mut [f64]) {
+    let mut k = 0usize; v[0] = 0; z[0] = f64::MIN; z[1] = f64::MAX;
+    for q in 1..n { loop { let p = v[k]; let s = ((f[q] + (q * q) as f64) - (f[p] + (p * p) as f64)) / (2.0 * (q as f64 - p as f64)); if s <= z[k] && k > 0 { k -= 1; continue; } if s <= z[k] { k = 0; v[0] = q; z[0] = f64::MIN; z[1] = f64::MAX; break; } k += 1; v[k] = q; z[k] = s; z[k + 1] = f64::MAX; break; } }
+    k = 0; for q in 0..n { while z[k + 1] < q as f64 { k += 1; } let p = v[k]; d[q] = (q as f64 - p as f64).powi(2) + f[p]; }
 }
 /// Euclidean distance (px) from every pixel to the nearest pixel where `set` is true.
 fn edt(set: &[bool], w: usize, h: usize) -> Vec<f32> {
-    const INF: f32 = 1e9; let mut g: Vec<f32> = set.iter().map(|&b| if b { 0.0 } else { INF }).collect(); let n = w.max(h); let (mut v, mut z, mut d, mut f) = (vec![0usize; n + 1], vec![0f32; n + 2], vec![0f32; n + 1], vec![0f32; n + 1]);
+    const INF: f64 = 1e12; let mut g: Vec<f64> = set.iter().map(|&b| if b { 0.0 } else { INF }).collect(); let n = w.max(h); let (mut v, mut z, mut d, mut f) = (vec![0usize; n + 1], vec![0f64; n + 2], vec![0f64; n + 1], vec![0f64; n + 1]);
     for x in 0..w { for y in 0..h { f[y] = g[y * w + x]; } edt1(&mut f, h, &mut v, &mut z, &mut d); for y in 0..h { g[y * w + x] = d[y]; } }
     for y in 0..h { for x in 0..w { f[x] = g[y * w + x]; } edt1(&mut f, w, &mut v, &mut z, &mut d); for x in 0..w { g[y * w + x] = d[x]; } }
-    g.iter().map(|v| v.sqrt()).collect()
+    g.iter().map(|v| v.sqrt() as f32).collect()
 }
 /// Smooth, circular grow (r>0) or choke (r<0) from a signed distance field of the coverage.
 fn morph(c: &mut Vec<f32>, w: usize, h: usize, r: f32) {
@@ -166,7 +166,8 @@ fn morph(c: &mut Vec<f32>, w: usize, h: usize, r: f32) {
     let (d_out, d_in) = (edt(&inside, w, h), edt(&outside, w, h)); // distance to nearest inside / outside pixel
     let mut sd: Vec<f32> = (0..w * h).map(|i| if inside[i] { -(d_in[i] - 0.5) + (c[i] - 1.0).abs() * 0.0 } else { d_out[i] - 0.5 }).collect();
     // refine the band with the coverage itself (sub-pixel position of the edge)
-    for i in 0..w * h { if c[i] > 0.0 && c[i] < 1.0 { sd[i] = 0.5 - c[i]; } }
+    // only pixels that really sit on the edge (within 1.5 px of the 0.5 contour); stray low coverage far from the shape must not be treated as an edge
+    for i in 0..w * h { if c[i] > 0.0 && c[i] < 1.0 && sd[i].abs() <= 1.5 { sd[i] = 0.5 - c[i]; } }
     let mut t = vec![0f32; w * h]; box_pass(&sd, &mut t, w, h, 1, true); box_pass(&t, &mut sd, w, h, 1, false);
     for i in 0..w * h { c[i] = (0.5 - (sd[i] - r)).clamp(0.0, 1.0); }
 }
@@ -337,4 +338,18 @@ pub fn apply_stack(f: &mut Frame, layers: &[MaskLayer], t: f64, ctx: &Ctx) {
 pub fn matte_coverage(m: &Matte, src: &Frame) -> Vec<f32> {
     (0..src.w * src.h).map(|i| { let a = src.d[i * 4 + 3]; let l = 0.2126 * src.d[i * 4] + 0.7152 * src.d[i * 4 + 1] + 0.0722 * src.d[i * 4 + 2];
         match m.mode.as_str() { "luma" => l * a, "inv_luma" => 1.0 - l * a, "inv_alpha" => 1.0 - a, _ => a } }).collect()
+}
+
+#[cfg(test)]
+mod edt_tests {
+    use super::*;
+    /// The distance transform must match brute force on a concave, row-sparse shape (the 80-point contour case).
+    #[test]
+    fn edt_matches_brute_force() {
+        let (w, h) = (64usize, 40usize); let mut set = vec![false; w * h];
+        for y in 5..35 { for x in 8..30 { let a = ((x as f32 - 19.0).powi(2) + (y as f32 - 20.0).powi(2)).sqrt(); if a < 8.0 + 4.0 * ((y as f32) * 0.9).sin() { set[y * w + x] = true; } } }
+        let d = edt(&set, w, h);
+        for y in 0..h { for x in 0..w { let mut best = f32::MAX; for yy in 0..h { for xx in 0..w { if set[yy * w + xx] { best = best.min((((x as f32 - xx as f32).powi(2) + (y as f32 - yy as f32).powi(2))) as f32); } } }
+            assert!((d[y * w + x] - best.sqrt()).abs() < 1e-3, "edt mismatch at ({x},{y}): {} vs {}", d[y * w + x], best.sqrt()); } }
+    }
 }

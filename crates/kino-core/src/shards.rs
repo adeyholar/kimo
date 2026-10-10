@@ -15,7 +15,7 @@ pub struct ShardBurst {
     #[serde(default = "d_dof")] pub dof: f64, #[serde(default)] pub focus: f64, #[serde(default = "d_one")] pub brightness: f64, #[serde(default = "d_light")] pub light: [f64; 3],
     #[serde(default)] pub toward_camera: f64, #[serde(default)] pub spread_time: f64, #[serde(default)] pub fade_out: f64, #[serde(default)] pub dispersion: f64, #[serde(default)] pub origin_spread: f64,
     #[serde(default)] pub physics: bool, #[serde(default = "d_rest")] pub restitution: f64, #[serde(default = "d_fric")] pub friction: f64, #[serde(default)] pub floor: Option<f64>, #[serde(default)] pub ang_drag: f64, #[serde(default = "d_tr")] pub collide: bool,
-    #[serde(default)] pub fresnel: f64, #[serde(default)] pub refract: f64, #[serde(default)] pub falloff: f64,
+    #[serde(default)] pub thickness: Option<[f64; 2]>, #[serde(default)] pub aspect: Option<[f64; 2]>, #[serde(default)] pub fresnel: f64, #[serde(default)] pub refract: f64, #[serde(default)] pub falloff: f64,
 }
 fn d_rest() -> f64 { 0.35 } fn d_fric() -> f64 { 0.5 } fn d_tr() -> bool { true }
 
@@ -41,7 +41,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             let os = e.origin_spread * k; let pos = [e.origin[0] * k + (r(50) - 0.5) * 2.0 * os + dir[0] * sp * travel, e.origin[1] * k + (r(51) - 0.5) * 2.0 * os * 0.6 + dir[1] * sp * travel + 0.5 * e.gravity * k * age * age, e.origin[2] + (r(52) - 0.5) * 2.0 * os + vz * travel];
             let phys = traj.as_ref().map(|(tj, _): &(std::sync::Arc<crate::physics::Traj>, i32)| tj.at(i as usize, ts));
             let ang = [r(6) * 360.0 + (r(7) - 0.5) * 2.0 * e.spin * age, r(8) * 360.0 + (r(9) - 0.5) * 2.0 * e.spin * age, r(10) * 360.0 + (r(11) - 0.5) * 2.0 * e.spin * age];
-            let (pos, rm) = match &phys { Some((p, q)) => (*p, crate::physics::quat_matrix(*q)), None => (pos, rot_matrix(ang)) }; let nv = 4 + (r(12) * 2.99) as usize; let aspect = 0.62 + 0.6 * r(13); let thick = (0.3 + 0.6 * r(14)) * size;
+            let (pos, rm) = match &phys { Some((p, q)) => (*p, crate::physics::quat_matrix(*q)), None => (pos, rot_matrix(ang)) }; let nv = 4 + (r(12) * 2.99) as usize; let aspect = { let a = e.aspect.unwrap_or([0.62, 1.22]); a[0] + (a[1] - a[0]) * r(13) }; let thick = ({ let t = e.thickness.unwrap_or([0.3, 0.9]); t[0] + (t[1] - t[0]) * r(14) }) * size;
             let life_fade = if e.fade_out > 0.0 { 1.0 - sstep((age - (total - e.fade_out - birth).max(0.1)) / e.fade_out) } else { 1.0 }; let born = sstep(age / 0.05);
             let mut loc = [(0.0, 0.0); 6]; for v in 0..nv { let a = v as f64 / nv as f64 * std::f64::consts::TAU + (h(e.seed, i, 20 + v as u64) - 0.5) * 1.1; let rr = size * (0.62 + 0.42 * h(e.seed, i, 30 + v as u64)); loc[v] = (a.cos() * rr, a.sin() * rr * aspect); }
             let mut shard: Vec<([(f64, f64); 6], f64, f64, f64, f64)> = vec![]; // per face
@@ -97,7 +97,7 @@ fn bake_cached(e: &ShardBurst, k: f64, total: f64, hh: usize) -> std::sync::Arc<
         let sp = e.speed * k * (0.35 + 1.1 * r(4).powf(1.2)) / (0.6 + size / (30.0 * k)).sqrt(); let mut vz = dir[2] * sp; vz -= e.toward_camera * sp * (0.3 + r(5)); let os = e.origin_spread * k;
         let p = [e.origin[0] * k + (r(50) - 0.5) * 2.0 * os, e.origin[1] * k + (r(51) - 0.5) * 2.0 * os * 0.6, e.origin[2] + (r(52) - 0.5) * 2.0 * os];
         let sd = e.spin.to_radians(); let w = [(r(60) - 0.5) * 2.0 * sd, (r(61) - 0.5) * 2.0 * sd, (r(62) - 0.5) * 2.0 * sd];
-        let thick = (0.45 + 0.6 * r(14)) * size; let m = size * size * thick * 1e-3 + 1e-3;
+        let thick = ({ let t = e.thickness.unwrap_or([0.45, 1.05]); t[0] + (t[1] - t[0]) * r(14) }) * size; let m = size * size * thick * 1e-3 + 1e-3;
         bodies.push(crate::physics::Body { p, v: [dir[0] * sp, dir[1] * sp, vz], q: crate::physics::quat_euler([r(6) * 360.0, r(8) * 360.0, r(10) * 360.0]), w, r: size * 0.55, m, birth: r(40) * e.spread_time }); }
     let par = crate::physics::Params { gravity: [0.0, e.gravity * k, 0.0], drag: e.drag, ang_drag: e.ang_drag, restitution: e.restitution, friction: e.friction, floor_y: e.floor.map(|f| f * k), collide: e.collide };
     let tj = Arc::new(crate::physics::bake(bodies, &par, total + 0.1)); m.lock().unwrap().insert(key, tj.clone()); tj

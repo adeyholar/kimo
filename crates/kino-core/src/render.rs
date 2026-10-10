@@ -482,8 +482,8 @@ pub fn render_mask_png(p: &Project, clip_id: &str, mask_id: Option<&str>, t: f64
     let mut o = Frame::new(w, h);
     for i in 0..w * h { let k = cov[i]; match view {
         "overlay" => { let g = 0.35 + 0.0; for j in 0..3 { o.d[i * 4 + j] = f.d[i * 4 + j] * (1.0 - k * g) + if j == 0 { 1.0 } else { 0.0 } * k * g; } }
-        "cutout" => { for j in 0..3 { o.d[i * 4 + j] = f.d[i * 4 + j] * k; } }
-        _ => { for j in 0..3 { o.d[i * 4 + j] = k; } } } o.d[i * 4 + 3] = 1.0; }
+        "cutout" => { for j in 0..3 { o.d[i * 4 + j] = f.d[i * 4 + j]; } } // straight colour; alpha carries the matte so the PNG is a real transparent cutout
+        _ => { for j in 0..3 { o.d[i * 4 + j] = k; } } } o.d[i * 4 + 3] = if view == "cutout" { k * f.d[i * 4 + 3] } else { 1.0 }; }
     let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", p.width, p.height),"-i","-","-frames:v","1",path]).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
     ch.stdin.take().unwrap().write_all(&to_rgba8(&o)).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(())
 }
