@@ -72,10 +72,11 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     let mut buf=Vec::new();
     let linear_buf=if native_fit{
         let bytes_per_frame=raw_fs.checked_mul(if float_source{4}else{2}).ok_or("native frame size overflow")?;
+        let converter=if float_source{None}else{Some(crate::color::pipeline::Input16::new(p,c)?)};
         let mut stdout=child.stdout.take().ok_or("no decode output")?;let mut frame=vec![0u8;bytes_per_frame];let mut values=Vec::with_capacity(fs*n.max(1));let mut error=None;
         for _ in 0..n.max(1){crate::guard::check();let mut have=0;while have<frame.len(){match stdout.read(&mut frame[have..]){Ok(0)=>break,Ok(k)=>have+=k,Err(e)=>{error=Some(e.to_string());break}}}if have==0{break}if have!=frame.len(){error=Some("truncated native decode".into());break}
-         let d=if float_source{crate::color::interchange::unpack(&frame,dw,dh)}else{Ok(frame.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect())};
-         let fitted=d.and_then(|d|{let mut source=Frame{w:dw,h:dh,d};crate::color::pipeline::input(p,c,&mut source)?;crate::color::interchange::fit(&source,w as usize,h as usize,fit)});match fitted{Ok(d)=>values.extend(d),Err(e)=>{error=Some(e);break}}
+         let d=if float_source{crate::color::interchange::unpack(&frame,dw,dh)}else{converter.as_ref().ok_or("missing integer input converter")?.decode(&frame)};
+         let fitted=d.and_then(|d|{let mut source=Frame{w:dw,h:dh,d};if float_source{crate::color::pipeline::input(p,c,&mut source)?;}crate::color::interchange::fit(&source,w as usize,h as usize,fit)});match fitted{Ok(d)=>values.extend(d),Err(e)=>{error=Some(e);break}}
         }
         drop(stdout);if error.is_some(){let _=child.kill();}let status=child.wait().map_err(|e|e.to_string())?;if let Some(e)=error{return Err(e)}if !status.success(){return Err("native media decode failed".into())}Some(values)
     }else{

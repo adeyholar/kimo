@@ -41,3 +41,10 @@ pub fn export_high(p:&Project,path:&str,format:&str,crf:u32)->Result<f64,String>
     let pcm=crate::audio::mix(p);if pcm.iter().any(|v|v.abs()>1e-6){let wav=format!("{path}.tmp.wav");let video=format!("{path}.tmp.{}",if format=="ffv1_16"{"mkv"}else{"mp4"});crate::audio::write_wav(&wav,&pcm)?;std::fs::rename(path,&video).map_err(|e|e.to_string())?;let st=Command::new("ffmpeg").args(["-v","error","-y","-i",&video,"-i",&wav,"-c:v","copy","-c:a",if format=="ffv1_16"{"pcm_s16le"}else{"aac"},"-shortest",path]).status().map_err(|e|e.to_string())?;let _=std::fs::remove_file(video);let _=std::fs::remove_file(wav);if !st.success(){return Err("high-bit audio mux failed".into())}}
     Ok(count as f64/p.fps)
 }
+/// Exact integer16 transfer lookup, scoped to one native decode window.
+/// Table uses the same normalized f32 input values as the general float transform.
+pub struct Input16{table:Vec<f64>,matrix:super::managed::Mat}
+impl Input16{
+ pub fn new(p:&Project,c:&Clip)->Result<Self,String>{let q=&p.color_pipeline;q.validate()?;let g=c.props.get("input_gamut").map(|v|v.base).unwrap_or(q.input_gamut as f64);let t=c.props.get("input_transfer").map(|v|v.base).unwrap_or(q.input_transfer as f64);if g.fract()!=0.||t.fract()!=0.||!(0. ..=7.).contains(&g)||!(0. ..=8.).contains(&t){return Err("invalid clip input color".into())}crate::guard::reserve(65536*8);let table=(0..65536).map(|v|super::managed::decode(t as usize,(v as f32/65535.) as f64,q.reference_white as f32 as f64)).collect();Ok(Self{table,matrix:super::managed::conversion(g as usize,q.working_gamut)})}
+ pub fn decode(&self,bytes:&[u8])->Result<Vec<f32>,String>{if bytes.len()%8!=0{return Err("invalid integer16 frame".into())}let mut out=Vec::with_capacity(bytes.len()/2);for px in bytes.chunks_exact(8){let word=|j:usize|u16::from_le_bytes([px[j*2],px[j*2+1]]) as usize;let c=super::managed::mv(self.matrix,[self.table[word(0)],self.table[word(1)],self.table[word(2)]]);if c.iter().any(|v|!v.is_finite()||v.abs()>f32::MAX as f64){return Err("integer input color overflow".into())}out.extend(c.map(|v|v as f32));out.push(word(3) as f32/65535.);}Ok(out)}
+}
