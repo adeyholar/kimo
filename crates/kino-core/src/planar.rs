@@ -85,6 +85,15 @@ fn ncc_at(im: &Img, t: &Tmpl, l: usize, ql: &Quad) -> f64 { let Some(h) = solve_
     if a.len() < 30 { return -1.0; } let n = a.len() as f64; let (ma, mb) = (a.iter().sum::<f64>() / n, b.iter().sum::<f64>() / n); let (mut sab, mut saa, mut sbb) = (0.0, 1e-9, 1e-9);
     for i in 0..a.len() { sab += (a[i] - ma) * (b[i] - mb); saa += (a[i] - ma).powi(2); sbb += (b[i] - mb).powi(2); } sab / (saa * sbb).sqrt() * (a.len() as f64 / (tv.len() / 2) as f64).min(1.0) }
 
+/// Sanity gate: convex, non-degenerate, and no sudden area/shape jump relative to the previous quad.
+fn quad_valid(prev: &Quad, q: &Quad) -> bool {
+    let cr = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]); let s0 = cr(q[0], q[1], q[2]).signum();
+    for i in 0..4 { let v = cr(q[i], q[(i + 1) % 4], q[(i + 2) % 4]); if !v.is_finite() || v.signum() != s0 || v.abs() < 1.0 { return false; } }
+    let area = |q: &Quad| 0.5 * ((q[0][0] * q[1][1] - q[1][0] * q[0][1]) + (q[1][0] * q[2][1] - q[2][0] * q[1][1]) + (q[2][0] * q[3][1] - q[3][0] * q[2][1]) + (q[3][0] * q[0][1] - q[0][0] * q[3][1])).abs();
+    let r = area(q) / area(prev).max(1.0); if r < 0.6 || r > 1.7 { return false; }
+    let sz = (prev[1][0] - prev[0][0]).hypot(prev[1][1] - prev[0][1]).max((prev[3][0] - prev[0][0]).hypot(prev[3][1] - prev[0][1])).max(20.0);
+    (0..4).all(|k| (q[k][0] - prev[k][0]).hypot(q[k][1] - prev[k][1]) < 0.35 * sz.max(40.0))
+}
 pub struct Track { pub quads: Vec<Quad>, pub conf: Vec<f64>, pub gain: Vec<f64>, pub lost: Vec<bool> }
 
 /// Track the quad `q0` (pixel coords) through frames `[f0, f1]` of a media clip.
@@ -94,7 +103,7 @@ pub fn track(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels:
     let get = |cache: &mut crate::render::Cache, i: usize| -> Result<Vec<Img>, String> { let g = crate::tracking::clip_gray_pub(p, cache, &c, i)?; Ok(pyramid(g, w, h, levels)) };
     let p0 = get(&mut cache, f0)?; let anchor = make_tmpl(&p0, &q0);
     let mut out = Track { quads: vec![q0], conf: vec![1.0], gain: vec![1.0], lost: vec![false] };
-    let mut prev_pyr = p0; let (mut q, mut vel) = (q0, [[0f64; 2]; 4]); let mut lost = false; let mut prevq: Option<Quad> = None;
+    let mut prev_pyr = p0; let (mut q, mut vel) = (q0, [[0f64; 2]; 4]); let mut lost = false; let mut prevq: Option<Quad> = None; let mut hist: Vec<f64> = vec![];
     for i in f0 + 1..=f1 {
         let cur = get(&mut cache, i)?; let mut pred = q; for k in 0..4 { pred[k][0] += vel[k][0]; pred[k][1] += vel[k][1]; }
         if let (Some(pq), false) = (prevq, lost) { if let Some(g) = solve_h(&pq, &q) { let mut hp = q; let mut okh = true; for k in 0..4 { let (x, y) = ap(&g, q[k][0], q[k][1]); if !x.is_finite() || !y.is_finite() || (x - q[k][0]).abs() > 400.0 || (y - q[k][1]).abs() > 400.0 { okh = false; } hp[k] = [x, y]; } if okh { pred = hp; } } }
@@ -107,8 +116,12 @@ pub fn track(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels:
                 let sc = ncc_at(&cur[l], &anchor, l, &qq); if sc > bs { bs = sc; bd = (dx as f64, dy as f64); } } }
             let mut qq = pred; for k in 0..4 { qq[k][0] += bd.0 / s; qq[k][1] += bd.1 / s; } qq } else { best.q };
         let fa = align(&cur, &anchor, &start, &iters, Some(&pred));
-        let (chosen, ok) = if fa.conf >= 0.55 { (fa, true) } else if !lost && best.conf >= 0.5 { (best, true) } else { (Fit { q: pred, conf: fa.conf.max(best.conf), gain: 1.0 }, false) };
-        if ok { let nv: Quad = { let mut v = [[0f64; 2]; 4]; for k in 0..4 { v[k] = [chosen.q[k][0] - q[k][0], chosen.q[k][1] - q[k][1]]; } v }; for k in 0..4 { vel[k] = [0.6 * nv[k][0] + 0.4 * vel[k][0], 0.6 * nv[k][1] + 0.4 * vel[k][1]]; } prevq = Some(q); q = chosen.q; lost = false; }
+        let szq = (q[1][0] - q[0][0]).hypot(q[1][1] - q[0][1]).max((q[3][0] - q[0][0]).hypot(q[3][1] - q[0][1])).max(40.0);
+        let near = |fq: &Quad| (0..4).map(|k| (fq[k][0] - pred[k][0]).hypot(fq[k][1] - pred[k][1])).fold(0.0, f64::max) < 0.06 * szq + 12.0;
+        let mc = if hist.is_empty() { 0.0 } else { hist.iter().sum::<f64>() / hist.len() as f64 };
+        let fa_ok = fa.conf >= 0.55 && quad_valid(&q, &fa.q) && (fa.conf >= 0.8 * mc || (near(&fa.q) && fa.conf >= 0.68 * mc)); let be_ok = !lost && best.conf >= 0.5 && quad_valid(&q, &best.q) && (best.conf >= 0.8 * mc || (near(&best.q) && best.conf >= 0.68 * mc));
+        let (chosen, ok) = if fa_ok { (fa, true) } else if be_ok { (best, true) } else { (Fit { q: pred, conf: fa.conf.max(best.conf), gain: 1.0 }, false) };
+        if ok { let nv: Quad = { let mut v = [[0f64; 2]; 4]; for k in 0..4 { v[k] = [chosen.q[k][0] - q[k][0], chosen.q[k][1] - q[k][1]]; } v }; for k in 0..4 { vel[k] = [0.6 * nv[k][0] + 0.4 * vel[k][0], 0.6 * nv[k][1] + 0.4 * vel[k][1]]; } prevq = Some(q); q = chosen.q; lost = false; hist.push(chosen.conf); if hist.len() > 6 { hist.remove(0); } }
         else { for k in 0..4 { vel[k] = [vel[k][0] * 0.85, vel[k][1] * 0.85]; } q = pred; lost = true; }
         out.quads.push(q); out.conf.push(chosen.conf); out.gain.push(if ok { chosen.gain } else { *out.gain.last().unwrap() }); out.lost.push(lost); prev_pyr = cur;
     }
