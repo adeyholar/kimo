@@ -259,6 +259,6 @@ Status honest: nothing below is done unless marked. Existing: motion blur (shutt
 
 ### Mesh tracking and mesh pin (curved / waving surfaces)
 - `set_mesh_pin`: layer pinned onto an nx*ny vertex mesh, per-cell perspective, motion blur. Tier: solid (verified on a synthetic waving flag).
-- `track_mesh`: per-vertex photometric Gauss-Newton against the frame-0 patch, sequential with velocity prediction, neighbour-regularised. Tier: BETA.
-  Measured on a synthetic waving flag (9x6 grid, 100 frames, textured): median vertex error 7.7 px, mean 12.3 px, most vertices within 1-3 px, but 4-6 vertices in low-texture regions get lost late in the shot (200+ px) and tear the pin. Track 11 s for 100 frames.
-  Known gaps: no lost-vertex rejection that works (a Laplacian reject pass cascaded and was removed), no coarse-to-fine pyramid, no per-vertex occlusion. Use a flat-colour-free surface for now.
+- `track_mesh`: engine-level 3-level image pyramid (coarse-to-fine, 4x/2x/1x) per-vertex photometric Gauss-Newton against the frame-0 patch, sequential with velocity prediction, aperture-safe ridge, neighbour-regularised. Tier: BETA+.
+  Measured on a synthetic waving flag (9x6 grid, 100 frames, textured, motion blur): mean vertex error 3.3 px, median 2.2 px, p95 8.6 px (was 12.3 / 7.7 / 30 before pyramid + ridge). 40 of 54 vertices stay under 2 px. 3-4 vertices on horizontal stripes (aperture problem, x unconstrained) still slip 25-110 px late in the shot. Track 14 s for 100 frames.
+  Known gaps: no per-vertex occlusion, no topology change, stripes-only regions drift along the stripe.
