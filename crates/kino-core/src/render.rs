@@ -69,20 +69,23 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     crate::guard::reserve(estimate);
     let exr_args:Vec<&str>=if path.to_lowercase().ends_with(".exr"){vec!["-apply_trc","linear"]}else{vec![]};
     let vf=if native_fit{format!("setpts=PTS/{},fps={},trim=start_frame={a}:end_frame={},setpts=PTS-STARTPTS,format={pix}",speed.max(0.01),p.fps,a+n)}else{vf};
-    let mut child = DecodeProcess(Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(&exr_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"])
-        .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?);
+    let mut command=Command::new("ffmpeg");command.args(["-v","error"]).args(&loop_args).args(&exr_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"]);
+    let mut child=if native_fit{Some(DecodeProcess(command.stdout(Stdio::piped()).spawn().map_err(|e|format!("ffmpeg: {e}"))?))}else{None};
     let mut buf=Vec::new();
     let linear_buf=if native_fit{
         let bytes_per_frame=raw_fs.checked_mul(if float_source{4}else{2}).ok_or("native frame size overflow")?;
         let converter=if float_source{None}else{Some(crate::color::pipeline::Input16::new(p,c)?)};
-        let mut stdout=child.0.stdout.take().ok_or("no decode output")?;let mut frame=vec![0u8;bytes_per_frame];let mut values=Vec::with_capacity(fs*n.max(1));let mut error=None;
+        let child=child.as_mut().ok_or("missing native decoder")?;let mut stdout=child.0.stdout.take().ok_or("no decode output")?;let mut frame=vec![0u8;bytes_per_frame];let mut values=Vec::with_capacity(fs*n.max(1));let mut error=None;
         for _ in 0..n.max(1){crate::guard::check();let mut have=0;while have<frame.len(){match stdout.read(&mut frame[have..]){Ok(0)=>break,Ok(k)=>have+=k,Err(e)=>{error=Some(e.to_string());break}}}if have==0{break}if have!=frame.len(){error=Some("truncated native decode".into());break}
          let d=if float_source{crate::color::interchange::unpack(&frame,dw,dh)}else{converter.as_ref().ok_or("missing integer input converter")?.decode(&frame)};
          let fitted=d.and_then(|d|{let mut source=Frame{w:dw,h:dh,d};if float_source{crate::color::pipeline::input(p,c,&mut source)?;}crate::color::interchange::fit(&source,w as usize,h as usize,fit)});match fitted{Ok(d)=>values.extend(d),Err(e)=>{error=Some(e);break}}
         }
         drop(stdout);if error.is_some(){let _=child.0.kill();}let status=child.0.wait().map_err(|e|e.to_string())?;if let Some(e)=error{return Err(e)}if !status.success(){return Err("native media decode failed".into())}Some(values)
     }else{
-        child.0.stdout.take().ok_or("no decode output")?.read_to_end(&mut buf).map_err(|e|e.to_string())?;if !child.0.wait().map_err(|e|e.to_string())?.success(){return Err("media decode failed".into())}
+        let bytes_per_frame=fs.checked_mul(if p.color_pipeline.enabled{2}else{1}).ok_or("decode frame size overflow")?;
+        let max=bytes_per_frame.checked_mul(n.max(1)).ok_or("decode output size overflow")?;
+        buf=crate::color::process::decode_capture(&mut command,max,crate::color::process::decode_deadline(n.max(1)))?;
+        if buf.len()%bytes_per_frame!=0{return Err("truncated project-sized decode output".into())}
         if p.color_pipeline.enabled{let values=buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect();buf=Vec::new();Some(values)}else{None}
     };
     let k = buf.len() / fs; buf.truncate(k * fs);

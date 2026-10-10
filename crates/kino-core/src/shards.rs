@@ -27,14 +27,28 @@ pub struct Plane {
     #[serde(default)] pub impact: [f64; 2], #[serde(default = "d_region")] pub region: [f64; 2], #[serde(default = "d_cells")] pub cells: u32, #[serde(default = "d_pr")] pub radius: f64,
     #[serde(default = "d_wave")] pub wave_speed: f64, #[serde(default = "d_imp")] pub impulse: f64, #[serde(default = "d_lift")] pub lift: f64, #[serde(default)] pub under_depth: f64,
     #[serde(default = "d_grade")] pub grading: f64, #[serde(default = "d_tr")] pub hidden_until_birth: bool, #[serde(default = "d_maxd")] pub max_delay: f64,
+    /// Source quad in 1280x720 canvas pixels (TL,TR,BR,BL). The plane (`region` units, use the texture UV size) is mapped onto it by a homography, so birth is confined to the quad and starts in its pose.
+    #[serde(default)] pub quad: Option<[[f64; 2]; 4]>, #[serde(default)] pub impact_uv: Option<[f64; 2]>,
+    /// Image carried on the facets (UV = plane coordinates). `opaque` 0..1 mixes it over the glass shading.
+    #[serde(default)] pub texture: Option<String>, #[serde(default = "d_one")] pub opaque: f64,
 }
 fn d_region() -> [f64; 2] { [1280.0, 720.0] } fn d_cells() -> u32 { 120 } fn d_pr() -> f64 { 140.0 } fn d_wave() -> f64 { 2400.0 } fn d_imp() -> f64 { 1100.0 } fn d_lift() -> f64 { 0.9 } fn d_grade() -> f64 { 3.0 } fn d_maxd() -> f64 { 0.25 }
-pub struct Cell { pub poly: Vec<(f64, f64)>, pub c: (f64, f64), pub area: f64 }
+pub struct Cell { pub poly: Vec<(f64, f64)>, pub c: (f64, f64), pub area: f64, pub lc: (f64, f64), pub uv: Vec<(f64, f64)> }
+fn sq2quad(q: [(f64, f64); 4]) -> [f64; 8] { let (x0, y0, x1, y1, x2, y2, x3, y3) = (q[0].0, q[0].1, q[1].0, q[1].1, q[2].0, q[2].1, q[3].0, q[3].1);
+    let (dx1, dx2, dx3, dy1, dy2, dy3) = (x1 - x2, x3 - x2, x0 - x1 + x2 - x3, y1 - y2, y3 - y2, y0 - y1 + y2 - y3); let den = dx1 * dy2 - dy1 * dx2; let (g, hh) = if den.abs() < 1e-12 { (0.0, 0.0) } else { ((dx3 * dy2 - dy3 * dx2) / den, (dx1 * dy3 - dy1 * dx3) / den) };
+    [x1 - x0 + g * x1, x3 - x0 + hh * x3, x0, y1 - y0 + g * y1, y3 - y0 + hh * y3, y0, g, hh] }
+fn hmap(m: &[f64; 8], u: f64, v: f64) -> (f64, f64) { let w = m[6] * u + m[7] * v + 1.0; ((m[0] * u + m[1] * v + m[2]) / w, (m[3] * u + m[4] * v + m[5]) / w) }
+/// Quad homography in canvas-centre offsets (pixels at this render scale) or None for the legacy screen-facing plane.
+pub fn plane_warp(p: &Plane, k: f64) -> Option<[f64; 8]> { p.quad.map(|q| { let o = |i: usize| ((q[i][0] - 640.0) * k, (q[i][1] - 360.0) * k); sq2quad([o(0), o(1), o(2), o(3)]) }) }
+/// (local impact, canvas impact) for the plane.
+pub fn plane_impact(p: &Plane, k: f64) -> ((f64, f64), (f64, f64)) { let (rw, rh) = (p.region[0] * k, p.region[1] * k);
+    let li = match p.impact_uv { Some(iu) => ((iu[0] - 0.5) * rw, (iu[1] - 0.5) * rh), None => (p.impact[0] * k, p.impact[1] * k) };
+    let ci = match plane_warp(p, k) { Some(m) => hmap(&m, li.0 / rw + 0.5, li.1 / rh + 0.5), None => li }; (li, ci) }
 fn clip(poly: &[(f64, f64)], n: (f64, f64), off: f64) -> Vec<(f64, f64)> { // keep points with n.p <= off
     let mut out = vec![]; for i in 0..poly.len() { let (a, b) = (poly[i], poly[(i + 1) % poly.len()]); let (da, db) = (n.0 * a.0 + n.1 * a.1 - off, n.0 * b.0 + n.1 * b.1 - off);
         if da <= 0.0 { out.push(a); } if (da < 0.0) != (db < 0.0) && (da - db).abs() > 1e-12 { let t = da / (da - db); out.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)); } } out }
 pub fn plane_cells(p: &Plane, seed: u64, k: f64) -> Vec<Cell> {
-    let (rw, rh) = (p.region[0] * k, p.region[1] * k); let (ix, iy) = (p.impact[0] * k, p.impact[1] * k); let n = p.cells.clamp(4, 400) as usize; let rad = (p.radius * k).max(1.0);
+    let (rw, rh) = (p.region[0] * k, p.region[1] * k); let ((ix, iy), _) = plane_impact(p, k); let warp = plane_warp(p, k); let n = p.cells.clamp(4, 400) as usize; let rad = (p.radius * k).max(1.0);
     // dart throwing with a spacing that grows with distance from the impact (area-weighted size distribution)
     let base = (rw * rh / n as f64).sqrt() * 0.62; let mut sites: Vec<(f64, f64)> = vec![]; let mut tries = 0u64;
     while sites.len() < n && tries < 40000 { tries += 1; let x = (h(seed, tries, 900) - 0.5) * rw; let y = (h(seed, tries, 901) - 0.5) * rh; let d = ((x - ix).powi(2) + (y - iy).powi(2)).sqrt();
@@ -45,14 +59,17 @@ pub fn plane_cells(p: &Plane, seed: u64, k: f64) -> Vec<Cell> {
         if poly.len() < 3 { continue; }
         while poly.len() > 6 { let m = poly.len(); let mut best = (f64::MAX, 0); for v in 0..m { let (a, b, c) = (poly[(v + m - 1) % m], poly[v], poly[(v + 1) % m]); let ar = ((b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1)).abs() * 0.5; if ar < best.0 { best = (ar, v); } } poly.remove(best.1); }
         let mut area = 0.0; let (mut cx, mut cy) = (0.0, 0.0); for v in 0..poly.len() { let (a, b) = (poly[v], poly[(v + 1) % poly.len()]); let cr = a.0 * b.1 - b.0 * a.1; area += cr; cx += (a.0 + b.0) * cr; cy += (a.1 + b.1) * cr; }
-        if area.abs() < 1e-6 { continue; } let c = (cx / (3.0 * area), cy / (3.0 * area)); let rel: Vec<(f64, f64)> = poly.iter().map(|q| (q.0 - c.0, q.1 - c.1)).collect(); cells.push(Cell { poly: rel, c, area: area.abs() * 0.5 }); }
+        if area.abs() < 1e-6 { continue; } let lc = (cx / (3.0 * area), cy / (3.0 * area)); let uv: Vec<(f64, f64)> = poly.iter().map(|q| (q.0 / rw + 0.5, q.1 / rh + 0.5)).collect();
+        let wp: Vec<(f64, f64)> = match &warp { Some(m) => uv.iter().map(|q| hmap(m, q.0, q.1)).collect(), None => poly.clone() };
+        let (mut wa, mut wx, mut wy) = (0.0, 0.0, 0.0); for v in 0..wp.len() { let (a, b) = (wp[v], wp[(v + 1) % wp.len()]); let cr = a.0 * b.1 - b.0 * a.1; wa += cr; wx += (a.0 + b.0) * cr; wy += (a.1 + b.1) * cr; } if wa.abs() < 1e-6 { continue; }
+        let c = (wx / (3.0 * wa), wy / (3.0 * wa)); let rel: Vec<(f64, f64)> = wp.iter().map(|q| (q.0 - c.0, q.1 - c.1)).collect(); cells.push(Cell { poly: rel, c, area: wa.abs() * 0.5, lc, uv }); }
     cells
 }
 
 fn h(a: u64, i: u64, k: u64) -> f64 { let mut x = a.wrapping_mul(0x9E3779B97F4A7C15) ^ i.wrapping_mul(0xBF58476D1CE4E5B9) ^ k.wrapping_mul(0x94D049BB133111EB); x ^= x >> 30; x = x.wrapping_mul(0xBF58476D1CE4E5B9); x ^= x >> 27; x = x.wrapping_mul(0x94D049BB133111EB); x ^= x >> 31; (x >> 11) as f64 / (1u64 << 53) as f64 }
 fn sstep(x: f64) -> f64 { let t = x.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) }
 
-struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64, n3: [f64; 3] }
+struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64, n3: [f64; 3], tex: Option<[f64; 6]> }
 
 pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
     let (w, hh) = (f.w, f.h); let cv = CamView::new(w, hh, cam); let fl = cv.focal(); let k = w.min(hh) as f64 / 720.0;
@@ -60,13 +77,14 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
     let lg = { let l = e.light; let m = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt().max(1e-9); [l[0] / m, l[1] / m, l[2] / m] };
     let focus = if e.focus > 0.0 { e.focus } else { fl };
     let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));
+    let tex = e.plane.as_ref().and_then(|p| p.texture.as_ref().and_then(|t| load_tex(t, p.region)));
     let traj = if e.physics && pcells.is_none() { Some((bake_cached(e, k, total, hh), 0)) } else { None };
     for sub in 0..nsub { let ts = (t + ((sub as f64 + 0.5) / nsub as f64 - 0.5) * shutter).max(0.0);
         let mut prims: Vec<Prim> = Vec::with_capacity(e.count as usize * 2);
         let ncount = pcells.as_ref().map(|c| c.1.len() as u64).unwrap_or(e.count as u64);
         for i in 0..ncount {
             let r = |kk: u64| h(e.seed, i, kk); let pc = pcells.as_ref().map(|c| (&c.0, &c.1[i as usize]));
-            let pdist = pc.map(|(p, c)| ((c.c.0 - p.impact[0] * k).powi(2) + (c.c.1 - p.impact[1] * k).powi(2)).sqrt());
+            let pdist = pc.map(|(p, c)| { let (li, _) = plane_impact(p, k); ((c.lc.0 - li.0).powi(2) + (c.lc.1 - li.1).powi(2)).sqrt() });
             let birth = match (pc, pdist) { (Some((p, _)), Some(d)) => (d / (p.wave_speed * k)).min(p.max_delay), _ => r(40) * e.spread_time };
             if ts < birth && pc.map(|(p, _)| p.hidden_until_birth).unwrap_or(true) { continue; } let age = (ts - birth).max(0.0);
             let size = if let Some((_, c)) = pc { (c.area.sqrt() / 1.8).max(1.0) } else { (e.size_min * (e.size_max / e.size_min.max(0.1)).powf(r(1).powf(1.0))) * k }; // heavy toward small, a few large
@@ -74,7 +92,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             let sp = e.speed * k * (0.35 + 1.1 * r(4).powf(1.2)) / (0.6 + size / (30.0 * k)).sqrt(); let dr = e.drag.max(1e-3); let travel = (1.0 - (-dr * age).exp()) / dr;
             let mut vz = dir[2] * sp; vz -= e.toward_camera * sp * (0.3 + r(5)); // negative z = toward camera
             let os = e.origin_spread * k; let pos = [e.origin[0] * k + (r(50) - 0.5) * 2.0 * os + dir[0] * sp * travel, e.origin[1] * k + (r(51) - 0.5) * 2.0 * os * 0.6 + dir[1] * sp * travel + 0.5 * e.gravity * k * age * age, e.origin[2] + (r(52) - 0.5) * 2.0 * os + vz * travel];
-            let pos = if let (Some((p, c)), Some(d)) = (pc, pdist) { let (ix, iy) = (p.impact[0] * k, p.impact[1] * k); let (dx, dy) = (c.c.0 - ix, c.c.1 - iy); let m = (dx * dx + dy * dy).sqrt().max(1e-6); let (ux, uy) = if d < 1e-3 { let a = r(60) * std::f64::consts::TAU; (a.cos(), a.sin()) } else { (dx / m, dy / m) };
+            let pos = if let (Some((p, c)), Some(d)) = (pc, pdist) { let (_, (ix, iy)) = plane_impact(p, k); let (dx, dy) = (c.c.0 - ix, c.c.1 - iy); let m = (dx * dx + dy * dy).sqrt().max(1e-6); let (ux, uy) = if d < 1e-3 { let a = r(60) * std::f64::consts::TAU; (a.cos(), a.sin()) } else { (dx / m, dy / m) };
                 let v0 = p.impulse * k * (-d / (p.radius * k * 3.0)).exp().max(0.12) * (0.6 + 0.8 * r(4)) / (0.7 + size / (40.0 * k)).sqrt(); let vz = -p.lift * v0 * (0.6 + 0.8 * r(5));
                 [c.c.0 + ux * v0 * travel, c.c.1 + uy * v0 * travel + 0.5 * e.gravity * k * age * age, p.under_depth * k + vz * travel] } else { pos };
             let phys = traj.as_ref().map(|(tj, _): &(std::sync::Arc<crate::physics::Traj>, i32)| tj.at(i as usize, ts));
@@ -94,8 +112,8 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             { let (fp, bp) = (shard[0].0, shard[1].0); for v in 0..nv { let w2 = (v + 1) % nv; let (ex, ey) = (loc[w2].0 - loc[v].0, loc[w2].1 - loc[v].1); let l = (ex * ex + ey * ey).sqrt().max(1e-9); let nl = [ey / l, -ex / l, 0.0];
                 let nw = [rm[0][0] * nl[0] + rm[0][1] * nl[1], rm[1][0] * nl[0] + rm[1][1] * nl[1], rm[2][0] * nl[0] + rm[2][1] * nl[1]]; let nd = nw[0] * lg[0] + nw[1] * lg[1] + nw[2] * lg[2]; let rf = [lg[0] - 2.0 * nd * nw[0], lg[1] - 2.0 * nd * nw[1], lg[2] - 2.0 * nd * nw[2]];
                 let sp2 = rf[2].max(0.0).powi(14) + 0.4 * (-rf[2]).max(0.0).powi(14); let mut q = [(0.0, 0.0); 6]; q[0] = fp[v]; q[1] = fp[w2]; q[2] = bp[w2]; q[3] = bp[v];
-                prims.push(Prim { depth: (shard[0].1 + shard[1].1) / 2.0 - 0.01, pts: q, n: 4, nz: nw[2].abs(), spec: sp2 + 0.12, rim_c: coc, blur: coc, alpha: al * 0.8, face: 2, u: r(15), tx: nw[0] * thick * 1.6, ty: nw[1] * thick * 1.6, n3: nw }); } }
-            for (fi, (pts, dz, _, _, _)) in shard.into_iter().enumerate() { prims.push(Prim { depth: dz, pts, n: nv, nz: nrm[2].abs(), spec, rim_c: fres, blur: coc, alpha: al, face: fi, u: r(15), tx: nrm[0] * thick, ty: nrm[1] * thick, n3: nrm }); }
+                prims.push(Prim { depth: (shard[0].1 + shard[1].1) / 2.0 - 0.01, pts: q, n: 4, nz: nw[2].abs(), spec: sp2 + 0.12, rim_c: coc, blur: coc, alpha: al * 0.8, face: 2, u: r(15), tx: nw[0] * thick * 1.6, ty: nw[1] * thick * 1.6, n3: nw, tex: None }); } }
+            for (fi, (pts, dz, _, _, _)) in shard.into_iter().enumerate() { let tex_aff = match (pc, &tex) { (Some((_, c)), Some(_)) if nv >= 3 => uv_affine(&pts, &c.uv), _ => None }; prims.push(Prim { depth: dz, pts, n: nv, nz: nrm[2].abs(), spec, rim_c: fres, blur: coc, alpha: al, face: fi, u: r(15), tx: nrm[0] * thick, ty: nrm[1] * thick, n3: nrm, tex: tex_aff }); }
         }
         prims.sort_by(|a, b| b.depth.partial_cmp(&a.depth).unwrap());
         for pr in &prims {
@@ -115,7 +133,12 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                     let rx = 2.0 * n2 * n0 + lx * 0.9; let ry = 2.0 * n2 * n1 + ly * 0.9; let ang = pr.u * 6.2831; let ax = rx * ang.cos() + ry * ang.sin(); let c0 = 0.15 + 0.5 * (pr.u * 7.0).fract();
                     let strip = (-((ax - c0) / 0.16).powi(2)).exp(); let strip2 = (-((ax + 0.55 - 0.3 * c0) / 0.07).powi(2)).exp(); let sky = 0.1 + 0.3 * (ry * 0.5 + 0.5).clamp(0.0, 1.0); (sky + 1.3 * strip + 0.9 * strip2) * (0.5 + 0.5 * (1.0 - n2.abs() * 0.6)) } else { 0.0 };
                 let rw = |c: f64, t: f64| c * (1.0 - 0.6 * gl) + c * t * 0.6 * gl; let glint = gl * pr.spec * pr.spec * 1.2 * rim + gl * envl * 0.55; let cr = ((base[0] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rr, base[0]) + glint) * br; let cg = ((base[1] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rg, base[1]) + glint) * br; let cb = ((base[2] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rb, base[2]) + glint) * br;
-                let a = (a + gl * envl * 0.3 * cov * pr.alpha).min(0.95); let (ca, aa) = (a as f32, acca[o]); // over (premultiplied accumulation)
+                let a = (a + gl * envl * 0.3 * cov * pr.alpha).min(0.95);
+                let (cr, cg, cb, a) = match (&pr.tex, &tex) { (Some(m), Some(t)) => { let (u, v) = (m[0] * px + m[1] * py + m[2], m[3] * px + m[4] * py + m[5]); let s = t.sample(u, v); let mo = e.plane.as_ref().map(|p| p.opaque).unwrap_or(1.0).clamp(0.0, 1.0);
+                        let sh = (0.62 + 0.38 * grad) * if pr.face == 1 { 0.7 } else { 1.0 }; let hl = sp * 0.35 + rim * 0.22;
+                        let (tr, tg, tb) = ((s[0] * sh + hl) * br, (s[1] * sh + hl) * br, (s[2] * sh + hl) * br); let oa = (cov * pr.alpha * 0.985).min(0.985);
+                        (cr * (1.0 - mo) + tr * mo, cg * (1.0 - mo) + tg * mo, cb * (1.0 - mo) + tb * mo, a * (1.0 - mo) + oa * mo) } _ => (cr, cg, cb, a) }; if a <= 0.002 { continue; }
+                let (ca, aa) = (a as f32, acca[o]); // over (premultiplied accumulation)
                 accc[o * 3] = accc[o * 3] * (1.0 - ca) + cr as f32 * ca; accc[o * 3 + 1] = accc[o * 3 + 1] * (1.0 - ca) + cg as f32 * ca; accc[o * 3 + 2] = accc[o * 3 + 2] * (1.0 - ca) + cb as f32 * ca; acca[o] = ca + aa * (1.0 - ca); if rf { let k2 = e.refract as f32 * k as f32 * (1.0 + 0.5 * rim as f32); dacc[o * 2] = dacc[o * 2] * (1.0 - ca) + (pr.tx as f32 * k2) * ca; dacc[o * 2 + 1] = dacc[o * 2 + 1] * (1.0 - ca) + (pr.ty as f32 * k2) * ca; } } } }
         // fold sub-frame into frame accumulators happens after all subs; keep running average via scaling below
         if sub + 1 < nsub { // store partial: normalise at the end using per-sub snapshots
@@ -154,3 +177,22 @@ pub fn refract_canvas(out: &mut Frame, disp: &(usize, usize, Vec<f32>), layer: &
         let (sx, sy) = ((x as f32 + dx).clamp(0.0, w as f32 - 1.001), (y as f32 + dy).clamp(0.0, hh as f32 - 1.001)); let (x0, y0) = (sx as usize, sy as usize); let (fx, fy) = (sx - x0 as f32, sy - y0 as f32);
         let wgt = a.min(1.0); for j in 0..3 { let v = |xx: usize, yy: usize| src[(yy * w + xx) * 4 + j]; let s = v(x0, y0) * (1.0 - fx) * (1.0 - fy) + v(x0 + 1, y0) * fx * (1.0 - fy) + v(x0, y0 + 1) * (1.0 - fx) * fy + v(x0 + 1, y0 + 1) * fx * fy; out.d[o * 4 + j] = src[o * 4 + j] * (1.0 - wgt) + s * wgt; } } }
 }
+
+struct Tex { w: usize, h: usize, d: Vec<f32> }
+impl Tex { fn sample(&self, u: f64, v: f64) -> [f64; 3] { let x = (u * self.w as f64 - 0.5).clamp(0.0, self.w as f64 - 1.001); let y = (v * self.h as f64 - 0.5).clamp(0.0, self.h as f64 - 1.001); let (x0, y0) = (x as usize, y as usize); let (fx, fy) = (x - x0 as f64, y - y0 as f64);
+    let g = |xx: usize, yy: usize, c: usize| self.d[(yy * self.w + xx) * 3 + c] as f64; let mut o = [0.0; 3]; for c in 0..3 { o[c] = g(x0, y0, c) * (1.0 - fx) * (1.0 - fy) + g(x0 + 1, y0, c) * fx * (1.0 - fy) + g(x0, y0 + 1, c) * (1.0 - fx) * fy + g(x0 + 1, y0 + 1, c) * fx * fy; } o } }
+thread_local! { static TEX: std::cell::RefCell<Option<(String, std::sync::Arc<Tex>)>> = std::cell::RefCell::new(None); }
+/// Load an image as an sRGB-decoded linear float texture at the plane's UV size (via ffmpeg, bounded to 4096x4096).
+fn load_tex(path: &str, region: [f64; 2]) -> Option<std::sync::Arc<Tex>> {
+    let key = format!("{}|{}|{}", path, region[0], region[1]); if let Some((k, t)) = TEX.with(|c| c.borrow().clone()) { if k == key { return Some(t); } }
+    let (w, hh) = ((region[0].round() as usize).clamp(8, 4096), (region[1].round() as usize).clamp(8, 4096));
+    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", path, "-vf", &format!("scale={}:{}", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
+    if out.stdout.len() != w * hh * 3 { return None; }
+    let lin = |b: u8| { let c = b as f32 / 255.0; if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) } }; let lut: Vec<f32> = (0..256).map(|i| lin(i as u8)).collect();
+    let t = std::sync::Arc::new(Tex { w, h: hh, d: out.stdout.iter().map(|&b| lut[b as usize]).collect() }); TEX.with(|c| *c.borrow_mut() = Some((key, t.clone()))); Some(t)
+}
+/// Affine screen->uv from the first three vertices of a face (cells are small, so perspective error inside a facet is negligible).
+fn uv_affine(pts: &[(f64, f64); 6], uv: &[(f64, f64)]) -> Option<[f64; 6]> {
+    let (a, b, c) = (pts[0], pts[1], pts[2]); let det = (b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1); if det.abs() < 1e-6 { return None; }
+    let solve = |ua: f64, ub: f64, uc: f64| { let (p, q) = (ub - ua, uc - ua); let gx = (p * (c.1 - a.1) - q * (b.1 - a.1)) / det; let gy = (q * (b.0 - a.0) - p * (c.0 - a.0)) / det; [gx, gy, ua - gx * a.0 - gy * a.1] };
+    let u = solve(uv[0].0, uv[1].0, uv[2].0); let v = solve(uv[0].1, uv[1].1, uv[2].1); Some([u[0], u[1], u[2], v[0], v[1], v[2]]) }
