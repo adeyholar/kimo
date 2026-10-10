@@ -59,8 +59,10 @@ pub fn encode(s:usize,x:f64,white:f64)->f64 {
 }
 /// Compress out-of-gamut chroma towards neutral on a constant-luminance ray.
 /// Bounds all channels without independent clipping when luma is in 0..1.
-pub fn gamut_compress(c:[f64;3])->[f64;3] {
-    let y=(0.2126*c[0]+0.7152*c[1]+0.0722*c[2]).clamp(0.,1.);let mut s: f64=1.;
+pub fn gamut_compress(c:[f64;3])->[f64;3] { compress_with(c,[0.2126,0.7152,0.0722]) }
+pub fn luma_weights(gamut:usize)->[f64;3] { rgb_xyz(gamut)[1] }
+fn compress_with(c:[f64;3],weights:[f64;3])->[f64;3] {
+    let y=(weights[0]*c[0]+weights[1]*c[1]+weights[2]*c[2]).clamp(0.,1.);let mut s: f64=1.;
     for v in c {let d=v-y;if d>0.{s=s.min((1.-y)/d)}else if d<0.{s=s.min(-y/d)}}
     c.map(|v|(y+(v-y)*s.clamp(0.,1.)).clamp(0.,1.))
 }
@@ -68,13 +70,13 @@ pub fn catalog()->Vec<super::Entry>{vec![("color_managed","Explicit float gamut 
 pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String> {
     let get=|k:&str,d:f64|->Result<f64,String>{let v=p(pr,k,d,t) as f64;if !v.is_finite(){return Err(format!("nonfinite {k}"))}Ok(v)};
     let id=|k:&str,max:usize|->Result<usize,String>{let v=get(k,if k.ends_with("transfer"){1.}else{0.})?;if v.fract()!=0.||v<0.||v>max as f64{return Err(format!("invalid {k}"))}Ok(v as usize)};
-    let m=conversion(id("from_gamut",4)?,id("to_gamut",4)?);let a=id("from_transfer",8)?;let b=id("to_transfer",8)?;
+    let from=id("from_gamut",4)?;let to=id("to_gamut",4)?;let m=conversion(from,to);let weights=luma_weights(to);let a=id("from_transfer",8)?;let b=id("to_transfer",8)?;
     let white=get("reference_white",100.)?;if !(1. ..=10000.).contains(&white){return Err("reference_white outside 1..10000".into())}
     let e=2f64.powf(get("exposure",0.)?.clamp(-20.,20.));let tone=get("tone_map",0.)?>0.5;let compress=get("gamut_compress",0.)?>0.5;
     for px in f.d.chunks_exact_mut(4) {
         let mut c=mv(m,[decode(a,px[0] as f64,white),decode(a,px[1] as f64,white),decode(a,px[2] as f64,white)]).map(|v|v*e);
-        if tone {let y=(0.2126*c[0]+0.7152*c[1]+0.0722*c[2]).max(0.);c=c.map(|v|v/(1.+y));}
-        if compress {c=gamut_compress(c)}
+        if tone {let y=(weights[0]*c[0]+weights[1]*c[1]+weights[2]*c[2]).max(0.);c=c.map(|v|v/(1.+y));}
+        if compress {c=compress_with(c,weights)}
         for j in 0..3 {let out=encode(b,c[j],white);if !out.is_finite()||out.abs()>f32::MAX as f64{return Err("color conversion overflow".into())}px[j]=out as f32}
     }Ok(())
 }

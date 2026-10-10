@@ -9,6 +9,7 @@ pub mod scopes;
 pub mod matching;
 pub mod cdl;
 pub mod blur;
+pub mod linear;
 
 type C = (&'static str, f64, &'static str);
 pub type Entry = (&'static str, &'static str, &'static [C]);
@@ -55,6 +56,7 @@ pub fn catalog3() -> &'static [Entry] {
         v.extend(curves::catalog());
         v.extend(matching::catalog());
         v.extend(cdl::catalog());
+        v.extend(linear::catalog());
         v.extend(crate::keying::catalog4());
         v
     })
@@ -104,6 +106,7 @@ fn matte_apply(f: &mut Frame, m: &[f32], pr: &Params, t: f64) {
 pub fn apply3(kind: &str, pr: &Params, f: &mut Frame, t: f64, _seed: u64) -> Result<(), String> {
     let g = |k: &str, d: f64| p(pr, k, d, t); let (w, h) = (f.w, f.h); let n = w * h;
     match kind {
+        "linear_grade" => return linear::apply(pr, f, t),
         "cdl" => return cdl::apply(pr, f, t),
         "lab_match" => return matching::apply(pr, f, t),
         "point_curves" => return curves::apply(pr, f, t),

@@ -48,3 +48,10 @@ Qualifier adds edge-aware guided matte refine, black/white cleanup and matte gam
 
 ## Color blur hot-path fix
 Replaced color qualifier/halation use of the generic per-pixel-allocation box blur with a color-only separable RGB cascade. Correct clamp extension, f64 running sums, bounded radius, one scratch allocation, alpha preserved. Constant-border and alpha invariance tests pass. Same actual SCUMBLE 50-frame qualifier export fell from 11.450 s to 2.868 s on this workspace (about 4x faster end-to-end, includes decode/encode). Recovery export 3.635 s, Delta E76 unchanged. Prior documents called the 2-second/25fps real proof 48 frames; corrected count is 50 frames. Synthetic 24fps proofs are 48 frames.
+
+## Scene-linear grade (V2)
+`linear_grade`: exposure/gains/offset, signed pivoted power contrast and gamut-aware luminance saturation without intermediate clipping. Explicit chain: sRGB Rec709 -> linear AP1 via color_managed, linear_grade gamut=3, linear AP1 -> display sRGB Rec709 with optional output gamut compression. Existing display grading is unchanged. Managed tone-map/compression now uses destination gamut's luminance coefficients (was always 709).
+
+Tests: extended-negative/HDR identity, radiometric doubling for +1 stop, luminance preservation across all five gamuts. Real 50-frame 640x360 SCUMBLE proof: 2.824 s including decode/audio/encode. 33-cube portable bake of 3-effect chain 0.0483 s. Visually checked source/grade and clip. Input decode still comes from 8-bit media; this explicit effect chain does NOT switch the entire compositor or export to a scene-linear/10-bit workflow.
+
+Final generic MCP fuzz after adding an actual image fixture: 129 tools, 5283 calls, zero failures, with real clip/asset ids. Added a Rust test that renders every catalog color effect at extreme params and requires finite output or explicit error. Color unit/regression count: 26 (plus one existing unrelated engine test).
