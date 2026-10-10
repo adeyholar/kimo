@@ -82,7 +82,10 @@ pub struct Audio { pub mute: bool, pub volume: Prop, pub fade_in: f64, pub fade_
 impl Default for Audio { fn default() -> Self { Audio { mute: false, volume: Prop::new(1.0), fade_in: 0.0, fade_out: 0.0, pitch: 0.0, highpass: 0.0, lowpass: 0.0, denoise: 0.0, compress: false, echo: 0.0, reverse: false } } }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Transition { pub kind: String, pub duration: f64 }
+pub struct Transition { pub kind: String, pub duration: f64,
+    #[serde(default = "d_ease")] pub ease: String, #[serde(default = "d_soft")] pub softness: f64, #[serde(default)] pub angle: f64,
+    #[serde(default)] pub color: [f64; 3], #[serde(default = "d_one")] pub intensity: f64, #[serde(default = "d_count")] pub count: f64, #[serde(default)] pub seed: u32 }
+fn d_ease() -> String { "in_out".into() } fn d_soft() -> f64 { 0.08 } fn d_one() -> f64 { 1.0 } fn d_count() -> f64 { 10.0 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Track { pub id: String, pub clips: Vec<Clip>, #[serde(default)] pub locked: bool, #[serde(default)] pub muted: bool, #[serde(default)] pub name: String }
@@ -150,13 +153,13 @@ pub struct Marker { pub id: String, pub time: f64, pub duration: f64, pub name: 
 /// Rich text style + After Effects-style per-unit animators for text clips.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TextFx {
-    pub box_width: f64, pub line_spacing: f64, pub kerning: bool,
+    pub weight: f64, pub uppercase: bool, pub line_mask: bool, pub italic_skew: f64, pub box_width: f64, pub line_spacing: f64, pub kerning: bool,
     pub bg: Option<[f64; 4]>, pub bg_pad: f64, pub bg_radius: f64,
     pub shadow_blur: f64, pub shadow_opacity: f64, pub shadow_color: [f64; 3], pub shadow_angle: f64,
     pub gradient: Option<([f64; 3], [f64; 3])>, pub glow: f64, pub glow_color: [f64; 3],
     pub animators: Vec<TextAnimator>,
 }
-impl Default for TextFx { fn default() -> Self { TextFx { box_width: 0.0, line_spacing: 1.15, kerning: true, bg: None, bg_pad: 24.0, bg_radius: 12.0, shadow_blur: 0.0, shadow_opacity: 0.6, shadow_color: [0.0; 3], shadow_angle: 45.0, gradient: None, glow: 0.0, glow_color: [1.0, 1.0, 1.0], animators: vec![] } } }
+impl Default for TextFx { fn default() -> Self { TextFx { weight: 0.0, uppercase: false, line_mask: false, italic_skew: 0.0, box_width: 0.0, line_spacing: 1.15, kerning: true, bg: None, bg_pad: 24.0, bg_radius: 12.0, shadow_blur: 0.0, shadow_opacity: 0.6, shadow_color: [0.0; 3], shadow_angle: 45.0, gradient: None, glow: 0.0, glow_color: [1.0, 1.0, 1.0], animators: vec![] } } }
 /// Range selector + properties applied to each unit (char/word/line) by selector amount. All values keyframable.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TextAnimator {

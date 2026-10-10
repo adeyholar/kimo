@@ -190,31 +190,13 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
         let mut op = prop(c, "opacity", lt) as f32;
         let (mut dx, mut dy) = (prop(c, "x", lt), prop(c, "y", lt));
         let mut mask: Option<Box<dyn Fn(usize, usize) -> f32>> = None;
+        let (mut sc, mut rot_extra) = (prop(c, "scale", lt), 0.0); let mut tplan: Option<crate::transitions::Plan> = None;
         if let Some(tr_in) = &c.transition_in { if lt < tr_in.duration {
-            let k = (lt / tr_in.duration) as f32;
-            match tr_in.kind.as_str() {
-                "crossfade" | "dissolve" => op *= k,
-                "wipe_left" => { let edge = k * w as f32; mask = Some(Box::new(move |x, _| if (x as f32) < edge { 1.0 } else { 0.0 })); }
-                "wipe_up" => { let edge = k * h as f32; mask = Some(Box::new(move |_, y| if (y as f32) < edge { 1.0 } else { 0.0 })); }
-                "iris" => { let r = k * (w as f32 * 0.8); let (cx, cy) = (w as f32/2.0, h as f32/2.0); mask = Some(Box::new(move |x, y| { let d = ((x as f32-cx).powi(2)+(y as f32-cy).powi(2)).sqrt(); ((r - d)/6.0 + 0.5).clamp(0.0, 1.0) })); }
-                "wipe_right" => { let edge = (1.0 - k) * w as f32; mask = Some(Box::new(move |x, _| if (x as f32) >= edge { 1.0 } else { 0.0 })); }
-                "wipe_down" => { let edge = (1.0 - k) * h as f32; mask = Some(Box::new(move |_, y| if (y as f32) >= edge { 1.0 } else { 0.0 })); }
-                "diagonal" => { let e = k * (w + h) as f32; mask = Some(Box::new(move |x, y| if (x + y) as f32 <= e { 1.0 } else { 0.0 })); }
-                "blinds" => { let hh = (h as f32 / 10.0).max(1.0); mask = Some(Box::new(move |_, y| if (y as f32 % hh) / hh < k { 1.0 } else { 0.0 })); }
-                "checker" => { let s = (w as f32 / 12.0).max(1.0); mask = Some(Box::new(move |x, y| { let c = ((x as f32 / s) as i32 + (y as f32 / s) as i32) % 2; let th = if c == 0 { k * 2.0 } else { k * 2.0 - 1.0 }; if th > 0.5 { 1.0 } else { 0.0 } })); }
-                "slide_right" => dx -= (1.0 - k as f64) * w as f64,
-                "slide_down" => dy -= (1.0 - k as f64) * h as f64,
-                "spin" => { op *= k; }
-                "flash" => { op = if k < 0.5 { 0.0 } else { op }; }
-                "slide_left" => dx += (1.0 - k as f64) * w as f64,
-                "slide_up" => dy += (1.0 - k as f64) * h as f64,
-                "zoom" => op *= k,
-                other => return Err(format!("unknown transition '{other}'")),
-            }
+            let pl = crate::transitions::plan(tr_in, lt, w, h); op *= pl.op; dx += pl.dx; dy += pl.dy; sc *= pl.scale; rot_extra = pl.rot;
+            if let Some((col, a)) = pl.dip { for i in 0..w * h { for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - a) + col[j] * a; } out.d[i*4+3] = out.d[i*4+3] + a * (1.0 - out.d[i*4+3]); } }
+            mask = None; tplan = Some(pl);
         }}
-        let mut sc = prop(c, "scale", lt);
-        if let Some(tr_in) = &c.transition_in { if tr_in.kind == "zoom" && lt < tr_in.duration { sc *= 0.6 + 0.4 * (lt / tr_in.duration); } }
-        let mut rot_extra = 0.0; if let Some(tr_in) = &c.transition_in { if tr_in.kind == "spin" && lt < tr_in.duration { let k = lt / tr_in.duration; rot_extra = (1.0 - k) * 180.0; sc *= 0.5 + 0.5 * k; } }
+        let mut f = f; if let Some(pl) = tplan.as_mut() { mask = pl.mask.take(); if let Some(po) = &pl.post { po(&mut f); } }
         let f = if let Some(cs) = &c.corners { corner_pin(&f, cs) } else { f };
         let f = if c.motion_blur > 0.0 { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h];
             for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (prop(c, "x", lt2), prop(c, "y", lt2)); dx2 += dx - prop(c, "x", lt); dy2 += dy - prop(c, "y", lt);
@@ -223,6 +205,7 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
             for i in 0..w * h { if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } acc }
             else { transform(&f, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
         blend(&mut out, &f, op, &c.blend, mask.as_deref());
+        if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } }
     }}
     Ok(out)
 }

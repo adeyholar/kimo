@@ -7,6 +7,8 @@ pub mod commands;
 pub mod render;
 pub mod effects;
 pub mod text;
+pub mod titles;
+pub mod transitions;
 pub mod audio;
 pub mod tracking;
 pub mod edit;

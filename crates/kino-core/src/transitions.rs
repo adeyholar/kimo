@@ -1,0 +1,69 @@
+//! Transition engine: eased progress, soft-edged angled wipes, iris/clock/split/blinds/noise reveals, slides with overshoot,
+//! zoom/spin, dips to a colour, flash, light leak, glitch, whip pan and zoom blur.
+use crate::effects::Frame;
+use crate::model::Transition;
+
+pub const KINDS: &[&str] = &["crossfade", "wipe", "wipe_left", "wipe_right", "wipe_up", "wipe_down", "diagonal", "blinds", "checker", "iris", "clock", "split_h", "split_v", "noise_dissolve", "slide_left", "slide_right", "slide_up", "slide_down", "zoom", "zoom_blur", "spin", "flash", "dip_black", "dip_white", "dip_color", "light_leak", "glitch", "whip_left", "whip_right"];
+pub const EASES: &[&str] = &["linear", "in", "out", "in_out", "in_cubic", "out_cubic", "in_out_cubic", "in_out_expo", "out_back", "out_bounce"];
+
+pub fn ease(name: &str, t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    match name { "linear" => t, "in" => t * t, "out" => 1.0 - (1.0 - t).powi(2), "in_cubic" => t.powi(3), "out_cubic" => 1.0 - (1.0 - t).powi(3),
+        "in_out_cubic" => if t < 0.5 { 4.0 * t.powi(3) } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 },
+        "in_out_expo" => if t <= 0.0 { 0.0 } else if t >= 1.0 { 1.0 } else if t < 0.5 { 2f64.powf(20.0 * t - 10.0) / 2.0 } else { (2.0 - 2f64.powf(-20.0 * t + 10.0)) / 2.0 },
+        "out_back" => { let (c1, c3) = (1.70158, 2.70158); 1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2) }
+        "out_bounce" => { let (n, d) = (7.5625, 2.75); if t < 1.0 / d { n * t * t } else if t < 2.0 / d { let t = t - 1.5 / d; n * t * t + 0.75 } else if t < 2.5 / d { let t = t - 2.25 / d; n * t * t + 0.9375 } else { let t = t - 2.625 / d; n * t * t + 0.984375 } }
+        _ => t * t * (3.0 - 2.0 * t) }
+}
+fn sstep(x: f32) -> f32 { let t = x.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) }
+fn hash(x: i32, y: i32, s: u32) -> f32 { let mut h = (x as u32).wrapping_mul(374761393) ^ (y as u32).wrapping_mul(668265263) ^ s.wrapping_mul(2246822519); h = (h ^ (h >> 13)).wrapping_mul(1274126177); ((h ^ (h >> 16)) & 0xffffff) as f32 / 16777215.0 }
+fn vnoise(x: f32, y: f32, s: u32) -> f32 { let (xi, yi) = (x.floor(), y.floor()); let (fx, fy) = (sstep(x - xi), sstep(y - yi)); let (xi, yi) = (xi as i32, yi as i32);
+    let a = hash(xi, yi, s) * (1.0 - fx) + hash(xi + 1, yi, s) * fx; let b = hash(xi, yi + 1, s) * (1.0 - fx) + hash(xi + 1, yi + 1, s) * fx; a * (1.0 - fy) + b * fy }
+
+pub type Mask = Box<dyn Fn(usize, usize) -> f32>;
+pub struct Plan { pub op: f32, pub mask: Option<Mask>, pub dx: f64, pub dy: f64, pub scale: f64, pub rot: f64,
+    pub dip: Option<([f32; 3], f32)>, pub post: Option<Box<dyn Fn(&mut Frame)>>, pub overlay: Option<Box<dyn Fn(&mut Frame)>> }
+
+fn dir_blur(f: &mut Frame, dx: f32, dy: f32, n: usize) { if dx.abs() + dy.abs() < 0.5 { return; } let (w, h) = (f.w, f.h); let src = f.d.clone();
+    for y in 0..h { for x in 0..w { let mut acc = [0f32; 4]; for k in 0..n { let o = k as f32 / (n - 1) as f32 - 0.5; let sx = ((x as f32 + dx * o).round() as i32).clamp(0, w as i32 - 1) as usize; let sy = ((y as f32 + dy * o).round() as i32).clamp(0, h as i32 - 1) as usize; let i = (sy * w + sx) * 4; let a = src[i + 3]; for j in 0..3 { acc[j] += src[i + j] * a; } acc[3] += a; }
+        let o = (y * w + x) * 4; if acc[3] > 0.0 { for j in 0..3 { f.d[o + j] = acc[j] / acc[3]; } } f.d[o + 3] = acc[3] / n as f32; } } }
+fn radial_blur(f: &mut Frame, amount: f32, n: usize) { if amount < 0.002 { return; } let (w, h) = (f.w, f.h); let src = f.d.clone(); let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+    for y in 0..h { for x in 0..w { let mut acc = [0f32; 4]; for k in 0..n { let s = 1.0 - amount * k as f32 / (n - 1) as f32; let sx = ((cx + (x as f32 - cx) * s).round() as i32).clamp(0, w as i32 - 1) as usize; let sy = ((cy + (y as f32 - cy) * s).round() as i32).clamp(0, h as i32 - 1) as usize; let i = (sy * w + sx) * 4; let a = src[i + 3]; for j in 0..3 { acc[j] += src[i + j] * a; } acc[3] += a; }
+        let o = (y * w + x) * 4; if acc[3] > 0.0 { for j in 0..3 { f.d[o + j] = acc[j] / acc[3]; } } f.d[o + 3] = acc[3] / n as f32; } } }
+
+pub fn plan(tr: &Transition, lt: f64, w: usize, h: usize) -> Plan {
+    let kr = (lt / tr.duration).clamp(0.0, 1.0); let k = ease(&tr.ease, kr) as f32; let (wf, hf) = (w as f32, h as f32); let soft = tr.softness.max(0.0) as f32; let seed = tr.seed;
+    let mut p = Plan { op: 1.0, mask: None, dx: 0.0, dy: 0.0, scale: 1.0, rot: 0.0, dip: None, post: None, overlay: None };
+    let wipe = |ang_deg: f32, k: f32| -> Mask { let (c, s) = (ang_deg.to_radians().cos(), ang_deg.to_radians().sin()); let half = (wf * c.abs() + hf * s.abs()) / 2.0; let sw = (soft * half * 2.0).max(1.0); let edge = -half + k * (2.0 * half + sw);
+        Box::new(move |x, y| { let pr = (x as f32 - wf / 2.0) * c + (y as f32 - hf / 2.0) * s; sstep((edge - pr) / sw) }) };
+    match tr.kind.as_str() {
+        "crossfade" | "dissolve" => p.op = k,
+        "wipe" => p.mask = Some(wipe(tr.angle as f32, k)), "wipe_left" => p.mask = Some(wipe(0.0, k)), "wipe_right" => p.mask = Some(wipe(180.0, k)), "wipe_up" => p.mask = Some(wipe(90.0, k)), "wipe_down" => p.mask = Some(wipe(270.0, k)),
+        "diagonal" => p.mask = Some(wipe(if tr.angle != 0.0 { tr.angle as f32 } else { 45.0 }, k)),
+        "iris" => { let r = k * (wf * wf + hf * hf).sqrt() * 0.5 * (1.0 + soft); let sw = (soft * wf * 0.5).max(1.5); p.mask = Some(Box::new(move |x, y| { let d = ((x as f32 - wf / 2.0).powi(2) + (y as f32 - hf / 2.0).powi(2)).sqrt(); sstep((r - d) / sw) })); }
+        "clock" => { let sw = (soft * 0.5).max(0.004); let a0 = (tr.angle as f32 - 90.0).to_radians(); p.mask = Some(Box::new(move |x, y| { let mut a = ((y as f32 - hf / 2.0).atan2(x as f32 - wf / 2.0) - a0).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU; if a.is_nan() { a = 0.0 } sstep((k * (1.0 + sw) - a) / sw) })); }
+        "split_h" => { let sw = (soft * wf * 0.5).max(1.5); p.mask = Some(Box::new(move |x, _| sstep((k * wf * 0.5 - (x as f32 - wf / 2.0).abs()) / sw + 0.0))); }
+        "split_v" => { let sw = (soft * hf * 0.5).max(1.5); p.mask = Some(Box::new(move |_, y| sstep((k * hf * 0.5 - (y as f32 - hf / 2.0).abs()) / sw))); }
+        "blinds" => { let n = tr.count.max(2.0) as f32; let hh = hf / n; let sw = (soft * 0.5).max(0.02); p.mask = Some(Box::new(move |_, y| { let v = (y as f32 % hh) / hh; sstep((k * (1.0 + sw) - v) / sw) })); }
+        "checker" => { let s = (wf / tr.count.max(2.0) as f32).max(1.0); let sw = (soft * 0.5).max(0.03); p.mask = Some(Box::new(move |x, y| { let (cx, cy) = ((x as f32 / s) as i32, (y as f32 / s) as i32); let off = if (cx + cy) % 2 == 0 { 0.0 } else { 0.5 }; sstep((k * (1.0 + 0.5 + sw) - off - ((x as f32 / s).fract() * 0.0)) / sw.max(0.2) ) })); }
+        "noise_dissolve" => { let sc = (tr.count.max(1.0) as f32 * 4.0) / wf; let sw = soft.max(0.05); p.mask = Some(Box::new(move |x, y| { let n = vnoise(x as f32 * sc, y as f32 * sc, seed) * 0.65 + vnoise(x as f32 * sc * 2.3, y as f32 * sc * 2.3, seed + 7) * 0.35; sstep((k * (1.0 + sw) - n) / sw) })); }
+        "slide_left" => p.dx = (1.0 - k as f64) * w as f64, "slide_right" => p.dx = -(1.0 - k as f64) * w as f64, "slide_up" => p.dy = (1.0 - k as f64) * h as f64, "slide_down" => p.dy = -(1.0 - k as f64) * h as f64,
+        "zoom" => { p.op = sstep(k * 1.6); p.scale = 0.6 + 0.4 * k as f64; }
+        "zoom_blur" => { p.op = sstep(k * 2.0); p.scale = 1.0 + (1.0 - k as f64) * 0.8 * tr.intensity; let amt = (1.0 - k).powi(2) * 0.35 * tr.intensity as f32; p.post = Some(Box::new(move |f| radial_blur(f, amt, 14))); }
+        "spin" => { p.op = sstep(k * 1.5); p.rot = (1.0 - k as f64) * 180.0 * tr.intensity; p.scale = 0.5 + 0.5 * k as f64; }
+        "flash" => { p.op = if k < 0.5 { 0.0 } else { 1.0 }; let a = (1.0 - (2.0 * k - 1.0).abs()).powi(2) * tr.intensity as f32; let c = [tr.color[0] as f32, tr.color[1] as f32, tr.color[2] as f32]; let c = if tr.color == [0.0; 3] { [1.0; 3] } else { c };
+            p.overlay = Some(Box::new(move |f| for i in 0..f.w * f.h { for j in 0..3 { f.d[i * 4 + j] = f.d[i * 4 + j] * (1.0 - a) + c[j] * a; } })); }
+        "dip_black" | "dip_white" | "dip_color" => { let c = match tr.kind.as_str() { "dip_black" => [0.0; 3], "dip_white" => [1.0; 3], _ => [tr.color[0] as f32, tr.color[1] as f32, tr.color[2] as f32] };
+            if k < 0.5 { p.op = 0.0; p.dip = Some((c, sstep(k * 2.0))); } else { p.dip = Some((c, 1.0)); p.op = sstep((k - 0.5) * 2.0); } }
+        "light_leak" => { p.op = sstep((k - 0.3) / 0.4); let a = (1.0 - (2.0 * k - 1.0).abs()).powf(1.5) * tr.intensity as f32; let (ox, oy) = (hash(1, 2, seed) * 0.6 + 0.2, hash(3, 4, seed) * 0.6 + 0.2);
+            p.overlay = Some(Box::new(move |f| { let (w, h) = (f.w as f32, f.h as f32); for y in 0..f.h { for x in 0..f.w { let d = (((x as f32 / w - ox) * 1.2).powi(2) + ((y as f32 / h - oy)).powi(2)).sqrt(); let g = (1.0 - d * 1.1).max(0.0).powi(2) * a; let i = (y * f.w + x) * 4; f.d[i] += g * 1.6; f.d[i + 1] += g * 0.75; f.d[i + 2] += g * 0.25; } } })); }
+        "glitch" => { let bands = 18usize; let sev = (1.0 - k) * tr.intensity as f32; let bh = (hf / bands as f32).ceil().max(1.0); let step = (kr * 14.0) as u32;
+            p.mask = Some(Box::new(move |_, y| { let b = (y as f32 / bh) as i32; if hash(b, step as i32, seed) < k * 1.4 - 0.1 { 1.0 } else { 0.0 } }));
+            p.post = Some(Box::new(move |f| { let (w, h) = (f.w, f.h); let src = f.d.clone(); for y in 0..h { let b = (y as f32 / bh) as i32; let off = ((hash(b, step as i32 + 5, seed) - 0.5) * 2.0 * sev * w as f32 * 0.25) as i32; let rs = (sev * 14.0) as i32;
+                for x in 0..w { let o = (y * w + x) * 4; for (j, d) in [(0usize, -rs), (1, 0), (2, rs)] { let sx = (x as i32 + off + d).rem_euclid(w as i32) as usize; f.d[o + j] = src[(y * w + sx) * 4 + j]; } } } })); }
+        "whip_left" | "whip_right" => { let s = if tr.kind == "whip_left" { 1.0 } else { -1.0 }; p.dx = s * (1.0 - k as f64) * w as f64; let vel = ((1.0 - k) * 4.0 * k).max(0.0).min(1.0) * wf * 0.35 * tr.intensity as f32; p.post = Some(Box::new(move |f| dir_blur(f, vel, 0.0, 16))); p.op = 1.0;
+            let v2 = vel; p.overlay = Some(Box::new(move |f| dir_blur(f, v2 * 0.6, 0.0, 12))); }
+        _ => p.op = k,
+    }
+    p
+}

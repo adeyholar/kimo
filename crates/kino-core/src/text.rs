@@ -7,12 +7,25 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 static FONTS: OnceLock<Mutex<HashMap<String, std::sync::Arc<FontVec>>>> = OnceLock::new();
-fn font(path: &str) -> Result<std::sync::Arc<FontVec>, String> {
-    let m = FONTS.get_or_init(|| Mutex::new(HashMap::new())); let mut g = m.lock().unwrap();
-    if let Some(f) = g.get(path) { return Ok(f.clone()); }
-    let data = std::fs::read(path).map_err(|e| format!("font {path}: {e}"))?;
-    let f = std::sync::Arc::new(FontVec::try_from_vec(data).map_err(|e| format!("font parse {path}: {e}"))?);
-    g.insert(path.into(), f.clone()); Ok(f)
+fn norm(s: &str) -> String { let mut n: String = s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect(); for suf in ["variablefont", "var", "regular"] { if n.ends_with(suf) && n.len() > suf.len() { n.truncate(n.len() - suf.len()); } } n }
+pub fn font_dirs() -> Vec<std::path::PathBuf> { let mut v = vec![]; if let Ok(d) = std::env::var("KINO_FONTS") { v.push(d.into()); }
+    if let Ok(e) = std::env::current_exe() { let mut p = e.clone(); for _ in 0..4 { p.pop(); v.push(p.join("fonts")); } }
+    v.push("fonts".into()); if let Ok(h) = std::env::var("HOME") { v.push(std::path::Path::new(&h).join("kino/fonts")); } v.push("/usr/share/fonts".into()); v }
+fn scan(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: usize) { if depth > 4 { return; } if let Ok(rd) = std::fs::read_dir(dir) { for e in rd.flatten() { let p = e.path(); if p.is_dir() { scan(&p, out, depth + 1); } else if matches!(p.extension().and_then(|x| x.to_str()), Some("ttf") | Some("otf") | Some("TTF") | Some("OTF")) { out.push(p); } } } }
+pub fn all_fonts() -> Vec<(String, std::path::PathBuf)> { let mut files = vec![]; for d in font_dirs() { scan(&d, &mut files, 0); } let mut seen = std::collections::HashSet::new(); let mut v = vec![];
+    for p in files { let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string(); let n = norm(&stem); if seen.insert(n.clone()) { v.push((stem, p)); } } v.sort_by(|a, b| a.0.cmp(&b.0)); v }
+pub fn resolve_font(name: &str) -> String { if std::path::Path::new(name).is_file() { return name.into(); } let want = norm(name); let fonts = all_fonts();
+    if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s) == want) { return p.to_string_lossy().into(); }
+    if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s).starts_with(&want)) { return p.to_string_lossy().into(); }
+    if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s) == "montserrat") { return p.to_string_lossy().into(); }
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into() }
+fn font(name: &str, weight: f64) -> Result<std::sync::Arc<FontVec>, String> {
+    let key = format!("{name}@{weight}"); let m = FONTS.get_or_init(|| Mutex::new(HashMap::new())); let mut g = m.lock().unwrap();
+    if let Some(f) = g.get(&key) { return Ok(f.clone()); }
+    let path = resolve_font(name); let data = std::fs::read(&path).map_err(|e| format!("font {path}: {e}"))?;
+    let mut f = FontVec::try_from_vec(data).map_err(|e| format!("font parse {path}: {e}"))?;
+    if weight > 0.0 { use ab_glyph::VariableFont; f.set_variation(b"wght", weight as f32); }
+    let f = std::sync::Arc::new(f); g.insert(key, f.clone()); Ok(f)
 }
 
 struct G { c: char, x: f32, y: f32, line: usize, word: usize, adv: f32 }
@@ -40,7 +53,7 @@ fn layout(text: &str, f: &FontVec, size: f32, spacing: f32, align: &str, cw: f32
 
 fn shape_amount(shape: &str, x: f32, smooth: f32) -> f32 {
     // x: position of the unit relative to the selector window (0..1 inside)
-    let soft = |v: f32| { if smooth <= 1e-4 { if (0.0..=1.0).contains(&v) { 1.0 } else { 0.0 } } else { let a = (v / smooth).clamp(0.0, 1.0); let b = ((1.0 - v) / smooth).clamp(0.0, 1.0); let (a, b) = (a * a * (3.0 - 2.0 * a), b * b * (3.0 - 2.0 * b)); a.min(b) } };
+    let soft = |v: f32| { if smooth <= 1e-4 { if (0.0..=1.0).contains(&v) { 1.0 } else { 0.0 } } else { let a = ((v + smooth) / smooth).clamp(0.0, 1.0); let b = ((1.0 - v + smooth) / smooth).clamp(0.0, 1.0); let (a, b) = (a * a * (3.0 - 2.0 * a), b * b * (3.0 - 2.0 * b)); a.min(b) } };
     match shape { "ramp_up" => if (0.0..=1.0).contains(&x) { x } else { 0.0 }, "ramp_down" => if (0.0..=1.0).contains(&x) { 1.0 - x } else { 0.0 },
         "triangle" => if (0.0..=1.0).contains(&x) { 1.0 - (2.0 * x - 1.0).abs() } else { 0.0 }, "round" => if (0.0..=1.0).contains(&x) { (1.0 - (2.0 * x - 1.0).powi(2)).max(0.0).sqrt() } else { 0.0 },
         "smooth" => if (0.0..=1.0).contains(&x) { let t = 1.0 - (2.0 * x - 1.0).abs(); t * t * (3.0 - 2.0 * t) } else { 0.0 }, _ => soft(x) }
@@ -61,25 +74,32 @@ fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f
     let (bx, by) = ((cw as f32 - bw) / 2.0, (ch as f32 - bh) / 2.0); let mut cov = vec![0f32; cw * ch];
     let empty: Vec<TextAnimator> = vec![]; let an = fx.map(|x| &x.animators).unwrap_or(&empty);
     let mut track_acc = vec![0f32; nl + 1]; let mut last_line = usize::MAX;
+    let mut line_tr = vec![0f32; nl + 1]; for (ci, g) in glyphs.iter().enumerate().take(shown) { line_tr[g.line] += animate(an, t, g, nchar, nwords, nl, ci).track; }
     for (ci, g) in glyphs.iter().enumerate() { if ci >= shown { break; }
         let u = animate(an, t, g, nchar, nwords, nl, ci); if g.line != last_line { track_acc[g.line] = 0.0; last_line = g.line; } let tr = track_acc[g.line]; track_acc[g.line] += u.track;
         if u.op <= 0.0 { continue; }
-        let gid = f.glyph_id(g.c); let (ox, oy) = (bx + g.x + tr, by + g.y);
-        let glyph = gid.with_scale_and_position(PxScale::from(size), ab_glyph::point(0.0, 0.0));
-        let Some(o) = f.outline_glyph(glyph) else { continue }; let b = o.px_bounds(); let (gw, gh) = ((b.max.x - b.min.x).ceil() as usize + 2, (b.max.y - b.min.y).ceil() as usize + 2); let mut loc = vec![0f32; gw * gh];
-        o.draw(|px, py, v| { let i = (py as usize) * gw + px as usize; if i < loc.len() { loc[i] = v; } });
-        // glyph center in canvas space (pivot for scale/rotation)
-        let (gcx, gcy) = (ox + g.adv * 0.5, oy - sf.ascent() * 0.35 + 0.0); let (s_, c_) = (u.rot.to_radians().sin(), u.rot.to_radians().cos()); let inv = 1.0 / u.sc.max(1e-3);
-        let (lx0, ly0) = (b.min.x, b.min.y); // local glyph bitmap origin relative to glyph origin
-        let rad = (gw.max(gh) as f32 * u.sc.max(1.0) * 1.5 + u.x.abs() * 0.0 + 4.0) as i32;
-        let (px0, py0) = ((gcx + u.x) as i32 - rad - (g.adv as i32), (gcy + u.y) as i32 - rad - size as i32);
-        let (px1, py1) = ((gcx + u.x) as i32 + rad + g.adv as i32, (gcy + u.y) as i32 + rad + size as i32);
-        for Y in py0.max(0)..py1.min(ch as i32) { for X in px0.max(0)..px1.min(cw as i32) {
-            let (dx, dy) = (X as f32 + 0.5 - gcx - u.x, Y as f32 + 0.5 - gcy - u.y); let (rx, ry) = ((c_ * dx + s_ * dy) * inv, (-s_ * dx + c_ * dy) * inv); // back to unscaled glyph space around pivot
-            let (sx, sy) = (rx + gcx - ox - lx0 - 0.5, ry + gcy - oy - ly0 - 0.5); if sx < 0.0 || sy < 0.0 || sx > (gw - 1) as f32 || sy > (gh - 1) as f32 { continue; }
-            let (x0, y0) = (sx.floor() as usize, sy.floor() as usize); let (x1, y1) = ((x0 + 1).min(gw - 1), (y0 + 1).min(gh - 1)); let (fx_, fy_) = (sx - x0 as f32, sy - y0 as f32);
-            let v = (loc[y0 * gw + x0] * (1.0 - fx_) + loc[y0 * gw + x1] * fx_) * (1.0 - fy_) + (loc[y1 * gw + x0] * (1.0 - fx_) + loc[y1 * gw + x1] * fx_) * fy_;
-            let i = Y as usize * cw + X as usize; let a = (v * u.op).min(1.0); if a > cov[i] { cov[i] = a; } } }
+        let gid = f.glyph_id(g.c); let shift = match align { "left" => 0.0, "right" => -line_tr[g.line], _ => -line_tr[g.line] * 0.5 }; let (ox, oy) = (bx + g.x + tr + shift, by + g.y);
+        let (gcx, gcy) = (ox + g.adv * 0.5, oy - sf.ascent() * 0.35);
+        let band = if fx.map(|x| x.line_mask).unwrap_or(false) { let lh = sf.height() * fx.map(|x| x.line_spacing as f32).unwrap_or(1.15); Some((by + g.line as f32 * lh - lh * 0.02, by + (g.line as f32 + 1.0) * lh + lh * 0.02)) } else { None };
+        let put = |cov: &mut Vec<f32>, X: i32, Y: i32, v: f32| { if X < 0 || Y < 0 || X >= cw as i32 || Y >= ch as i32 { return; } if let Some((y0, y1)) = band { let yy = Y as f32 + 0.5; if yy < y0 || yy > y1 { return; } } let i = Y as usize * cw + X as usize; let a = (v * u.op).min(1.0); if a > cov[i] { cov[i] = a; } };
+        if u.rot.abs() < 0.01 {
+            let s = size * u.sc.max(0.01); let (px, py) = (gcx + u.x - (gcx - ox) * u.sc + 0.0, gcy + u.y + (oy - gcy) * u.sc);
+            let sk = fx.map(|x| x.italic_skew as f32).unwrap_or(0.0);
+            let glyph = gid.with_scale_and_position(PxScale::from(s), ab_glyph::point(px, py));
+            if let Some(o) = f.outline_glyph(glyph) { let b = o.px_bounds(); o.draw(|x, y, v| { let X = b.min.x as i32 + x as i32; let Y = b.min.y as i32 + y as i32; let sh = (sk * (py - Y as f32)) as i32; put(&mut cov, X + sh, Y, v); }); }
+        } else {
+            let glyph = gid.with_scale_and_position(PxScale::from(size), ab_glyph::point(0.0, 0.0));
+            let Some(o) = f.outline_glyph(glyph) else { continue }; let b = o.px_bounds(); let (gw, gh) = ((b.max.x - b.min.x).ceil() as usize + 2, (b.max.y - b.min.y).ceil() as usize + 2); let mut loc = vec![0f32; gw * gh];
+            o.draw(|px, py, v| { let i = (py as usize) * gw + px as usize; if i < loc.len() { loc[i] = v; } });
+            let (s_, c_) = (u.rot.to_radians().sin(), u.rot.to_radians().cos()); let inv = 1.0 / u.sc.max(1e-3); let (lx0, ly0) = (b.min.x, b.min.y);
+            let rad = (gw.max(gh) as f32 * u.sc.max(1.0) * 1.5 + 4.0) as i32;
+            let (px0, py0) = ((gcx + u.x) as i32 - rad - (g.adv as i32), (gcy + u.y) as i32 - rad - size as i32); let (px1, py1) = ((gcx + u.x) as i32 + rad + g.adv as i32, (gcy + u.y) as i32 + rad + size as i32);
+            for Y in py0.max(0)..py1.min(ch as i32) { for X in px0.max(0)..px1.min(cw as i32) {
+                let (dx, dy) = (X as f32 + 0.5 - gcx - u.x, Y as f32 + 0.5 - gcy - u.y); let (rx, ry) = ((c_ * dx + s_ * dy) * inv, (-s_ * dx + c_ * dy) * inv);
+                let (sx, sy) = (rx + gcx - ox - lx0 - 0.5, ry + gcy - oy - ly0 - 0.5); if sx < 0.0 || sy < 0.0 || sx > (gw - 1) as f32 || sy > (gh - 1) as f32 { continue; }
+                let (x0, y0) = (sx.floor() as usize, sy.floor() as usize); let (x1, y1) = ((x0 + 1).min(gw - 1), (y0 + 1).min(gh - 1)); let (fx_, fy_) = (sx - x0 as f32, sy - y0 as f32);
+                let v = (loc[y0 * gw + x0] * (1.0 - fx_) + loc[y0 * gw + x1] * fx_) * (1.0 - fy_) + (loc[y1 * gw + x0] * (1.0 - fx_) + loc[y1 * gw + x1] * fx_) * fy_; put(&mut cov, X, Y, v); } }
+        }
         if u.blur > 0.5 { /* per-unit blur approximated below by whole-mask softening when any unit blurs */ }
     }
     let blur_any = glyphs.iter().enumerate().take(shown).map(|(ci, g)| animate(an, t, g, nchar, nwords, nl, ci).blur).fold(0.0, f32::max);
@@ -88,7 +108,7 @@ fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f
 }
 
 pub fn render_text(fr: &mut Frame, text: &str, fontpath: &str, size: f64, col: [f64; 3], spacing: f64, stroke_w: f64, stroke_col: [f64; 3], shadow: f64, align: &str, reveal: f64, fx: Option<&TextFx>, t: f64) -> Result<(), String> {
-    let f = font(fontpath)?; let (w, h) = (fr.w, fr.h);
+    let f = font(fontpath, fx.map(|x| x.weight).unwrap_or(0.0))?; let upper; let text = if fx.map(|x| x.uppercase).unwrap_or(false) { upper = text.to_uppercase(); upper.as_str() } else { text }; let (w, h) = (fr.w, fr.h);
     let (main, bounds) = coverage(w, h, text, &f, size as f32, spacing as f32, align, reveal, fx, t);
     let over = |fr: &mut Frame, cov: &[f32], c: &dyn Fn(usize) -> [f32; 3], k: f32| { for i in 0..w * h { let a = cov[i] * k; if a <= 0.0 { continue; } let cc = c(i); let o = &mut fr.d[i * 4..i * 4 + 4]; let na = a + o[3] * (1.0 - a); for j in 0..3 { o[j] = (cc[j] * a + o[j] * o[3] * (1.0 - a)) / na.max(1e-6); } o[3] = na; } };
     // background box
