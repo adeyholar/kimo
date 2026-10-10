@@ -376,3 +376,6 @@ Native integer16/float decode reads raw frames on a joined worker with a rendezv
 
 ### Native stream exit-state regressions
 A decoder that emits a complete frame then stalls at process exit must hit the same deadline and be killed/reaped. A decoder that emits complete bytes then exits unsuccessfully must return an error rather than counting raw-byte receipt as success. Both real-process tests pass; eighteen library tests run with the optional OCIO gate enabled.
+
+### Flow diagnostic exact pair and float preservation
+Flow diagnostics explicitly prepare the displayed time pair, then verify cache coverage before accessing frames. Float caches are copied directly without lazy8bit quantization; integer caches retain normalization. Final displayed frame uses the previous frame rather than an out-of-range/clamped duplicate; freeze returns no-motion error. Tests cover forward/reverse/end/freeze and signed/HDR float cache values without quantization. Cache memory rejection remains an error, not fake zero flow. The visualization is diagnostic, not an optical-flow accuracy certification.

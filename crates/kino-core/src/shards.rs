@@ -37,10 +37,10 @@ pub struct Plane {
 }
 fn d_region() -> [f64; 2] { [1280.0, 720.0] } fn d_cells() -> u32 { 120 } fn d_pr() -> f64 { 140.0 } fn d_wave() -> f64 { 2400.0 } fn d_imp() -> f64 { 1100.0 } fn d_lift() -> f64 { 0.9 } fn d_grade() -> f64 { 3.0 } fn d_maxd() -> f64 { 0.25 }
 pub struct Cell { pub poly: Vec<(f64, f64)>, pub c: (f64, f64), pub area: f64, pub lc: (f64, f64), pub uv: Vec<(f64, f64)> }
-fn sq2quad(q: [(f64, f64); 4]) -> [f64; 8] { let (x0, y0, x1, y1, x2, y2, x3, y3) = (q[0].0, q[0].1, q[1].0, q[1].1, q[2].0, q[2].1, q[3].0, q[3].1);
+pub fn sq2quad(q: [(f64, f64); 4]) -> [f64; 8] { let (x0, y0, x1, y1, x2, y2, x3, y3) = (q[0].0, q[0].1, q[1].0, q[1].1, q[2].0, q[2].1, q[3].0, q[3].1);
     let (dx1, dx2, dx3, dy1, dy2, dy3) = (x1 - x2, x3 - x2, x0 - x1 + x2 - x3, y1 - y2, y3 - y2, y0 - y1 + y2 - y3); let den = dx1 * dy2 - dy1 * dx2; let (g, hh) = if den.abs() < 1e-12 { (0.0, 0.0) } else { ((dx3 * dy2 - dy3 * dx2) / den, (dx1 * dy3 - dy1 * dx3) / den) };
     [x1 - x0 + g * x1, x3 - x0 + hh * x3, x0, y1 - y0 + g * y1, y3 - y0 + hh * y3, y0, g, hh] }
-fn hmap(m: &[f64; 8], u: f64, v: f64) -> (f64, f64) { let w = m[6] * u + m[7] * v + 1.0; ((m[0] * u + m[1] * v + m[2]) / w, (m[3] * u + m[4] * v + m[5]) / w) }
+pub fn hmap(m: &[f64; 8], u: f64, v: f64) -> (f64, f64) { let w = m[6] * u + m[7] * v + 1.0; ((m[0] * u + m[1] * v + m[2]) / w, (m[3] * u + m[4] * v + m[5]) / w) }
 /// Quad homography in canvas-centre offsets (pixels at this render scale) or None for the legacy screen-facing plane.
 pub fn plane_warp(p: &Plane, k: f64) -> Option<[f64; 8]> { p.quad.map(|q| { let o = |i: usize| ((q[i][0] - 640.0) * k, (q[i][1] - 360.0) * k); sq2quad([o(0), o(1), o(2), o(3)]) }) }
 /// (local impact, canvas impact) for the plane.
@@ -101,8 +101,8 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                 [c.c.0 + ux * v0 * travel, c.c.1 + uy * v0 * travel + 0.5 * e.gravity * k * age * age, p.under_depth * k + vz * travel + pre_dep(p, d, k, ts, birth)] } else { pos };
             let phys = traj.as_ref().map(|(tj, _): &(std::sync::Arc<crate::physics::Traj>, i32)| tj.at(i as usize, ts));
             let ang = if pc.is_some() { [(r(7) - 0.5) * 2.0 * e.spin * age, (r(9) - 0.5) * 2.0 * e.spin * age, (r(11) - 0.5) * e.spin * age] } else { [r(6) * 360.0 + (r(7) - 0.5) * 2.0 * e.spin * age, r(8) * 360.0 + (r(9) - 0.5) * 2.0 * e.spin * age, r(10) * 360.0 + (r(11) - 0.5) * 2.0 * e.spin * age] };
-            let (pos, rm) = match &phys { Some((p, q)) => (*p, crate::physics::quat_matrix(*q)), None => (pos, rot_matrix(ang)) }; let nv = pc.map(|(_, c)| c.poly.len()).unwrap_or(4 + (r(12) * 2.99) as usize); let aspect = if pc.is_some() { 1.0 } else { let a = e.aspect.unwrap_or([0.62, 1.22]); a[0] + (a[1] - a[0]) * r(13) }; let thick = ({ let t = e.thickness.unwrap_or([0.3, 0.9]); t[0] + (t[1] - t[0]) * r(14) }) * size;
-            let life_fade = if e.fade_out > 0.0 { 1.0 - sstep((age - (total - e.fade_out - birth).max(0.1)) / e.fade_out) } else { 1.0 }; let born = sstep(age / 0.05);
+            let (pos, rm) = match &phys { Some((p, q)) => (*p, crate::physics::quat_matrix(*q)), None => (pos, rot_matrix(ang)) }; let pos = match (&phys, pc, pdist) { (Some(_), Some((p, _)), Some(d)) => [pos[0], pos[1], pos[2] + pre_dep(p, d, k, ts, birth)], _ => pos }; let nv = pc.map(|(_, c)| c.poly.len()).unwrap_or(4 + (r(12) * 2.99) as usize); let aspect = if pc.is_some() { 1.0 } else { let a = e.aspect.unwrap_or([0.62, 1.22]); a[0] + (a[1] - a[0]) * r(13) }; let thick = ({ let t = e.thickness.unwrap_or([0.3, 0.9]); t[0] + (t[1] - t[0]) * r(14) }) * size;
+            let life_fade = if e.fade_out > 0.0 { 1.0 - sstep((age - (total - e.fade_out - birth).max(0.1)) / e.fade_out) } else { 1.0 }; let born = if ts < birth { 1.0 } else { sstep(age / 0.05) };
             let mut loc = [(0.0, 0.0); 6]; if let Some((_, c)) = pc { for v in 0..nv { loc[v] = c.poly[v]; } } else { for v in 0..nv { let a = v as f64 / nv as f64 * std::f64::consts::TAU + (h(e.seed, i, 20 + v as u64) - 0.5) * 1.1; let rr = size * (0.62 + 0.42 * h(e.seed, i, 30 + v as u64)); loc[v] = (a.cos() * rr, a.sin() * rr * aspect); } }
             let mut shard: Vec<([(f64, f64); 6], f64, f64, f64, f64)> = vec![]; // per face
             let nrm = [rm[0][2], rm[1][2], rm[2][2]]; let mut zsum = 0.0; let mut ok = true;
@@ -169,7 +169,7 @@ fn bake_cached(e: &ShardBurst, k: f64, total: f64, hh: usize) -> std::sync::Arc<
             let size = (c.area.sqrt() / 1.8).max(1.0); let (dx, dy) = (c.c.0 - ix, c.c.1 - iy); let mg = (dx * dx + dy * dy).sqrt().max(1e-6); let (ux, uy) = if d < 1e-3 { let a = r(60) * std::f64::consts::TAU; (a.cos(), a.sin()) } else { (dx / mg, dy / mg) };
             let v0 = p.impulse * k * (-d / (p.radius * k * 3.0)).exp().max(0.12) * (0.6 + 0.8 * r(4)) / (0.7 + size / (40.0 * k)).sqrt(); let vz = -p.lift * v0 * (0.6 + 0.8 * r(5));
             let sd = e.spin.to_radians(); let thick = ({ let t = e.thickness.unwrap_or([0.3, 0.9]); t[0] + (t[1] - t[0]) * r(14) }) * size;
-            bodies.push(crate::physics::Body { p: [c.c.0, c.c.1, p.under_depth * k + pre_dep(p, d, k, birth, birth)], v: [ux * v0, uy * v0, vz], q: [1.0, 0.0, 0.0, 0.0], w: [(r(7) - 0.5) * 2.0 * sd, (r(9) - 0.5) * 2.0 * sd, (r(11) - 0.5) * sd], r: size * 0.55, m: size * size * thick * 1e-3 + 1e-3, birth }); }
+            bodies.push(crate::physics::Body { p: [c.c.0, c.c.1, p.under_depth * k], v: [ux * v0, uy * v0, vz], q: [1.0, 0.0, 0.0, 0.0], w: [(r(7) - 0.5) * 2.0 * sd, (r(9) - 0.5) * 2.0 * sd, (r(11) - 0.5) * sd], r: size * 0.55, m: size * size * thick * 1e-3 + 1e-3, birth }); }
         let par = crate::physics::Params { gravity: [0.0, e.gravity * k, 0.0], drag: e.drag, ang_drag: e.ang_drag, restitution: e.restitution, friction: e.friction, floor_y: e.floor.map(|f| f * k), collide: false };
         let tj = Arc::new(crate::physics::bake(bodies, &par, total + 0.1)); m.lock().unwrap().insert(key, tj.clone()); return tj; }
     for i in 0..e.count as u64 { let r = |kk: u64| h(e.seed, i, kk);

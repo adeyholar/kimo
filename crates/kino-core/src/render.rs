@@ -539,17 +539,29 @@ pub fn render_mask_png(p: &Project, clip_id: &str, mask_id: Option<&str>, t: f64
 
 /// Write a colour-wheel visualisation of the optical flow between a media clip's frame at `t` and the next one.
 pub fn render_flow_png(p: &Project, clip_id: &str, t: f64, path: &str, cache: &mut Cache) -> Result<f64, String> {
-    prepare_at(p, cache, Some(t))?; let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == clip_id).ok_or("no such clip")?; let (w, h) = (p.width as usize, p.height as usize);
-    let fr = cache.frames_of(&c.id).ok_or("not a media clip")?; let lt0 = t - c.start; let fidx = |lt: f64| -> usize { let d = c.display_time(lt.max(0.0)); if c.speed_curve.is_some() { (c.source_time(d) * p.fps) as usize } else { (d * p.fps) as usize } };
-    // the next *displayed* frame (follows reverse, freeze and speed curves like the renderer); at the end of the window step backwards instead of faking zero flow
-    let (i0, mut i1) = (fidx(lt0), fidx(lt0 + 1.0 / p.fps)); let mut swapped = false; if i1 == i0 { i1 = fidx(lt0 - 1.0 / p.fps); swapped = i1 != i0; }
-    if i1 == i0 { return Err("no motion between displayed frames here (freeze or window end)".into()); }
-    let (a, b) = if swapped { (fr.get(i1).ok_or("no frame")?, fr.get(i0).ok_or("no frame")?) } else { (fr.get(i0).ok_or("no frame")?, fr.get(i1).ok_or("no next frame")?) };
-    let mk = |bb: &[u8]| { let mut f = Frame::new(w, h); for (i, v) in bb.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } f };
-    let t0 = std::time::Instant::now(); let (u, v, fw, fh) = crate::flow::flow(&mk(a), &mk(b), 5); let secs = t0.elapsed().as_secs_f64();
+    let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == clip_id).ok_or("no such clip")?; let (w, h) = (p.width as usize, p.height as usize);
+    if !t.is_finite()||t<c.start||t>=c.start+c.duration{return Err("flow time must be within clip".into())}
+    let lt0=t-c.start;let last=((c.duration*p.fps).ceil() as usize).saturating_sub(1);let fidx=|lt:f64|->usize{let d=c.display_time(lt.max(0.));(if c.speed_curve.is_some(){(c.source_time(d)*p.fps) as usize}else{(d*p.fps) as usize}).min(last)};
+    let(i0,mut i1)=(fidx(lt0),fidx(lt0+1./p.fps));let mut lt1=lt0+1./p.fps;let mut swapped=false;
+    if i1==i0{lt1=lt0-1./p.fps;i1=fidx(lt1);swapped=i1!=i0;}
+    if i1==i0{return Err("no motion between displayed frames here (freeze or window end)".into())}
+    prepare_range(p,cache,t.min(c.start+lt1),t.max(c.start+lt1))?;
+    let fr=cache.frames_of(&c.id).ok_or("not a media clip")?;
+    let(a,b)=flow_pair(fr,if swapped{i1}else{i0},if swapped{i0}else{i1},w,h)?;
+    let t0=std::time::Instant::now();let(u,v,fw,fh)=crate::flow::flow(&a,&b,5);let secs=t0.elapsed().as_secs_f64();
     let mm = u.iter().zip(&v).map(|(a, b)| (a * a + b * b).sqrt()).fold(0.0f32, f32::max).max(1.0); let viz = crate::flow::flow_viz(&u, &v, fw, fh, mm * 0.8);
     let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", fw, fh),"-i","-","-frames:v","1",path]).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
     ch.stdin.take().unwrap().write_all(&to_rgba8(&viz)).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(secs)
+}
+
+fn flow_pair(fr:&Frames,a:usize,b:usize,w:usize,h:usize)->Result<(Frame,Frame),String>{
+ if !fr.covers(a.min(b),a.max(b)){return Err("active flow frame pair exceeds cache coverage".into())}
+ let n=w.checked_mul(h).and_then(|n|n.checked_mul(4)).ok_or("flow dimensions overflow")?;if fr.fs!=n{return Err("flow cache shape mismatch".into())}
+ crate::guard::reserve(n.checked_mul(8).ok_or("flow pair allocation overflow")?);
+ let mk=|i:usize|->Result<Frame,String>{let d=if let Some(v)=fr.get_float(i){v.to_vec()}else{fr.get(i).ok_or("no flow frame")?.iter().map(|v|*v as f32/255.).collect()};Ok(Frame{w,h,d})};Ok((mk(a)?,mk(b)?))
+}
+#[cfg(test)]mod flow_pair_tests{use super::*;
+#[test]fn flow_pair_keeps_float_and_rejects_clamped_video(){let d=vec![-0.25,4.,0.18,0.5,1.,2.,3.,1.];let f=Frames{still:false,working_linear:true,quantized:Default::default(),linear_buf:Some(d.clone()),buf:vec![],fs:4,first:10};let(a,b)=flow_pair(&f,10,11,1,1).unwrap();assert_eq!(a.d,&d[..4]);assert_eq!(b.d,&d[4..]);assert!(f.quantized.get().is_none());assert!(flow_pair(&f,10,12,1,1).is_err());}
 }
 
 #[cfg(test)]mod decode_lifecycle_test{use super::*;
