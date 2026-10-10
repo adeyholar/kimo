@@ -45,3 +45,25 @@ pub fn bake(mut bodies: Vec<Body>, par: &Params, total: f64) -> Traj {
 }
 impl Traj { pub fn at(&self, i: usize, t: f64) -> ([f64; 3], [f64; 4]) { let f = (t / self.dt).max(0.0); let a = (f.floor() as usize).min(self.n - 1); let b = (a + 1).min(self.n - 1); let u = f - f.floor(); let (x, y) = (self.data[i][a], self.data[i][b]);
     let l = |k: usize| x[k] as f64 * (1.0 - u) + y[k] as f64 * u; ([l(0), l(1), l(2)], qnorm([l(3), l(4), l(5), l(6)])) } }
+
+// ---- 2D layer physics: circle proxies bouncing inside the canvas ------------------------------------------------------------------------
+#[derive(Clone, Debug)]
+pub struct Body2 { pub x: f64, pub y: f64, pub vx: f64, pub vy: f64, pub r: f64, pub m: f64, pub rot: f64, pub w: f64 }
+pub struct Params2 { pub gx: f64, pub gy: f64, pub drag: f64, pub restitution: f64, pub friction: f64, pub half_w: f64, pub half_h: f64, pub walls: [bool; 4], pub collide: bool }
+/// Simulate at 480 Hz sub-steps, sample once per frame. Coordinates are pixel offsets from the canvas centre (y down), rot in degrees. Walls: [left, right, top, bottom].
+pub fn sim2d(mut b: Vec<Body2>, p: &Params2, fps: f64, frames: usize) -> Vec<Vec<[f64; 3]>> {
+    let sub = (480.0 / fps).ceil().max(1.0) as usize; let dt = 1.0 / (fps * sub as f64); let mut out = vec![b.iter().map(|q| [q.x, q.y, q.rot]).collect::<Vec<_>>()];
+    for _ in 1..frames { for _ in 0..sub {
+        for q in b.iter_mut() { q.vx += p.gx * dt; q.vy += p.gy * dt; let d = (1.0 - p.drag * dt).max(0.0); q.vx *= d; q.vy *= d; q.w *= (1.0 - 0.3 * p.drag * dt).max(0.0); q.x += q.vx * dt; q.y += q.vy * dt; q.rot += q.w * dt;
+            let (lx, rx, ty, by) = (-p.half_w + q.r, p.half_w - q.r, -p.half_h + q.r, p.half_h - q.r);
+            if p.walls[0] && q.x < lx { q.x = lx; if q.vx < 0.0 { q.vx = -q.vx * p.restitution; q.w += -q.vy * p.friction * 0.5 / q.r * 57.2958 * 0.0 + (q.vy / q.r) * 57.2958 * p.friction * 0.1; } }
+            if p.walls[1] && q.x > rx { q.x = rx; if q.vx > 0.0 { q.vx = -q.vx * p.restitution; q.w += -(q.vy / q.r) * 57.2958 * p.friction * 0.1; } }
+            if p.walls[2] && q.y < ty { q.y = ty; if q.vy < 0.0 { q.vy = -q.vy * p.restitution; q.w += (q.vx / q.r) * 57.2958 * p.friction * 0.1; } }
+            if p.walls[3] && q.y > by { q.y = by; if q.vy > 0.0 { q.vy = -q.vy * p.restitution; if q.vy.abs() < 25.0 { q.vy = 0.0; } let roll = q.vx / q.r * 57.2958; q.w += (roll - q.w) * p.friction.min(1.0) * 0.2; q.vx *= 1.0 - p.friction * 0.02; } } }
+        if p.collide { for i in 0..b.len() { for j in i + 1..b.len() { let (dx, dy) = (b[j].x - b[i].x, b[j].y - b[i].y); let d = dx.hypot(dy); let rs = b[i].r + b[j].r; if d < rs && d > 1e-9 { let (nx, ny) = (dx / d, dy / d); let (mi, mj) = (b[i].m, b[j].m); let tot = mi + mj;
+            let pen = rs - d; b[i].x -= nx * pen * mj / tot; b[i].y -= ny * pen * mj / tot; b[j].x += nx * pen * mi / tot; b[j].y += ny * pen * mi / tot;
+            let rv = (b[j].vx - b[i].vx) * nx + (b[j].vy - b[i].vy) * ny; if rv < 0.0 { let jn = -(1.0 + p.restitution) * rv / (1.0 / mi + 1.0 / mj); b[i].vx -= jn * nx / mi; b[i].vy -= jn * ny / mi; b[j].vx += jn * nx / mj; b[j].vy += jn * ny / mj;
+                let (tx, ty) = (-ny, nx); let tv = (b[j].vx - b[i].vx) * tx + (b[j].vy - b[i].vy) * ty; let spin = tv * p.friction * 0.3 * 57.2958; b[i].w += spin / b[i].r.max(1.0); b[j].w += spin / b[j].r.max(1.0); } } } } } }
+        out.push(b.iter().map(|q| [q.x, q.y, q.rot]).collect()); }
+    out
+}

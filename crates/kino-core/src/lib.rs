@@ -11,6 +11,7 @@ pub mod confetti;
 pub mod shards;
 pub mod scene3d;
 pub mod physics;
+pub mod presets;
 pub mod three_d;
 pub mod glass;
 pub mod model;
