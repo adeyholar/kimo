@@ -12,7 +12,7 @@ class S:
         line = s.p.stdout.readline()
         if not line: raise EOFError("server died")
         return json.loads(line)
-SKIP = {"export", "export_gif", "project_set", "render_frame", "transcribe", "download_stock"}   # slow / network
+SKIP = {"export", "export_gif", "project_set", "render_frame", "export_gif", "export_audio", "transcribe", "download_stock"}   # slow / network
 def vals(sc):
     t = sc.get("type"); 
     if "enum" in sc: return [sc["enum"][0]]

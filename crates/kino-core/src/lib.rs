@@ -2,6 +2,7 @@
 //! Every user-visible operation is a registered Command; the MCP server
 //! is generated from the registry, so nothing can exist without a tool.
 pub mod keyframe;
+pub mod hud;
 pub mod model;
 pub mod commands;
 pub mod render;
