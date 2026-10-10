@@ -43,6 +43,16 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
     ("wave", "Sine wave distortion", &[("amplitude", 10.0, "px"), ("wavelength", 80.0, "px"), ("speed", 3.0, "cycles/s")]),
     ("light_leak", "Warm animated light leak", &[("amount", 0.6, "0..1"), ("speed", 0.5, "cycles/s")]),
     ("zoom_blur", "Radial zoom blur", &[("amount", 0.06, "0..0.3")]),
+    ("luma_key", "Key out by brightness (keep=0 removes darks, keep=1 removes brights)", &[("threshold", 0.2, "0..1"), ("softness", 0.1, "0..1"), ("keep_bright", 1.0, "1 keeps brights, 0 keeps darks")]),
+    ("ripple", "Concentric water ripple displacement", &[("amplitude", 8.0, "px"), ("wavelength", 60.0, "px"), ("speed", 2.0, "cycles/s"), ("cx", 0.5, "0..1"), ("cy", 0.5, "0..1")]),
+    ("lens_distortion", "Barrel/pincushion lens distortion", &[("amount", 0.3, "-1..1 (positive = barrel)")]),
+    ("glitch_blocks", "Digital glitch: horizontal slice displacement + color shift", &[("amount", 30.0, "max px shift"), ("slices", 12.0, "count"), ("rate", 12.0, "changes/s")]),
+    ("light_rays", "God rays: radial blur of highlights from a point", &[("amount", 0.8, "0..2"), ("threshold", 0.6, "0..1"), ("cx", 0.5, "0..1"), ("cy", 0.2, "0..1"), ("length", 0.4, "0..1")]),
+    ("drop_shadow", "Drop shadow from alpha (use on text/shapes/stickers)", &[("dx", 8.0, "px"), ("dy", 8.0, "px"), ("blur", 8.0, "px"), ("opacity", 0.6, "0..1")]),
+    ("chromatic_aberration", "Radial color fringing", &[("amount", 4.0, "px at edges")]),
+    ("flicker", "Brightness flicker", &[("amount", 0.15, "0..1"), ("rate", 18.0, "Hz")]),
+    ("halftone", "Halftone dots", &[("size", 8.0, "px")]),
+    ("edge_glow", "Neon edge detect glow", &[("amount", 1.0, "0..3"), ("r", 0.0, "R"), ("g", 0.9, "G"), ("b", 1.0, "B")]),
     ("letterbox", "Cinematic bars", &[("ratio", 2.39, "target aspect")]),
 ];
 
@@ -148,6 +158,36 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
         "zoom_blur" => { let a = p(params, "amount", 0.06, t); let src = f.d.clone(); let (w, h) = (f.w as f32, f.h as f32); let n = 8;
             for y in 0..f.h { for x in 0..f.w { let mut acc = [0f32; 4]; for k in 0..n { let s = 1.0 - a * k as f32 / n as f32; let sx = ((x as f32 - w/2.0) * s + w/2.0).clamp(0.0, w-1.0) as usize; let sy = ((y as f32 - h/2.0) * s + h/2.0).clamp(0.0, h-1.0) as usize; for j in 0..4 { acc[j] += src[(sy*f.w+sx)*4+j]; } }
                 for j in 0..4 { f.d[(y*f.w+x)*4+j] = acc[j] / n as f32; } } } }
+        "luma_key" => { let (th, so, kb) = (p(params, "threshold", 0.2, t), p(params, "softness", 0.1, t).max(0.001), p(params, "keep_bright", 1.0, t) > 0.5);
+            for i in 0..f.w*f.h { let l = lum([f.d[i*4], f.d[i*4+1], f.d[i*4+2]]); let k = ((l - th) / so).clamp(0.0, 1.0); f.d[i*4+3] *= if kb { k } else { 1.0 - k }; } }
+        "ripple" => { let (a, wl, sp, cx, cy) = (p(params, "amplitude", 8.0, t), p(params, "wavelength", 60.0, t), p(params, "speed", 2.0, t), p(params, "cx", 0.5, t) * f.w as f32, p(params, "cy", 0.5, t) * f.h as f32); let src = f.d.clone(); let (w, h) = (f.w, f.h);
+            for y in 0..h { for x in 0..w { let (dx, dy) = (x as f32 - cx, y as f32 - cy); let d = (dx*dx + dy*dy).sqrt().max(1.0); let o = a * ((d / wl - t as f32 * sp) * 6.2831853).sin() * (-d / (w as f32)).exp();
+                let sx = (x as f32 + dx / d * o).clamp(0.0, w as f32 - 1.0) as usize; let sy = (y as f32 + dy / d * o).clamp(0.0, h as f32 - 1.0) as usize; for j in 0..4 { f.d[(y*w+x)*4+j] = src[(sy*w+sx)*4+j]; } } } }
+        "lens_distortion" => { let a = p(params, "amount", 0.3, t); let src = f.d.clone(); let (w, h) = (f.w as f32, f.h as f32);
+            for y in 0..f.h { for x in 0..f.w { let (nx, ny) = ((x as f32 / w - 0.5) * 2.0, (y as f32 / h - 0.5) * 2.0); let r2 = nx*nx + ny*ny; let k = 1.0 + a * r2; let (sx, sy) = (((nx * k) * 0.5 + 0.5) * w, ((ny * k) * 0.5 + 0.5) * h);
+                let o = (y*f.w+x)*4; if sx < 0.0 || sy < 0.0 || sx >= w || sy >= h { f.d[o..o+4].copy_from_slice(&[0.0, 0.0, 0.0, 1.0]); continue; } let s = (sy as usize * f.w + sx as usize) * 4; for j in 0..4 { f.d[o+j] = src[s+j]; } } } }
+        "glitch_blocks" => { let (a, n, rate) = (p(params, "amount", 30.0, t), p(params, "slices", 12.0, t).max(1.0) as usize, p(params, "rate", 12.0, t)); let step = (t as f32 * rate).floor(); let src = f.d.clone(); let (w, h) = (f.w, f.h); let sh = (h / n).max(1);
+            let rnd = |k: f32| (((k * 12.9898).sin() * 43758.545).fract()).abs();
+            for y in 0..h { let sl = (y / sh) as f32; let r = rnd(sl + step * 17.0); let off = if r > 0.55 { ((rnd(sl * 3.1 + step) * 2.0 - 1.0) * a) as isize } else { 0 };
+                for x in 0..w { let sx = (x as isize + off).rem_euclid(w as isize) as usize; let o = (y*w+x)*4; f.d[o] = src[(y*w+sx)*4]; f.d[o+1] = src[(y*w+(sx+ (off.signum() * 4) as usize % w))*4+1]; f.d[o+2] = src[(y*w+sx)*4+2]; f.d[o+3] = src[(y*w+sx)*4+3]; } } }
+        "light_rays" => { let (a, th, cx, cy, len) = (p(params, "amount", 0.8, t), p(params, "threshold", 0.6, t), p(params, "cx", 0.5, t), p(params, "cy", 0.2, t), p(params, "length", 0.4, t)); let (w, h) = (f.w as f32, f.h as f32); let n = 24; let src = f.d.clone();
+            for y in 0..f.h { for x in 0..f.w { let mut acc = [0f32; 3]; for k in 0..n { let s = 1.0 - len * k as f32 / n as f32; let sx = ((x as f32 - cx*w) * s + cx*w).clamp(0.0, w - 1.0) as usize; let sy = ((y as f32 - cy*h) * s + cy*h).clamp(0.0, h - 1.0) as usize; let i = (sy*f.w+sx)*4;
+                let l = lum([src[i], src[i+1], src[i+2]]); let m = ((l - th) / (1.0 - th).max(0.01)).clamp(0.0, 1.0) * (1.0 - k as f32 / n as f32); for j in 0..3 { acc[j] += src[i+j] * m; } }
+                let o = (y*f.w+x)*4; for j in 0..3 { f.d[o+j] += acc[j] / n as f32 * a * 2.0; } } } }
+        "drop_shadow" => { let (dx, dy, bl, op) = (p(params, "dx", 8.0, t) as isize, p(params, "dy", 8.0, t) as isize, p(params, "blur", 8.0, t) as usize, p(params, "opacity", 0.6, t)); let mut sh = Frame::new(f.w, f.h); let (w, h) = (f.w as isize, f.h as isize);
+            for y in 0..h { for x in 0..w { let (sx, sy) = (x - dx, y - dy); if sx >= 0 && sy >= 0 && sx < w && sy < h { sh.d[((y*w+x)*4+3) as usize] = f.d[((sy*w+sx)*4+3) as usize]; } } } box_blur3(&mut sh, bl);
+            for i in 0..f.w*f.h { let a = sh.d[i*4+3] * op; let o = &mut f.d[i*4..i*4+4]; let na = o[3] + a * (1.0 - o[3]); if na > 0.0 { for j in 0..3 { o[j] = (o[j] * o[3]) / na; } } o[3] = na; } }
+        "chromatic_aberration" => { let a = p(params, "amount", 4.0, t); let src = f.d.clone(); let (w, h) = (f.w as f32, f.h as f32);
+            for y in 0..f.h { for x in 0..f.w { let (nx, ny) = (x as f32 / w - 0.5, y as f32 / h - 0.5); let o = (y*f.w+x)*4;
+                for (j, s) in [(0usize, 1.0f32), (2usize, -1.0f32)] { let sx = (x as f32 + nx * a * 2.0 * s).clamp(0.0, w - 1.0) as usize; let sy = (y as f32 + ny * a * 2.0 * s).clamp(0.0, h - 1.0) as usize; f.d[o+j] = src[(sy*f.w+sx)*4+j]; } } } }
+        "flicker" => { let (a, r) = (p(params, "amount", 0.15, t), p(params, "rate", 18.0, t)); let k = 1.0 - a * (((t as f32 * r).floor() * 78.233).sin() * 43758.545).fract().abs(); px(f, |c| [c[0]*k, c[1]*k, c[2]*k]); }
+        "halftone" => { let s = p(params, "size", 8.0, t).max(2.0); let src = f.d.clone();
+            for y in 0..f.h { for x in 0..f.w { let (cx, cy) = (((x as f32 / s).floor() + 0.5) * s, ((y as f32 / s).floor() + 0.5) * s); let (sx, sy) = ((cx as usize).min(f.w-1), (cy as usize).min(f.h-1)); let i = (sy*f.w+sx)*4; let l = lum([src[i], src[i+1], src[i+2]]).clamp(0.0, 1.0);
+                let d = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt(); let r = s * 0.7 * l.sqrt(); let k = (r - d + 0.5).clamp(0.0, 1.0); let o = (y*f.w+x)*4; for j in 0..3 { f.d[o+j] = src[i+j] * k; } } } }
+        "edge_glow" => { let (a, col) = (p(params, "amount", 1.0, t), [p(params, "r", 0.0, t), p(params, "g", 0.9, t), p(params, "b", 1.0, t)]); let src = f.d.clone(); let (w, h) = (f.w, f.h);
+            let mut ed = Frame::new(w, h); for y in 1..h-1 { for x in 1..w-1 { let g = |xx: usize, yy: usize| { let i = (yy*w+xx)*4; lum([src[i], src[i+1], src[i+2]]) };
+                let gx = g(x+1, y) - g(x-1, y); let gy = g(x, y+1) - g(x, y-1); let m = ((gx*gx + gy*gy).sqrt() * 3.0).min(1.0); let o = (y*w+x)*4; ed.d[o] = col[0]*m; ed.d[o+1] = col[1]*m; ed.d[o+2] = col[2]*m; ed.d[o+3] = 1.0; } }
+            let mut bl = Frame { w, h, d: ed.d.clone() }; box_blur3(&mut bl, 6); for i in 0..w*h { for j in 0..3 { f.d[i*4+j] = f.d[i*4+j] * 0.35 + (ed.d[i*4+j] + bl.d[i*4+j]) * a; } } }
         other => return Err(format!("unknown effect '{other}'")),
     }
     Ok(())

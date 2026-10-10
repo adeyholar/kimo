@@ -25,6 +25,7 @@ Text: add_text (typewriter, stroke, shadow), set_text, import_srt (captions).
 Color: exposure, contrast, saturation, temperature, tint, color_wheels, curves, teal_orange, hsl, lut (.cube), color_isolate, get_scopes.
 Vision: track_point (pin text to a moving surface), stabilize, chroma_key.
 Audio: set_audio (fades, EQ, denoise, compressor, echo, pitch, reverse), set_audio_volume_key, detect_beats, export_audio.
+VFX: add_adjustment_layer, add_shape (rect/ellipse/polygon/line), set_corner_pin, set_time_mode + freeze_frame, effects luma_key, ripple, lens_distortion, glitch_blocks, light_rays, drop_shadow, chromatic_aberration, flicker, halftone, edge_glow.
 Output: render_frame, export.
 
 ## Layout

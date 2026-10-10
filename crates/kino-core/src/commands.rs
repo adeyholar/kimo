@@ -63,7 +63,7 @@ pub fn registry() -> Vec<Command> {
                 "gradient" => Source::Gradient { c1: color(a, "color", [0.0; 3]), c2: color(a, "color2", [1.0; 3]) },
                 o => return Err(format!("bad source_type {o}")) };
             let id = ss.project.gen_id("clip");
-            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: opt_num(a, "speed", 1.0), speed_curve: None, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, audio: Audio::default(), transition_in: None };
+            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: opt_num(a, "speed", 1.0), speed_curve: None, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), transition_in: None };
             let tr = ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or(format!("no track '{tid}'"))?; tr.clips.push(c);
             Ok(json!({"clip_id":id})) } },
     Command { name: "add_text", description: "Add a text clip (rendered with a TTF/OTF font). Animate with set_keyframe on reveal (typewriter), opacity, scale, x, y, rotation. Default font is a system sans.", mutates: true,
@@ -72,7 +72,7 @@ pub fn registry() -> Vec<Command> {
         run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let id = ss.project.gen_id("clip");
             let src = Source::Text { text: str_arg(a, "text")?.replace("\\n", "\n"), font: a.get("font").and_then(|v| v.as_str()).unwrap_or("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf").into(), size: opt_num(a, "size", 72.0), color: color(a, "color", [1.0; 3]),
                 letter_spacing: opt_num(a, "letter_spacing", 0.0), stroke_width: opt_num(a, "stroke_width", 0.0), stroke_color: color(a, "stroke_color", [0.0; 3]), shadow: opt_num(a, "shadow", 0.0), align: a.get("align").and_then(|v| v.as_str()).unwrap_or("center").into() };
-            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, audio: Audio::default(), transition_in: None };
+            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), transition_in: None };
             ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
     Command { name: "set_text", description: "Edit text content/style of a text clip.", mutates: true,
         schema: obj(vec![("clip_id", s("text clip")), ("text", s("new text")), ("size", n("pixels")), ("color", json!({"type":"array","items":{"type":"number"}}))], &["clip_id"]),
@@ -141,7 +141,7 @@ pub fn registry() -> Vec<Command> {
                 let body = ls[ti + 1..].join("\\n"); let id = ss.project.gen_id("clip");
                 let src = Source::Text { text: body.replace("\\n", "\n"), font: a.get("font").and_then(|v| v.as_str()).unwrap_or("/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf").into(), size: opt_num(a, "size", 48.0), color: color(a, "color", [1.0; 3]), letter_spacing: 0.0, stroke_width: opt_num(a, "stroke_width", 2.0), stroke_color: [0.0; 3], shadow: 2.0, align: "center".into() };
                 let mut props = default_props(); props.get_mut("y").unwrap().base = opt_num(a, "y", 220.0);
-                let c = Clip { id: id.clone(), source: src, start: st, duration: en - st, in_point: 0.0, speed: 1.0, speed_curve: None, props, effects: vec![], blend: "normal".into(), mask: None, audio: Audio::default(), transition_in: None };
+                let c = Clip { id: id.clone(), source: src, start: st, duration: en - st, in_point: 0.0, speed: 1.0, speed_curve: None, props, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), transition_in: None };
                 ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); made.push(id); }
             Ok(json!({"captions":made.len(),"clip_ids":made})) } },
     Command { name: "get_scopes", description: "Video scopes at a time: per-channel histogram (32 bins), luma stats, clipping %, average color, and a coarse luma waveform - for AI color grading feedback.", mutates: false,
@@ -155,7 +155,7 @@ pub fn registry() -> Vec<Command> {
         schema: obj(vec![("track_id", s("track")), ("kind", json!({"type":"string","enum":["sparks","embers","snow","rain","dust"]})), ("start", n("s")), ("duration", n("s")), ("count", n("particles, default 200")), ("color", json!({"type":"array","items":{"type":"number"}})), ("size", n("px radius, default 3")), ("seed", n("random seed"))], &["track_id","kind","start","duration"]),
         run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let id = ss.project.gen_id("clip");
             let src = Source::Particles { kind: str_arg(a, "kind")?.into(), count: opt_num(a, "count", 200.0) as u32, color: color(a, "color", [1.0, 0.7, 0.3]), size: opt_num(a, "size", 3.0), seed: opt_num(a, "seed", 1.0) as u64 };
-            let mut c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), effects: vec![], blend: "add".into(), mask: None, audio: Audio::default(), transition_in: None }; c.blend = "add".into();
+            let mut c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), effects: vec![], blend: "add".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), transition_in: None }; c.blend = "add".into();
             ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
     Command { name: "transcribe", description: "Speech-to-text via the `whisper` CLI (openai-whisper or whisper.cpp wrapper) if installed; writes an SRT you can pass to import_srt. Fails with a clear message when whisper is not installed.", mutates: false,
         schema: obj(vec![("path", s("audio/video file")), ("out_srt", s("output .srt path")), ("model", s("model name, default base"))], &["path","out_srt"]),
@@ -167,6 +167,26 @@ pub fn registry() -> Vec<Command> {
         run: |ss, a| { let tmp = format!("{}.tmp.mp4", str_arg(a, "path")?); render::export(&ss.project, &tmp, 20)?; let (st, en) = (opt_num(a, "start", 0.0), opt_num(a, "end", ss.project.duration()));
             let ok = std::process::Command::new("ffmpeg").args(["-v","error","-y","-ss",&st.to_string(),"-t",&(en-st).to_string(),"-i",&tmp,"-vf",&format!("fps={},split[a][b];[a]palettegen[p];[b][p]paletteuse", opt_num(a, "fps", 15.0)),str_arg(a, "path")?]).status().map_err(|e| e.to_string())?.success();
             let _ = std::fs::remove_file(&tmp); if ok { Ok(json!({"path":str_arg(a, "path")?})) } else { Err("gif encode failed".into()) } } },
+    Command { name: "add_adjustment_layer", description: "Add an adjustment layer: effects (grade, glow, glitch...) added to it apply to everything beneath it for its duration. Use add_effect on the returned clip_id.", mutates: true,
+        schema: obj(vec![("track_id", s("track (put on top)")), ("start", n("s")), ("duration", n("s"))], &["track_id","start","duration"]),
+        run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let id = ss.project.gen_id("clip");
+            let c = Clip { id: id.clone(), source: Source::Adjustment, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), transition_in: None };
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
+    Command { name: "add_shape", description: "Add a vector shape layer: rect, ellipse, polygon (sides), line. Pixel size, fill + stroke, corner_radius for rects. Move with set_property x/y; animate with keyframes.", mutates: true,
+        schema: obj(vec![("track_id", s("track")), ("shape", json!({"type":"string","enum":["rect","ellipse","polygon","line"]})), ("start", n("s")), ("duration", n("s")), ("width", n("px")), ("height", n("px")), ("fill", json!({"type":"array","items":{"type":"number"}})), ("stroke_width", n("px")), ("stroke_color", json!({"type":"array","items":{"type":"number"}})), ("sides", n("polygon sides")), ("corner_radius", n("px"))], &["track_id","shape","start","duration"]),
+        run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let id = ss.project.gen_id("clip");
+            let src = Source::Shape { shape: str_arg(a, "shape")?.into(), width: opt_num(a, "width", 300.0), height: opt_num(a, "height", 200.0), fill: color(a, "fill", [1.0; 3]), stroke_width: opt_num(a, "stroke_width", 0.0), stroke_color: color(a, "stroke_color", [0.0; 3]), sides: opt_num(a, "sides", 5.0) as u32, corner_radius: opt_num(a, "corner_radius", 0.0) };
+            let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), transition_in: None };
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
+    Command { name: "set_time_mode", description: "Time remap: mode normal | reverse | freeze (hold the frame at clip-local time `at`).", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("mode", json!({"type":"string","enum":["normal","reverse","freeze"]})), ("at", n("freeze time, clip-local seconds"))], &["clip_id","mode"]),
+        run: |ss, a| { let m = match str_arg(a, "mode")? { "normal" => TimeMode::Normal, "reverse" => TimeMode::Reverse, "freeze" => TimeMode::Freeze { at: opt_num(a, "at", 0.0) }, o => return Err(format!("bad mode {o}")) }; clip(&mut ss.project, a)?.time_mode = m; Ok(json!({"ok":true})) } },
+    Command { name: "freeze_frame", description: "Split-free freeze: hold the frame of a media clip at a timeline time for the rest of the clip.", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("at", n("timeline seconds"))], &["clip_id","at"]),
+        run: |ss, a| { let at = num_arg(a, "at")?; let c = clip(&mut ss.project, a)?; c.time_mode = TimeMode::Freeze { at: (at - c.start).max(0.0) }; Ok(json!({"ok":true})) } },
+    Command { name: "set_corner_pin", description: "Perspective corner pin: pixel offsets of the 4 corners [[dx,dy] x4: top-left, top-right, bottom-right, bottom-left] from their normal positions. Pass null/empty to clear.", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("corners", json!({"type":"array","items":{"type":"array","items":{"type":"number"}}}))], &["clip_id"]),
+        run: |ss, a| { let cs = a.get("corners").and_then(|v| v.as_array()); let c = clip(&mut ss.project, a)?; match cs { Some(v) if v.len() == 4 => { let mut o = [[0.0; 2]; 4]; for (i, p) in v.iter().enumerate() { let p = p.as_array().ok_or("corner must be [dx,dy]")?; o[i] = [p.get(0).and_then(|x| x.as_f64()).unwrap_or(0.0), p.get(1).and_then(|x| x.as_f64()).unwrap_or(0.0)]; } c.corners = Some(o); } _ => c.corners = None } Ok(json!({"ok":true})) } },
     Command { name: "move_clip", description: "Move a clip to a new timeline start time.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("start", n("seconds"))], &["clip_id","start"]),
         run: |ss, a| { let st = num_arg(a, "start")?; clip(&mut ss.project, a)?.start = st; Ok(json!({"ok":true})) } },

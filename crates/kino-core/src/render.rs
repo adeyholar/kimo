@@ -65,6 +65,8 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
         let Source::Media { asset } = &c.source else { continue };
         if !active.contains(&c.id) { continue; }
         let total = ((c.duration * p.fps).ceil() as usize).max(1);
+        let (ta, tb) = match c.time_mode { TimeMode::Normal => (t0, t1), TimeMode::Reverse => (c.start + c.duration - (t1 - c.start), c.start + c.duration - (t0 - c.start)), TimeMode::Freeze { at } => (c.start + at, c.start + at) };
+        let (t0, t1) = (ta, tb);
         let (ia, ib) = if all || c.speed_curve.is_some() { (0, total - 1) } else { ((((t0 - c.start).max(0.0) * p.fps).floor() as usize).min(total - 1), (((t1 - c.start).max(0.0) * p.fps).ceil() as usize).min(total - 1)) };
         let sig = format!("{asset}|{}|{}|{}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()));
         if let Some((s, fr)) = cache.frames.get(&c.id) { if *s == sig && fr.covers(ia, ib) { continue; } }
@@ -77,12 +79,27 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
     Ok(())
 }
 
-fn source_frame(p: &Project, c: &Clip, lt: f64, cache: &Cache) -> Frame {
+fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
+    let lt = c.display_time(lt_in);
     let (w, h) = (p.width as usize, p.height as usize);
     let mut f = Frame::new(w, h);
     match &c.source {
         Source::Solid { color } => for i in 0..w*h { f.d[i*4]=color[0] as f32; f.d[i*4+1]=color[1] as f32; f.d[i*4+2]=color[2] as f32; f.d[i*4+3]=1.0; },
         Source::Gradient { c1, c2 } => for y in 0..h { let k = y as f64 / h as f64; for x in 0..w { let i=(y*w+x)*4; for j in 0..3 { f.d[i+j] = (c1[j]*(1.0-k)+c2[j]*k) as f32; } f.d[i+3]=1.0; } },
+        Source::Adjustment => {}
+        Source::Shape { shape, width, height, fill, stroke_width, stroke_color, sides, corner_radius } => {
+            let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0); let (hw, hh) = (width / 2.0, height / 2.0);
+            // signed distance (negative inside)
+            let sd = |x: f64, y: f64| -> f64 { let (px, py) = (x - cx, y - cy); match shape.as_str() {
+                "ellipse" => { let k = ((px / hw).powi(2) + (py / hh).powi(2)).sqrt(); (k - 1.0) * hw.min(hh) }
+                "polygon" => { let n = (*sides).max(3) as f64; let r = hw.min(hh); let a = py.atan2(px) + std::f64::consts::FRAC_PI_2; let seg = std::f64::consts::TAU / n; let aa = (a.rem_euclid(seg)) - seg / 2.0; (px * px + py * py).sqrt() * aa.cos() - r * (seg / 2.0).cos() }
+                "line" => (py.abs() - hh.max(1.0)).max(px.abs() - hw),
+                _ => { let (qx, qy) = (px.abs() - hw + corner_radius, py.abs() - hh + corner_radius); (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - corner_radius } } };
+            for y in 0..h { for x in 0..w { let d = sd(x as f64 + 0.5, y as f64 + 0.5); let inside = (0.5 - d).clamp(0.0, 1.0); if inside <= 0.0 && *stroke_width <= 0.0 { continue; }
+                let sk = if *stroke_width > 0.0 { (0.5 - (d.abs() - stroke_width / 2.0)).clamp(0.0, 1.0) } else { 0.0 }; let fl = if *stroke_width > 0.0 { (0.5 - (d + stroke_width / 2.0)).clamp(0.0, 1.0) } else { inside };
+                let i = (y * w + x) * 4; let a = (fl + sk * (1.0 - fl)).clamp(0.0, 1.0); if a <= 0.0 { continue; }
+                for j in 0..3 { f.d[i + j] = ((fill[j] * fl + stroke_color[j] * sk * (1.0 - fl)) / a) as f32; } f.d[i + 3] = a as f32; } }
+        }
         Source::Particles { kind, count, color, size, seed } => {
             let rnd = |i: u64, k: u64| { let mut x = (seed ^ (i * 0x9E3779B97F4A7C15) ^ (k * 0xBF58476D1CE4E5B9)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 29; (x >> 11) as f64 / (1u64 << 53) as f64 };
             let (wf, hf) = (w as f64, h as f64);
@@ -155,6 +172,13 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
     for tr in &p.tracks { for c in &tr.clips {
         if t < c.start || t >= c.start + c.duration { continue; }
         let lt = t - c.start;
+        if let Source::Adjustment = c.source {
+            let mut adj = Frame { w, h, d: out.d.clone() };
+            for e in &c.effects { effects::apply(&e.kind, &e.params, &e.strings, &mut adj, lt, seed)?; }
+            let op = prop(c, "opacity", lt) as f32; let mk: Option<Frame> = c.mask.as_ref().map(|m| { let mut mf = Frame::new(w, h); for i in 0..w*h { mf.d[i*4+3] = 1.0; } apply_mask(&mut mf, m, lt); mf });
+            for i in 0..w*h { let k = op * mk.as_ref().map(|m| m.d[i*4+3]).unwrap_or(1.0); for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - k) + adj.d[i*4+j] * k; } }
+            continue;
+        }
         let mut f = source_frame(p, c, lt, cache);
         for e in &c.effects { effects::apply(&e.kind, &e.params, &e.strings, &mut f, lt, seed)?; }
         if let Some(m) = &c.mask { apply_mask(&mut f, m, lt); }
@@ -186,6 +210,7 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
         let mut sc = prop(c, "scale", lt);
         if let Some(tr_in) = &c.transition_in { if tr_in.kind == "zoom" && lt < tr_in.duration { sc *= 0.6 + 0.4 * (lt / tr_in.duration); } }
         let mut rot_extra = 0.0; if let Some(tr_in) = &c.transition_in { if tr_in.kind == "spin" && lt < tr_in.duration { let k = lt / tr_in.duration; rot_extra = (1.0 - k) * 180.0; sc *= 0.5 + 0.5 * k; } }
+        let f = if let Some(cs) = &c.corners { corner_pin(&f, cs) } else { f };
         let f = transform(&f, sc, prop(c, "rotation", lt) + rot_extra, dx, dy);
         blend(&mut out, &f, op, &c.blend, mask.as_deref());
     }}
@@ -247,4 +272,22 @@ fn apply_mask(f: &mut Frame, m: &Mask, t: f64) {
         let mut a = (d / feather + 0.5).clamp(0.0, 1.0); if m.invert { a = 1.0 - a; }
         f.d[(y*f.w+x)*4+3] *= a;
     }}
+}
+
+/// Perspective warp of the whole frame by moving its 4 corners (TL,TR,BR,BL) by pixel offsets.
+fn corner_pin(src: &Frame, off: &[[f64; 2]; 4]) -> Frame {
+    let (w, h) = (src.w as f64, src.h as f64);
+    let from = [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]]; let to: Vec<[f64; 2]> = (0..4).map(|i| [from[i][0] + off[i][0], from[i][1] + off[i][1]]).collect();
+    // homography mapping `to` (dest) -> `from` (source): solve 8x8
+    let mut a = [[0f64; 9]; 8];
+    for i in 0..4 { let (x, y) = (to[i][0], to[i][1]); let (u, v) = (from[i][0], from[i][1]);
+        a[i*2] = [x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y, u]; a[i*2+1] = [0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y, v]; }
+    for c in 0..8 { let mut m = c; for r in c + 1..8 { if a[r][c].abs() > a[m][c].abs() { m = r; } } a.swap(c, m); let d = a[c][c]; if d.abs() < 1e-12 { return Frame { w: src.w, h: src.h, d: src.d.clone() }; }
+        for k in c..9 { a[c][k] /= d; } for r in 0..8 { if r != c { let f = a[r][c]; for k in c..9 { a[r][k] -= f * a[c][k]; } } } }
+    let hm: Vec<f64> = (0..8).map(|i| a[i][8]).collect();
+    let mut o = Frame::new(src.w, src.h);
+    for y in 0..src.h { for x in 0..src.w { let (xf, yf) = (x as f64 + 0.5, y as f64 + 0.5); let dnm = hm[6] * xf + hm[7] * yf + 1.0; let sx = (hm[0] * xf + hm[1] * yf + hm[2]) / dnm; let sy = (hm[3] * xf + hm[4] * yf + hm[5]) / dnm;
+        if sx < 0.0 || sy < 0.0 || sx > w - 1.0 || sy > h - 1.0 { continue; } let (x0, y0) = (sx.floor() as usize, sy.floor() as usize); let (x1, y1) = ((x0 + 1).min(src.w - 1), (y0 + 1).min(src.h - 1)); let (fx, fy) = ((sx - x0 as f64) as f32, (sy - y0 as f64) as f32);
+        for j in 0..4 { let p00 = src.d[(y0 * src.w + x0) * 4 + j]; let p10 = src.d[(y0 * src.w + x1) * 4 + j]; let p01 = src.d[(y1 * src.w + x0) * 4 + j]; let p11 = src.d[(y1 * src.w + x1) * 4 + j]; o.d[(y * src.w + x) * 4 + j] = (p00 * (1.0 - fx) + p10 * fx) * (1.0 - fy) + (p01 * (1.0 - fx) + p11 * fx) * fy; } } }
+    o
 }

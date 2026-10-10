@@ -14,6 +14,10 @@ pub enum Source {
     /// Rendered text (TTF/OTF via ab_glyph). Animate with the `reveal` prop (typewriter) plus transform props.
     /// Procedural particles: kind sparks|snow|dust|embers|rain. Deterministic per seed.
     Particles { kind: String, count: u32, color: [f64; 3], size: f64, seed: u64 },
+    /// Adjustment layer: its effects/mask/opacity apply to everything composited beneath it.
+    Adjustment,
+    /// Vector shape: rect | ellipse | polygon (sides) | line. Sizes in pixels, centered on canvas (offset with x/y props).
+    Shape { shape: String, width: f64, height: f64, fill: [f64; 3], stroke_width: f64, stroke_color: [f64; 3], sides: u32, corner_radius: f64 },
     Text { text: String, font: String, size: f64, color: [f64; 3], letter_spacing: f64, stroke_width: f64, stroke_color: [f64; 3], shadow: f64, align: String },
 }
 
@@ -53,10 +57,19 @@ pub struct Clip {
     #[serde(default)]
     pub mask: Option<Mask>,
     #[serde(default)]
+    pub time_mode: TimeMode,
+    #[serde(default)]
+    pub corners: Option<[[f64; 2]; 4]>,
+    #[serde(default)]
     pub audio: Audio,
     /// Transition INTO this clip from the previous clip on the track.
     pub transition_in: Option<Transition>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum TimeMode { #[default] Normal, Reverse, /// hold the frame at clip-local time `at`
+    Freeze { at: f64 } }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Audio { pub mute: bool, pub volume: Prop, pub fade_in: f64, pub fade_out: f64, pub pitch: f64, pub highpass: f64, pub lowpass: f64, pub denoise: f64, pub compress: bool, pub echo: f64, pub reverse: bool }
@@ -91,6 +104,8 @@ impl Default for Project {
 }
 
 impl Clip {
+    /// Map clip-local time to the local time whose frame should be shown (reverse/freeze).
+    pub fn display_time(&self, lt: f64) -> f64 { match self.time_mode { TimeMode::Normal => lt, TimeMode::Reverse => (self.duration - lt).max(0.0), TimeMode::Freeze { at } => at } }
     /// Source-media time consumed after `lt` seconds of clip time.
     pub fn source_time(&self, lt: f64) -> f64 {
         match &self.speed_curve { None => lt * self.speed, Some(p) => { let n = (lt * 240.0).ceil().max(1.0) as usize; let dt = lt / n as f64; (0..n).map(|i| p.at((i as f64 + 0.5) * dt).max(0.0) * dt).sum() } }
