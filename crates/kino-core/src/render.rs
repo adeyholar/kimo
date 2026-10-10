@@ -360,8 +360,8 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     let mut i = 0;
     while i < n {
         crate::guard::check();
-        let end = (i + nt * 4).min(n);
-        prepare_range(p, &mut cache, i as f64 / p.fps, end as f64 / p.fps)?;
+        let mut end = (i + nt * 4).min(n);
+        loop{let last=(end-1) as f64/p.fps;match prepare_range(p,&mut cache,i as f64/p.fps,last){Ok(())=>break,Err(e)if end-i>1&&(e.contains("cache budget")||e.contains("memory cap")||e.contains("bounded cache"))=>{end=i+(end-i).div_ceil(2);cache=Cache::new();},Err(e)=>return Err(e)}}
         // work queue: nt workers pull frame indices, so one slow frame (shards) no longer idles the other cores
         let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
         std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
