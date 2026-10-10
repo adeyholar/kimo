@@ -87,7 +87,7 @@ pub fn registry() -> Vec<Command> {
             for (k, d) in [("cx",0.5),("cy",0.5),("w",0.5),("h",0.5),("feather",0.02),("rotation",0.0)] { props.insert(k.to_string(), Prop::new(opt_num(a, k, d))); }
             let inv = a.get("invert").and_then(|v| v.as_bool()).unwrap_or(false); clip(&mut ss.project, a)?.mask = Some(Mask { shape, props, invert: inv }); Ok(json!({"ok":true})) } },
     Command { name: "set_mask_keyframe", description: "Keyframe a mask param (cx, cy, w, h, feather, rotation) at clip-local time.", mutates: true,
-        schema: obj(vec![("clip_id", s("clip")), ("property", s("mask param")), ("time", n("seconds")), ("value", n("value")), ("ease", json!({"type":"string","enum":["linear","in","out","in_out","hold"]}))], &["clip_id","property","time","value"]),
+        schema: obj(vec![("clip_id", s("clip")), ("property", s("mask param")), ("time", n("seconds")), ("value", n("value")), ("ease", json!({"type":"string","enum":["linear","in","out","in_out","hold","out_quart","out_expo","out_back","in_out_quint","in_expo"]}))], &["clip_id","property","time","value"]),
         run: |ss, a| { let k = str_arg(a, "property")?.to_string(); let t = num_arg(a, "time")?; let v = num_arg(a, "value")?; let e: Ease = serde_json::from_value(a.get("ease").cloned().unwrap_or(json!("linear"))).map_err(|e| e.to_string())?;
             let m = clip(&mut ss.project, a)?.mask.as_mut().ok_or("clip has no mask")?; m.props.entry(k).or_insert(Prop::new(v)).set_key(t, v, e); Ok(json!({"ok":true})) } },
     Command { name: "remove_mask", description: "Remove a clip's mask.", mutates: true,
@@ -262,7 +262,7 @@ pub fn registry() -> Vec<Command> {
         schema: obj(vec![("clip_id", s("clip")), ("property", json!({"type":"string","enum":["opacity","x","y","scale","rotation"]})), ("value", n("value"))], &["clip_id","property","value"]),
         run: |ss, a| { let k = str_arg(a, "property")?.to_string(); let v = num_arg(a, "value")?; let c = clip(&mut ss.project, a)?; c.props.entry(k).or_insert(Prop::new(0.0)).base = v; Ok(json!({"ok":true})) } },
     Command { name: "set_keyframe", description: "Keyframe a transform property or an effect param (effect_id + property = param name) at clip-local time. ease: linear|in|out|in_out|hold.", mutates: true,
-        schema: obj(vec![("clip_id", s("clip")), ("property", s("opacity|x|y|scale|rotation or effect param")), ("effect_id", s("optional: target an effect")), ("time", n("clip-local seconds")), ("value", n("value")), ("ease", json!({"type":"string","enum":["linear","in","out","in_out","hold"]}))], &["clip_id","property","time","value"]),
+        schema: obj(vec![("clip_id", s("clip")), ("property", s("opacity|x|y|scale|rotation or effect param")), ("effect_id", s("optional: target an effect")), ("time", n("clip-local seconds")), ("value", n("value")), ("ease", json!({"type":"string","enum":["linear","in","out","in_out","hold","out_quart","out_expo","out_back","in_out_quint","in_expo"]}))], &["clip_id","property","time","value"]),
         run: |ss, a| { let k = str_arg(a, "property")?.to_string(); let t = num_arg(a, "time")?; let v = num_arg(a, "value")?;
             let e: Ease = serde_json::from_value(a.get("ease").cloned().unwrap_or(json!("linear"))).map_err(|e| e.to_string())?;
             let eid = a.get("effect_id").and_then(|v| v.as_str()).map(String::from);

@@ -58,6 +58,7 @@ fn shape_amount(shape: &str, x: f32, smooth: f32) -> f32 {
         "triangle" => if (0.0..=1.0).contains(&x) { 1.0 - (2.0 * x - 1.0).abs() } else { 0.0 }, "round" => if (0.0..=1.0).contains(&x) { (1.0 - (2.0 * x - 1.0).powi(2)).max(0.0).sqrt() } else { 0.0 },
         "smooth" => if (0.0..=1.0).contains(&x) { let t = 1.0 - (2.0 * x - 1.0).abs(); t * t * (3.0 - 2.0 * t) } else { 0.0 }, _ => soft(x) }
 }
+#[derive(Clone, Copy)]
 struct U { x: f32, y: f32, sc: f32, rot: f32, op: f32, track: f32, blur: f32 }
 fn animate(an: &[TextAnimator], t: f64, g: &G, nchar: usize, nword: usize, nline: usize, ci: usize) -> U {
     let mut u = U { x: 0.0, y: 0.0, sc: 1.0, rot: 0.0, op: 1.0, track: 0.0, blur: 0.0 };
@@ -79,9 +80,11 @@ fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f
         let u = animate(an, t, g, nchar, nwords, nl, ci); if g.line != last_line { track_acc[g.line] = 0.0; last_line = g.line; } let tr = track_acc[g.line]; track_acc[g.line] += u.track;
         if u.op <= 0.0 { continue; }
         let gid = f.glyph_id(g.c); let shift = match align { "left" => 0.0, "right" => -line_tr[g.line], _ => -line_tr[g.line] * 0.5 }; let (ox, oy) = (bx + g.x + tr + shift, by + g.y);
+        let u1 = u; let u0 = animate(an, t - 0.5 / 30.0, g, nchar, nwords, nl, ci); let dist = ((u1.x - u0.x).powi(2) + (u1.y - u0.y).powi(2)).sqrt() + (u1.sc - u0.sc).abs() * size * 0.5 + (u1.rot - u0.rot).abs() * 0.3; let ns = if dist > 0.8 { ((dist / 1.5).ceil() as usize).clamp(2, 10) } else { 1 }; let wgt = 1.0 / ns as f32;
+        for si in 0..ns { let ff = if ns > 1 { (si as f32 + 0.5) / ns as f32 } else { 1.0 }; let u = U { x: u0.x + (u1.x - u0.x) * ff, y: u0.y + (u1.y - u0.y) * ff, sc: u0.sc + (u1.sc - u0.sc) * ff, rot: u0.rot + (u1.rot - u0.rot) * ff, op: u1.op, track: u1.track, blur: u1.blur };
         let (gcx, gcy) = (ox + g.adv * 0.5, oy - sf.ascent() * 0.35);
         let band = if fx.map(|x| x.line_mask).unwrap_or(false) { let lh = sf.height() * fx.map(|x| x.line_spacing as f32).unwrap_or(1.15); Some((by + g.line as f32 * lh - lh * 0.02, by + (g.line as f32 + 1.0) * lh + lh * 0.02)) } else { None };
-        let put = |cov: &mut Vec<f32>, X: i32, Y: i32, v: f32| { if X < 0 || Y < 0 || X >= cw as i32 || Y >= ch as i32 { return; } if let Some((y0, y1)) = band { let yy = Y as f32 + 0.5; if yy < y0 || yy > y1 { return; } } let i = Y as usize * cw + X as usize; let a = (v * u.op).min(1.0); if a > cov[i] { cov[i] = a; } };
+        let put = |cov: &mut Vec<f32>, X: i32, Y: i32, v: f32| { let wgt = wgt; if X < 0 || Y < 0 || X >= cw as i32 || Y >= ch as i32 { return; } if let Some((y0, y1)) = band { let yy = Y as f32 + 0.5; if yy < y0 || yy > y1 { return; } } let i = Y as usize * cw + X as usize; let a = (v * u.op).min(1.0); if ns > 1 { cov[i] = (cov[i] + a * wgt).min(1.0); } else if a > cov[i] { cov[i] = a; } };
         if u.rot.abs() < 0.01 {
             let s = size * u.sc.max(0.01); let (px, py) = (gcx + u.x - (gcx - ox) * u.sc + 0.0, gcy + u.y + (oy - gcy) * u.sc);
             let sk = fx.map(|x| x.italic_skew as f32).unwrap_or(0.0);
@@ -99,6 +102,7 @@ fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f
                 let (sx, sy) = (rx + gcx - ox - lx0 - 0.5, ry + gcy - oy - ly0 - 0.5); if sx < 0.0 || sy < 0.0 || sx > (gw - 1) as f32 || sy > (gh - 1) as f32 { continue; }
                 let (x0, y0) = (sx.floor() as usize, sy.floor() as usize); let (x1, y1) = ((x0 + 1).min(gw - 1), (y0 + 1).min(gh - 1)); let (fx_, fy_) = (sx - x0 as f32, sy - y0 as f32);
                 let v = (loc[y0 * gw + x0] * (1.0 - fx_) + loc[y0 * gw + x1] * fx_) * (1.0 - fy_) + (loc[y1 * gw + x0] * (1.0 - fx_) + loc[y1 * gw + x1] * fx_) * fy_; put(&mut cov, X, Y, v); } }
+        }
         }
         if u.blur > 0.5 { /* per-unit blur approximated below by whole-mask softening when any unit blurs */ }
     }

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum Ease { Linear, In, Out, InOut, Hold }
+pub enum Ease { Linear, In, Out, InOut, Hold, OutQuart, OutExpo, OutBack, InOutQuint, InExpo }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Key { pub t: f64, pub v: f64, #[serde(default = "d_ease")] pub ease: Ease }
@@ -27,6 +27,11 @@ impl Prop {
                     Ease::Linear | Ease::Hold => u,
                     Ease::In => u * u * u,
                     Ease::Out => 1.0 - (1.0 - u).powi(3),
+                    Ease::OutQuart => 1.0 - (1.0 - u).powi(4),
+                    Ease::OutExpo => if u >= 1.0 { 1.0 } else { 1.0 - 2f64.powf(-10.0 * u) },
+                    Ease::InExpo => if u <= 0.0 { 0.0 } else { 2f64.powf(10.0 * u - 10.0) },
+                    Ease::OutBack => { let (c1, c3) = (1.2, 2.2); 1.0 + c3 * (u - 1.0).powi(3) + c1 * (u - 1.0).powi(2) }
+                    Ease::InOutQuint => if u < 0.5 { 16.0 * u.powi(5) } else { 1.0 - (-2.0 * u + 2.0).powi(5) / 2.0 },
                     Ease::InOut => if u < 0.5 { 4.0 * u * u * u } else { 1.0 - (-2.0 * u + 2.0).powi(3) / 2.0 },
                 };
                 return w[0].v + (w[1].v - w[0].v) * u;
