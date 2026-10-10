@@ -83,3 +83,7 @@ Limits: legacy color/HSL/keyers/film effects assume display encoding; explicitly
 
 ### Float optical-flow source neighbours
 Managed flow_blur now reads both source frames from the high-precision cache, converts both to working linear before flow/radiance accumulation, and avoids a second decode transform. Managed projects no longer reject it. Quality/shutter bounded. Actual SCUMBLE 25-frame320x180 proof: 0.845s, inspected. Constant HDR/negative radiance invariance unit test passes. This fixes color precision, not optical-flow tracking quality: coarse Lucas-Kanade still has occlusion/aperture/fast-motion gaps and no cut detector.
+
+### Caller-declared static HDR metadata
+`set_hdr_mastering` validates physical xy primaries/white, increasing min/max nits (max10000), MaxFALL<=MaxCLL and content-light bounds. Only enabled Rec2020/PQ HEVC10 accepts it; defaults remain absent, never invented. Explicit metadata becomes x265 mastering-display/content-light SEI, retained through audio mux. Synthetic declaration on actual SCUMBLE25-frame320x180 output:1.028s. ffprobe confirmed exact rational primaries/white, min50/10000=0.005nits, max10000000/10000=1000nits, MaxCLL1000/MaxFALL400. These are test fixture declarations, NOT measurements of this SDR-origin footage or actual mastering conditions. Two unit tests cover units/hostile declarations. Clearing is supported. Dynamic HDR metadata and certification remain absent.
+Source for x265 units/syntax: https://mailman.videolan.org/pipermail/x265-devel/2017-February/010894.html

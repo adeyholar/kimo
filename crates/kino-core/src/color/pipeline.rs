@@ -3,11 +3,11 @@ use serde::{Serialize,Deserialize};
 use crate::{effects::Frame,model::{Project,Clip}};
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
 #[serde(default)]pub struct Pipeline {
-    pub enabled:bool,pub working_gamut:usize,pub input_gamut:usize,pub input_transfer:usize,
+    pub mastering:Option<super::metadata::Mastering>,pub enabled:bool,pub working_gamut:usize,pub input_gamut:usize,pub input_transfer:usize,
     pub output_gamut:usize,pub output_transfer:usize,pub reference_white:f64,pub tone_map:bool,pub gamut_compress:bool,
 }
-impl Default for Pipeline{fn default()->Self{Self{enabled:false,working_gamut:3,input_gamut:0,input_transfer:1,output_gamut:0,output_transfer:1,reference_white:100.,tone_map:false,gamut_compress:false}}}
-impl Pipeline{pub fn validate(&self)->Result<(),String>{if self.working_gamut>7||self.input_gamut>7||self.output_gamut>7||self.input_transfer>8||self.output_transfer>8||!self.reference_white.is_finite()||!(1. ..=10000.).contains(&self.reference_white){return Err("invalid project color pipeline".into())}Ok(())}}
+impl Default for Pipeline{fn default()->Self{Self{mastering:None,enabled:false,working_gamut:3,input_gamut:0,input_transfer:1,output_gamut:0,output_transfer:1,reference_white:100.,tone_map:false,gamut_compress:false}}}
+impl Pipeline{pub fn validate(&self)->Result<(),String>{if self.working_gamut>7||self.input_gamut>7||self.output_gamut>7||self.input_transfer>8||self.output_transfer>8||!self.reference_white.is_finite()||!(1. ..=10000.).contains(&self.reference_white){return Err("invalid project color pipeline".into())}if let Some(m)=&self.mastering{m.validate()?;if !self.enabled||self.output_gamut!=1||self.output_transfer!=6{return Err("static mastering metadata requires enabled Rec2020 PQ output".into())}}Ok(())}}
 fn transform(f:&mut Frame,from:usize,to:usize,a:usize,b:usize,white:f64,tone:bool,compress:bool)->Result<(),String>{
     let mut params=crate::effects::Params::new();for(k,v)in[("from_gamut",from as f64),("to_gamut",to as f64),("from_transfer",a as f64),("to_transfer",b as f64),("reference_white",white),("tone_map",if tone{1.}else{0.}),("gamut_compress",if compress{1.}else{0.})]{params.insert(k.into(),crate::keyframe::Prop::new(v));}super::managed::apply(&params,f,0.)
 }
@@ -28,7 +28,9 @@ pub fn export_high(p:&Project,path:&str,format:&str,crf:u32)->Result<f64,String>
     if hdr&&p.color_pipeline.output_gamut!=1{return Err("PQ export requires Rec2020 output gamut=1".into())}
     if format=="ffv1_16"&&!path.to_lowercase().ends_with(".mkv"){return Err("ffv1_16 requires .mkv".into())}
     let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba64le","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v",codec,"-pix_fmt",pix]);
-    if format=="hevc10"{cmd.args(["-crf",&crf.to_string(),"-x265-params","pools=2:frame-threads=2:log-level=error","-tag:v","hvc1"]);}
+    if p.color_pipeline.mastering.is_some()&&format!="hevc10"{return Err("static mastering metadata supported by HEVC10 only".into())}
+    let mut encoder_params="pools=2:frame-threads=2:log-level=error".to_string();if let Some(m)=&p.color_pipeline.mastering{encoder_params.push(':');encoder_params.push_str(&m.x265()?);}
+    if format=="hevc10"{cmd.args(["-crf",&crf.to_string(),"-x265-params",&encoder_params,"-tag:v","hvc1"]);}
     if hdr{if format=="hevc10" {cmd.args(["-vf","scale=out_color_matrix=bt2020:out_range=tv","-color_range","tv"]);}
     cmd.args(["-color_primaries","bt2020","-color_trc","smpte2084","-colorspace",if format=="hevc10"{"bt2020nc"}else{"gbr"}]);}else if p.color_pipeline.enabled&&p.color_pipeline.output_transfer==7&&p.color_pipeline.output_gamut==1{if format=="hevc10" {cmd.args(["-vf","scale=out_color_matrix=bt2020:out_range=tv","-color_range","tv"]);}
     cmd.args(["-color_primaries","bt2020","-color_trc","arib-std-b67","-colorspace",if format=="hevc10"{"bt2020nc"}else{"gbr"}]);}
