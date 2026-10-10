@@ -230,3 +230,12 @@ Caller-declared mastering white must lie within its primary triangle (nonnegativ
 
 ## Still-image cache identity
 Decoded windows now carry explicit `still` identity. A one-frame video window at frame0 no longer claims to cover every later timeline index; only actual still-image paths get that reuse. This prevents frozen first-frame output when decode budgets shrink video windows to one frame or a source ends early. Direct window regression plus actual shared-source/nested-export/float-interchange tests pass. This intentionally changes a public Rust `Frames` struct field, so external literal initializers must set `still`; MCP schemas unchanged.
+
+## Fractional instant cache range
+Normal playback instant samples request their floor frame rather than floor..ceil, avoiding false memory rejection when only one frame is needed. Flow blur explicitly retains the next-frame requirement and fails if the budget cannot hold it instead of pretending duplicate-frame flow. Range, reverse/freeze and speed-curve paths retain prior bounds. Actual KINO_MEM_MB=3 /4active managed128x72clips: fractional.28frame now renders blue correctly; flowblur at the same time still returns active-range budget error. Five cache tests pass; blue output pixels inspected.
+
+## Stalled reference process timeout regression
+A real optional OCIO child is stopped with SIGSTOP in the test, then a private short-deadline invocation confirms timeout poisons the session, kills/reaps the stalled process and rejects reuse within2seconds. Production apply still uses60seconds and100ms cancellation/check intervals; no user-configurable bypass. Six library and7OCIO tests pass. This verifies stalled Python processor lifecycle, not synchronous ffmpeg write deadlines.
+
+## Decoder cleanup on cancellation
+Media ffmpeg decoder is now held by a kill/reap-on-drop guard, covering native float frame-loop cancellation and error paths before the existing explicit wait. A process unwind regression verifies reaping;7library,5cache and16interchange tests pass. Successful decode/cache behavior unchanged. Synchronous output reads remain a separate blocked-IO deadline limitation.

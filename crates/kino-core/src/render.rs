@@ -35,6 +35,8 @@ pub fn probe(path: &str) -> Result<(u32, u32, f64, f64), String> {
     Ok((parts[0].parse().unwrap_or(0), parts[1].parse().unwrap_or(0), parts.get(3).and_then(|d| d.parse().ok()).unwrap_or(0.0), fps))
 }
 
+struct DecodeProcess(std::process::Child);
+impl Drop for DecodeProcess{fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();}}
 const WINDOW: usize = 24;
 
 /// Decode `n` frames starting at global clip frame `a` (windowed: memory stays bounded for any clip length).
@@ -67,20 +69,20 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     crate::guard::reserve(estimate);
     let exr_args:Vec<&str>=if path.to_lowercase().ends_with(".exr"){vec!["-apply_trc","linear"]}else{vec![]};
     let vf=if native_fit{format!("setpts=PTS/{},fps={},format={pix}",speed.max(0.01),p.fps)}else{vf};
-    let mut child = Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(&exr_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"])
-        .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
+    let mut child = DecodeProcess(Command::new("ffmpeg").args(["-v","error"]).args(&loop_args).args(&exr_args).args(["-ss",&format!("{in_pt}"),"-t",&format!("{span}"),"-i",path,"-vf",&vf,"-frames:v",&n.max(1).to_string(),"-f","rawvideo","-pix_fmt",pix,"-"])
+        .stdout(Stdio::piped()).spawn().map_err(|e| format!("ffmpeg: {e}"))?);
     let mut buf=Vec::new();
     let linear_buf=if native_fit{
         let bytes_per_frame=raw_fs.checked_mul(if float_source{4}else{2}).ok_or("native frame size overflow")?;
         let converter=if float_source{None}else{Some(crate::color::pipeline::Input16::new(p,c)?)};
-        let mut stdout=child.stdout.take().ok_or("no decode output")?;let mut frame=vec![0u8;bytes_per_frame];let mut values=Vec::with_capacity(fs*n.max(1));let mut error=None;
+        let mut stdout=child.0.stdout.take().ok_or("no decode output")?;let mut frame=vec![0u8;bytes_per_frame];let mut values=Vec::with_capacity(fs*n.max(1));let mut error=None;
         for _ in 0..n.max(1){crate::guard::check();let mut have=0;while have<frame.len(){match stdout.read(&mut frame[have..]){Ok(0)=>break,Ok(k)=>have+=k,Err(e)=>{error=Some(e.to_string());break}}}if have==0{break}if have!=frame.len(){error=Some("truncated native decode".into());break}
          let d=if float_source{crate::color::interchange::unpack(&frame,dw,dh)}else{converter.as_ref().ok_or("missing integer input converter")?.decode(&frame)};
          let fitted=d.and_then(|d|{let mut source=Frame{w:dw,h:dh,d};if float_source{crate::color::pipeline::input(p,c,&mut source)?;}crate::color::interchange::fit(&source,w as usize,h as usize,fit)});match fitted{Ok(d)=>values.extend(d),Err(e)=>{error=Some(e);break}}
         }
-        drop(stdout);if error.is_some(){let _=child.kill();}let status=child.wait().map_err(|e|e.to_string())?;if let Some(e)=error{return Err(e)}if !status.success(){return Err("native media decode failed".into())}Some(values)
+        drop(stdout);if error.is_some(){let _=child.0.kill();}let status=child.0.wait().map_err(|e|e.to_string())?;if let Some(e)=error{return Err(e)}if !status.success(){return Err("native media decode failed".into())}Some(values)
     }else{
-        child.stdout.take().ok_or("no decode output")?.read_to_end(&mut buf).map_err(|e|e.to_string())?;if !child.wait().map_err(|e|e.to_string())?.success(){return Err("media decode failed".into())}
+        child.0.stdout.take().ok_or("no decode output")?.read_to_end(&mut buf).map_err(|e|e.to_string())?;if !child.0.wait().map_err(|e|e.to_string())?.success(){return Err("media decode failed".into())}
         if p.color_pipeline.enabled{let values=buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect();buf=Vec::new();Some(values)}else{None}
     };
     let k = buf.len() / fs; buf.truncate(k * fs);
@@ -109,7 +111,9 @@ pub fn prepare_range(p: &Project, cache: &mut Cache, t0: f64, t1: f64) -> Result
         let total = ((c.duration * p.fps).ceil() as usize).max(1);
         let (ta, tb) = match c.time_mode { TimeMode::Normal => (t0, t1), TimeMode::Reverse => (c.start + c.duration - (t1 - c.start), c.start + c.duration - (t0 - c.start)), TimeMode::Freeze { at } => (c.start + at, c.start + at) };
         let (t0, t1) = (ta, tb);
-        let (ia, ib) = if all || c.speed_curve.is_some() { (0, total - 1) } else { ((((t0 - c.start).max(0.0) * p.fps).floor() as usize).min(total - 1), (((t1 - c.start).max(0.0) * p.fps).ceil() as usize).min(total - 1)) };
+        let (ia, mut ib) = if all || c.speed_curve.is_some() { (0, total - 1) } else { ((((t0 - c.start).max(0.0) * p.fps).floor() as usize).min(total - 1), (((t1 - c.start).max(0.0) * p.fps).ceil() as usize).min(total - 1)) };
+        // Instant normal playback samples floor(index), except flow needs the next frame.
+        if !all&&c.speed_curve.is_none()&&matches!(c.time_mode,TimeMode::Normal)&&t0==t1{let flow=c.props.get("flow_blur").map(|v|v.at((t0-c.start).max(0.))>0.).unwrap_or(false);ib=if flow{(ia+1).min(total-1)}else{ia};}
         let a = p.assets.get(asset).ok_or(format!("asset {asset} missing"))?;
         let stat=std::fs::metadata(&a.path).map_err(|e|format!("media stat: {e}"))?;
         let sig = format!("{asset}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()), p.color_pipeline,c.props.get("input_gamut"),c.props.get("input_transfer"),c.props.get("fit"),a.path,stat.len(),stat.modified().ok());
@@ -532,4 +536,8 @@ pub fn render_flow_png(p: &Project, clip_id: &str, t: f64, path: &str, cache: &m
     let mm = u.iter().zip(&v).map(|(a, b)| (a * a + b * b).sqrt()).fold(0.0f32, f32::max).max(1.0); let viz = crate::flow::flow_viz(&u, &v, fw, fh, mm * 0.8);
     let mut ch = Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}", fw, fh),"-i","-","-frames:v","1",path]).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
     ch.stdin.take().unwrap().write_all(&to_rgba8(&viz)).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(secs)
+}
+
+#[cfg(test)]mod decode_lifecycle_test{use super::*;
+#[test]fn decoder_reaped_on_unwind(){let mut id=0;let r=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{let child=Command::new("sleep").arg("30").spawn().unwrap();id=child.id();let _decoder=DecodeProcess(child);panic!("test cancelled decode");}));assert!(r.is_err());assert!(!std::path::Path::new(&format!("/proc/{id}")).exists());}
 }
