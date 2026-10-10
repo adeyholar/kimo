@@ -21,7 +21,7 @@ for i in range(N):
     bg.save('/tmp/pof/f%03d.png'%i)
 subprocess.run(['ffmpeg','-v','error','-y','-framerate','30','-i','/tmp/pof/f%03d.png','-c:v','libx264','-crf','10','-pix_fmt','yuv420p','/tmp/po.mp4'],check=True)
 k=Kino();C=k.call;C('project_set',width=W,height=H,fps=30)
-a=C('import_media',path='/tmp/po.mp4')['asset_id'];t0=C('add_track')['track_id'];cl=C('add_clip',track_id=t0,source_type='media',asset_id=a,start=0,duration=N/30)['clip_id']
+a=C('import_media',path='/tmp/po.mp4')['asset_id'];t0=C('add_track')['track_id'];cl=C('add_clip',track_id=t0,source_type='media',asset_id=a,start=0,duration=N/30/float(os.environ.get('SP','1')),speed=float(os.environ.get('SP','1')))['clip_id']
 CTX=os.environ.get('CTX')
 def inner(i):  # target = central region of the plate (tex 192..448 x 132..308), exact through the plate homography
     q=quad(i);src=np.array([[0,0],[640,0],[640,440],[0,440]],float);A=[];B=[]
