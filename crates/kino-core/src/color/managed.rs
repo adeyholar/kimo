@@ -16,6 +16,9 @@ fn chroma(g:usize)->([[f64;2];3],[f64;2]) {
         1=>([[0.708,0.292],[0.170,0.797],[0.131,0.046]],[0.3127,0.3290]),
         2=>([[0.680,0.320],[0.265,0.690],[0.150,0.060]],[0.3127,0.3290]),
         3=>([[0.713,0.293],[0.165,0.830],[0.128,0.044]],[0.32168,0.33767]),
+        5=>([[0.684,0.313],[0.221,0.848],[0.0861,-0.102]],[0.3127,0.3290]),
+        6=>([[0.730,0.280],[0.140,0.855],[0.100,-0.050]],[0.3127,0.3290]),
+        7=>([[0.766,0.275],[0.225,0.800],[0.089,-0.087]],[0.3127,0.3290]),
         4=>([[0.7347,0.2653],[0.,1.],[0.0001,-0.0770]],[0.32168,0.33767]),
         _=>([[0.640,0.330],[0.300,0.600],[0.150,0.060]],[0.3127,0.3290])
     }
@@ -66,11 +69,11 @@ fn compress_with(c:[f64;3],weights:[f64;3])->[f64;3] {
     for v in c {let d=v-y;if d>0.{s=s.min((1.-y)/d)}else if d<0.{s=s.min(-y/d)}}
     c.map(|v|(y+(v-y)*s.clamp(0.,1.)).clamp(0.,1.))
 }
-pub fn catalog()->Vec<super::Entry>{vec![("color_managed","Explicit float gamut + transfer conversion with Bradford white adaptation. Gamut IDs 0 Rec709,1 Rec2020,2 P3D65,3 ACES AP1,4 AP0. Transfer IDs 0 linear,1 sRGB,2 gamma2.4,3 ACEScct,4 LogC3 EI800,5 SLog3,6 PQ,7 HLG scene,8 BT709. No ACES RRT/ODT. Tone_map is luminance Reinhard, not an ACES output transform.",&[("from_gamut",0.,"0..4"),("to_gamut",0.,"0..4"),("from_transfer",1.,"0..8"),("to_transfer",1.,"0..8"),("reference_white",100.,"PQ linear 1.0 in nits, 1..10000"),("exposure",0.,"stops -20..20"),("tone_map",0.,"0 none,1 luminance Reinhard"),("gamut_compress",0.,"0 preserve unbounded values,1 bound linear RGB")]) ]}
+pub fn catalog()->Vec<super::Entry>{vec![("color_managed","Explicit float gamut + transfer conversion with Bradford white adaptation. Gamut IDs 0 Rec709,1 Rec2020,2 P3D65,3 ACES AP1,4 AP0,5 ARRI WG3,6 Sony SGamut3,7 SGamut3Cine. Transfer IDs 0 linear,1 sRGB,2 gamma2.4,3 ACEScct,4 LogC3 EI800,5 SLog3,6 PQ,7 HLG scene,8 BT709. No ACES RRT/ODT. Tone_map is luminance Reinhard, not an ACES output transform.",&[("from_gamut",0.,"0..7"),("to_gamut",0.,"0..7"),("from_transfer",1.,"0..8"),("to_transfer",1.,"0..8"),("reference_white",100.,"PQ linear 1.0 in nits, 1..10000"),("exposure",0.,"stops -20..20"),("tone_map",0.,"0 none,1 luminance Reinhard"),("gamut_compress",0.,"0 preserve unbounded values,1 bound linear RGB")]) ]}
 pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String> {
     let get=|k:&str,d:f64|->Result<f64,String>{let v=p(pr,k,d,t) as f64;if !v.is_finite(){return Err(format!("nonfinite {k}"))}Ok(v)};
     let id=|k:&str,max:usize|->Result<usize,String>{let v=get(k,if k.ends_with("transfer"){1.}else{0.})?;if v.fract()!=0.||v<0.||v>max as f64{return Err(format!("invalid {k}"))}Ok(v as usize)};
-    let from=id("from_gamut",4)?;let to=id("to_gamut",4)?;let m=conversion(from,to);let weights=luma_weights(to);let a=id("from_transfer",8)?;let b=id("to_transfer",8)?;
+    let from=id("from_gamut",7)?;let to=id("to_gamut",7)?;let m=conversion(from,to);let weights=luma_weights(to);let a=id("from_transfer",8)?;let b=id("to_transfer",8)?;
     let white=get("reference_white",100.)?;if !(1. ..=10000.).contains(&white){return Err("reference_white outside 1..10000".into())}
     let e=2f64.powf(get("exposure",0.)?.clamp(-20.,20.));let tone=get("tone_map",0.)?>0.5;let compress=get("gamut_compress",0.)?>0.5;
     for px in f.d.chunks_exact_mut(4) {

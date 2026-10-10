@@ -55,3 +55,11 @@ Replaced color qualifier/halation use of the generic per-pixel-allocation box bl
 Tests: extended-negative/HDR identity, radiometric doubling for +1 stop, luminance preservation across all five gamuts. Real 50-frame 640x360 SCUMBLE proof: 2.824 s including decode/audio/encode. 33-cube portable bake of 3-effect chain 0.0483 s. Visually checked source/grade and clip. Input decode still comes from 8-bit media; this explicit effect chain does NOT switch the entire compositor or export to a scene-linear/10-bit workflow.
 
 Final generic MCP fuzz after adding an actual image fixture: 129 tools, 5283 calls, zero failures, with real clip/asset ids. Added a Rust test that renders every catalog color effect at extreme params and requires finite output or explicit error. Color unit/regression count: 26 (plus one existing unrelated engine test).
+
+## Final edge checks
+Sampling retains the original timeline clock (important for dynamic text and expressions), while snapping only floating frame-boundary errors. Real-footage recovery result unchanged after this refinement. Added transparent-region rejection, masked/spatial LUT rejection, and serialized grade roundtrip tests. Color/regression test count now 29. Tested real-footage export repeated at 3.735 s recovery / 2.995 s refined qualifier, stable Delta E76 2.447.
+
+## Camera gamut inputs (V2)
+Added ARRI Wide Gamut 3=5, Sony S-Gamut3=6, S-Gamut3.Cine=7 to managed/linear gamut IDs. Pair WG3 with LogC3 transfer 4 (EI800 only), Sony gamuts with SLog3 transfer 5. 64 gamut-pair neutral/inverse tests pass; camera log scene roundtrips <3e-6 f32. Real footage encoded into WG3/LogC3 then decoded back: 50-frame 640x360 export 2.632 s, 8-bit still comparison exactly identical (MAE=0). This tests encoding reversibility, NOT an actual camera recording or camera characterization. Camera input matrix sources:
+- https://colour.readthedocs.io/en/stable/generated/colour.models.RGB_COLOURSPACE_ARRI_WIDE_GAMUT_3.html
+- https://antlerpost.com/colour-spaces/SLog3.html

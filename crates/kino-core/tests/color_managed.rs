@@ -1,7 +1,7 @@
 use kino_core::color::managed::*;
 use kino_core::{effects::{Frame, Params}, keyframe::Prop};
 #[test] fn neutral_adaptation_and_inverse() {
-    for a in 0..5 { for b in 0..5 {
+    for a in 0..8 { for b in 0..8 {
         let n=mv(conversion(a,b),[1.;3]);for x in n{assert!((x-1.).abs()<2e-12)}
         for c in [[0.18;3],[0.9,0.2,0.03],[-0.2,4.,0.8]] {
             let d=mv(conversion(b,a),mv(conversion(a,b),c));
@@ -33,3 +33,4 @@ use kino_core::{effects::{Frame, Params}, keyframe::Prop};
         }
     }
 }
+#[test]fn camera_log_scene_roundtrip(){for(g,t)in[(5,4),(6,5),(7,5)]{for c in [[0.18;3],[0.02,0.1,0.5],[2.,1.,0.1]]{let mut f=Frame{w:1,h:1,d:vec![c[0],c[1],c[2],1.]};let mut p=Params::new();for(k,v)in[("from_gamut",3.),("to_gamut",g as f64),("from_transfer",0.),("to_transfer",t as f64)]{p.insert(k.into(),Prop::new(v));}apply(&p,&mut f,0.).unwrap();p.insert("from_gamut".into(),Prop::new(g as f64));p.insert("to_gamut".into(),Prop::new(3.));p.insert("from_transfer".into(),Prop::new(t as f64));p.insert("to_transfer".into(),Prop::new(0.));apply(&p,&mut f,0.).unwrap();for j in 0..3{assert!((f.d[j]-c[j]).abs()<3e-6)}}}}

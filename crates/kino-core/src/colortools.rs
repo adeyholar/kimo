@@ -21,10 +21,11 @@ fn clip_frame(p: &Project, clip_id: &str, t: f64) -> Result<Frame, String> {
     let ti = keep.ok_or(format!("no clip '{clip_id}'"))?; let mut tr = q.tracks[ti].clone(); tr.clips.retain(|c| c.id == clip_id);
     let c = &mut tr.clips[0]; let local = t - c.start;
     if !local.is_finite() || local < -1e-7 || local >= c.duration { return Err("sample time must be inside clip".into()); }
-    // Isolate on a zero-based clock and snap frame-boundary noise. E.g. 3.8-3.0
-    // underflows to frame 19 while 0.8 maps to frame 20 at 25fps without this.
-    let frame = local.max(0.0) * q.fps; let snapped = if (frame-frame.round()).abs() < 1e-7 { frame.round() / q.fps } else { local };
-    c.start = 0.0; q.tracks = vec![tr];
+    // Snap floating error from shifted frame boundaries, retaining the original
+    // timeline clock for dynamic text/expressions and time-dependent source content.
+    let frame = local.max(0.0) * q.fps;
+    let snapped = if (frame-frame.round()).abs() < 1e-7 { c.start + frame.round()/q.fps + 1e-8/q.fps } else { t };
+    q.tracks = vec![tr];
     let mut cache = render::Cache::new(); render::prepare_at(&q, &mut cache, Some(snapped))?; render::render_frame(&q, snapped, &cache)
 }
 fn any_frame(p: &Project, clip: Option<&str>, t: f64) -> Result<Frame, String> { match clip { Some(c) => clip_frame(p, c, t), None => { let mut cache = render::Cache::new(); render::prepare_at(p, &mut cache, Some(t))?; render::render_frame(p, t, &cache) } } }
@@ -124,7 +125,7 @@ pub fn commands() -> Vec<Command> { vec![
         dispatch(&mut ss,"set_keyframe",&json!({"clip_id":a,"property":"opacity","time":0.8,"value":0.25})).unwrap();
         let f=clip_frame(&ss.project,&a,3.8).unwrap();
         let mut zero=ss.project.clone();zero.find_clip_mut(&a).unwrap().start=0.;let z=clip_frame(&zero,&a,0.8).unwrap();
-        assert_eq!(f.d,z.d);
+        for (a,b) in f.d.iter().zip(z.d.iter()) { assert!((a-b).abs()<1e-7); }
         assert!(clip_frame(&ss.project,&a,2.).is_err());assert!(clip_frame(&ss.project,&a,5.).is_err());
     }
 }
