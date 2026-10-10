@@ -203,3 +203,5 @@ Composed from existing tools: keyboard bg with push-in and blur ramp, finger/key
 
 ## Background-aware refraction (shard burst refract:px) - V1
 The shard pass writes a screen-space displacement field (tilt x thickness, stronger on side walls, motion-blurred with the shards); the compositor bends the canvas behind the layer before blending. Gaps: single offset (no per-channel dispersion of the background), displacement clamped, shard layer only (not a general refractive material for any layer), no caustics.
+
+Shard geometry V1.5: 4-6 vertex irregular convex chunks with varied aspect and thickness. Gaps: still extruded polygons, not fractured volumes (no Voronoi-fractured solids, no bevel normals).

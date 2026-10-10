@@ -17,7 +17,7 @@ for tm,v in [(0,0),(0.9,0),(1.2,-500)]: k.call("set_keyframe",clip_id=c2,propert
 for tm,v in [(0,1),(0.8,0.9),(1.2,0)]: k.call("set_keyframe",clip_id=c2,property="opacity",time=tm,value=v,ease="in")
 t=trk(); k.call("add_emitter",track_id=t,start=0,duration=1.5,preset="sparks",config={"x":0.47,"y":0.74,"rate":90,"speed":520,"speed_var":300,"angle":300,"spread":70,"life":0.7,"color0":[1,0.8,0.45],"color1":[1,0.4,0.1],"sprite":"streak","size0":3,"size1":1,"gravity":400})
 t=trk()
-sb=k.call("add_shard_burst",track_id=t,start=0,duration=D,config={"count":420,"origin":[0,150,260],"origin_spread":260,"tint":[0.9,0.93,0.97],"brightness":0.85,"speed":1100,"size_min":8,"size_max":34,"toward_camera":0.35,"spread_time":1.3,"dof":0.3,"drag":0.55,"gravity":60,"physics":True,"collide":True,"restitution":0.5,"dispersion":0.6,"focus":720,"fresnel":0.9,"falloff":0.3,"fade_out":0.35,"spin":420,"seed":21})
+sb=k.call("add_shard_burst",track_id=t,start=0,duration=D,config={"count":470,"origin":[0,150,260],"origin_spread":260,"tint":[0.9,0.93,0.97],"brightness":0.85,"refract":7,"speed":1100,"size_min":8,"size_max":40,"toward_camera":0.35,"spread_time":1.3,"dof":0.3,"drag":0.55,"gravity":60,"physics":True,"collide":True,"restitution":0.5,"dispersion":0.6,"focus":720,"fresnel":0.9,"falloff":0.3,"fade_out":0.35,"spin":420,"seed":21})
 ze=k.call("add_effect",clip_id=sb["clip_id"],kind="zoom_blur",params={"amount":0.0})
 for tm,v in [(0,0.0),(1.2,0.03),(1.85,0.16)]: k.call("set_keyframe",clip_id=sb["clip_id"],effect_id=ze["effect_id"],property="amount",time=tm,value=v,ease="in")
 k.call("set_camera_keyframe",property="cam_z",time=0.0,value=0,ease="in"); k.call("set_camera_keyframe",property="cam_z",time=D,value=330,ease="in")

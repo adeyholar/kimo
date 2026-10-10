@@ -41,9 +41,9 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             let os = e.origin_spread * k; let pos = [e.origin[0] * k + (r(50) - 0.5) * 2.0 * os + dir[0] * sp * travel, e.origin[1] * k + (r(51) - 0.5) * 2.0 * os * 0.6 + dir[1] * sp * travel + 0.5 * e.gravity * k * age * age, e.origin[2] + (r(52) - 0.5) * 2.0 * os + vz * travel];
             let phys = traj.as_ref().map(|(tj, _): &(std::sync::Arc<crate::physics::Traj>, i32)| tj.at(i as usize, ts));
             let ang = [r(6) * 360.0 + (r(7) - 0.5) * 2.0 * e.spin * age, r(8) * 360.0 + (r(9) - 0.5) * 2.0 * e.spin * age, r(10) * 360.0 + (r(11) - 0.5) * 2.0 * e.spin * age];
-            let (pos, rm) = match &phys { Some((p, q)) => (*p, crate::physics::quat_matrix(*q)), None => (pos, rot_matrix(ang)) }; let nv = 4 + (r(12) * 2.99) as usize; let aspect = 0.75 + 0.5 * r(13); let thick = (0.45 + 0.6 * r(14)) * size;
+            let (pos, rm) = match &phys { Some((p, q)) => (*p, crate::physics::quat_matrix(*q)), None => (pos, rot_matrix(ang)) }; let nv = 4 + (r(12) * 2.99) as usize; let aspect = 0.62 + 0.6 * r(13); let thick = (0.3 + 0.6 * r(14)) * size;
             let life_fade = if e.fade_out > 0.0 { 1.0 - sstep((age - (total - e.fade_out - birth).max(0.1)) / e.fade_out) } else { 1.0 }; let born = sstep(age / 0.05);
-            let mut loc = [(0.0, 0.0); 6]; for v in 0..nv { let a = v as f64 / nv as f64 * std::f64::consts::TAU + (h(e.seed, i, 20 + v as u64) - 0.5) * 0.7; let rr = size * (0.74 + 0.3 * h(e.seed, i, 30 + v as u64)); loc[v] = (a.cos() * rr, a.sin() * rr * aspect); }
+            let mut loc = [(0.0, 0.0); 6]; for v in 0..nv { let a = v as f64 / nv as f64 * std::f64::consts::TAU + (h(e.seed, i, 20 + v as u64) - 0.5) * 1.1; let rr = size * (0.62 + 0.42 * h(e.seed, i, 30 + v as u64)); loc[v] = (a.cos() * rr, a.sin() * rr * aspect); }
             let mut shard: Vec<([(f64, f64); 6], f64, f64, f64, f64)> = vec![]; // per face
             let nrm = [rm[0][2], rm[1][2], rm[2][2]]; let mut zsum = 0.0; let mut ok = true;
             for face in 0..2 { let zoff = if face == 0 { thick * 0.5 } else { -thick * 0.5 }; let mut pts = [(0.0, 0.0); 6]; let mut dz = 0.0;
