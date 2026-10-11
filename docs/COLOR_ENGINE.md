@@ -763,3 +763,29 @@ scopes gives previouslinearpath. Testscover multipleclipsharededit, noncommuting
 grouporder, clocks, adjustmentgraph, nestedtimelineonce, exactrealserialreference,
 missingrefs/rollback, split/delete, nativeOCIO and JSONroundtrip. No groupcache,
 looksuperiority or industrysemanticparity claim.
+
+## LUT and spatial grading nodes
+
+File .cube node: add_node kind=grade effect_kind=lut strings.path=<file>, numeric
+intensity (0..1) editable/keyframable. Native OCIO wrapper strings remain explicit.
+Inlinegenerated node: generate_lut_node with clip_id OR shared_graph_id, unique
+node_id, optionalparent, steps (existing pointwise/nativeOCIO bake schema), size17
+or33, frozen time/domain. Stores serialized .cube in strings.cube_text and reports
+serialization/interpolation probe error. FullJSON can edit/replace/remove it.
+path+cube_text together errors. Output not auto selected. Generated data self
+contained; file nodes keep existing external size/mtime-cache limitation.
+
+The pointwise bake rejects spatialchains; measured4096random+9boundary probes
+are not all-pixel error bounds. Nonlinear nativegamma17cube has visible numerical
+error nearblack; caller chooses33or existing65filebake if needed. Inputdomain
+clamps; output may exceed0..1. No auto camerainference/lookcertification.
+
+Blur/sharpen are grade effects but spatial: full branch frame processed, then
+node mask blends with firstinput, alpha restored to exactfirstinput. No DAG
+optimizer reorders them or assumes commutativity. Orderedserialbranch parity
+against directeffect RGB is tested, as are maskedalpha preservation and
+noncommutingblur/nonlinearhue order. Cacheevaluates sharedancestorsonce, effect
+scratch outside cachedframe budget. Radius0..512, sharpenamount0..3, keyframed
+invalidvalueserror. No backdropglows/compositor or arbitrary spatialeffects.
+Curves/hue-vs-hue/hue-vs-sat/hue-vs-lum/log wheels were already supported and are
+now tested for exactdirectgrade parity rather than duplicated with new math.

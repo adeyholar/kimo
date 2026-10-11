@@ -793,3 +793,20 @@ is not Resolve shared-node/remote-grade semantic parity or a Fusion compositor.
 
 ## Editorial follow-up (captions agent, BETA)
 export_with_subtitles (selectable mov_text/SubRip streams next to burn-in, atomic output, range-relative cue times); measure_loudness true_peak=true (4x sinc reconstruction estimate, NOT certified, within 0.3 dB of FFmpeg ebur128 per the author); sync_clips drop_frame=true (29.97/59.94 DF labels, skipped labels rejected). Details in docs/EDITORIAL_MCP.md. I ran their MCP proofs (MP4/MKV streams, true peak, DF shift) and fuzz (240 tools / 8663 calls / 0 failures); the 0.3 dB figure is the author's.
+
+Grade node widening: .cube LUT, blur and sharpen admitted. Existing RGB/point
+curves, hue-vs-hue/sat/lum and log wheels already worked as grade nodes; added
+exact direct-effect parity tests. File LUT uses strings.path; generated/persisted
+LUT uses strings.cube_text (exactly one), intensity keyframable. generate_lut_node
+bakes explicit pointwise/native OCIO chains to inline17/33 cubes, reports sampled
+max/p99/RMS interpolation error, supports clip/shared targets. It does NOT auto
+select output, infer domains or claim nonlinear LUTs lossless. Generated LUT
+persisted with project, clamps input outside declared domain. Inline data parsed
+each eval; file cache existing size/mtime bounded8entries.
+
+Spatial nodes execute on each branch's full canvas in stated order, never moved
+across mixers/qualifiers/curves. Blur/sharpen are NOT generally commutative with
+nonlinear grades. Node RGB-only semantics preserve first-input alpha exactly;
+this differs from alpha-blurring clip blur. Node masks blend after spatial op,
+not before. Radius0..512, sharpenamount0..3 evaluated-time guards; effect scratch
+still under globalmemory budget, not included in node cachedframecap.

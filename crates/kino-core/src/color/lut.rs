@@ -27,11 +27,16 @@ impl Lut{
 }
 fn parse3(tok:&[&str])->Result<[f32;3],String>{if tok.len()!=3{return Err("expected three LUT numbers".into())}let mut v=[0.;3];for j in 0..3{v[j]=tok[j].parse::<f32>().map_err(|_|"invalid LUT number")?;if !v[j].is_finite()||v[j].abs()>1e6{return Err("nonfinite/out-of-range LUT value".into())}}Ok(v)}
 pub fn apply(pr:&Params,strings:&BTreeMap<String,String>,f:&mut Frame,t:f64)->Result<(),String>{
-    super::frame::validate(f)?;let path=strings.get("path").ok_or("lut needs strings.path")?;let meta=std::fs::metadata(path).map_err(|e|e.to_string())?;if meta.len()>32*1024*1024{return Err("LUT exceeds 32 MiB".into())}
-    // Cache bounded to eight entries, keyed by path+size+mtime to avoid stale same-path LUTs.
+    super::frame::validate(f)?;
     use std::sync::{Mutex,OnceLock,Arc};static CACHE:OnceLock<Mutex<BTreeMap<String,Arc<Lut>>>>=OnceLock::new();
-    let key=format!("{path}:{}:{:?}",meta.len(),meta.modified().ok());let cache=CACHE.get_or_init(Default::default);let l={let mut cache=cache.lock().map_err(|_|"LUT cache poisoned")?;
-        if let Some(l)=cache.get(&key){l.clone()}else{let l=Arc::new(Lut::parse(&read_bounded(path)?)?);if cache.len()>=8{cache.clear()}cache.insert(key,l.clone());l}};
+    let l=if let Some(text)=strings.get("cube_text"){
+        if strings.contains_key("path"){return Err("LUT requires path OR cube_text, not both".into())}
+        // Generated/persisted data is source evidence, no file dependency or timestamp cache.
+        Arc::new(Lut::parse(text)?)
+    }else{let path=strings.get("path").ok_or("lut needs strings.path or cube_text")?;let meta=std::fs::metadata(path).map_err(|e|e.to_string())?;if !meta.is_file()||meta.len()>32*1024*1024{return Err("LUT requires regular file <=32MiB".into())}
+        let key=format!("{path}:{}:{:?}",meta.len(),meta.modified().ok());let cache=CACHE.get_or_init(Default::default);let mut cache=cache.lock().map_err(|_|"LUT cache poisoned")?;
+        if let Some(l)=cache.get(&key){l.clone()}else{let l=Arc::new(Lut::parse(&read_bounded(path)?)?);if cache.len()>=8{cache.clear()}cache.insert(key,l.clone());l}
+    };
     let amount=p(pr,"intensity",1.,t);if !amount.is_finite(){return Err("invalid LUT intensity".into())}let amount=amount.clamp(0.,1.);
     let failed=std::sync::atomic::AtomicBool::new(false);
     let ptr=crate::par::SyncPtr(f.d.as_mut_ptr());
