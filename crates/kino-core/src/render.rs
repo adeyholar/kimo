@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 /// Decoded frames for media clips, keyed by clip id. Frames are RGBA8 at project size, project fps,
-/// with speed already applied.
+/// Constant speed is applied during decode; ramps use source-time indices.
 /// A decoded window of consecutive frames, contiguous in memory. `first` is the global frame index of buf[0].
 pub struct Frames { pub still:bool,pub working_linear:bool, pub quantized: std::sync::OnceLock<Vec<u8>>, pub linear_buf: Option<Vec<f32>>, pub buf: Vec<u8>, pub fs: usize, pub first: usize }
 impl Frames {
@@ -49,7 +49,7 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
       let d=crate::color::interchange::fit(&src,w as usize,h as usize,fit)?;
       return Ok(Frames{still:true,working_linear:true,quantized:Default::default(),linear_buf:Some(d),buf:vec![],fs:w as usize*h as usize*4,first:0})
     } let is_img0 = { let l = path.to_lowercase(); ["png","jpg","jpeg","webp","bmp","exr","tif","tiff","pfm"].iter().any(|e| l.ends_with(e)) }; let (a, n) = if is_img0 { (0, 1) } else { (a, n) };
-    let (in_pt, speed, span) = if c.speed_curve.is_some() { (c.in_point, 1.0, c.source_time(c.duration)) } else { (c.in_point, c.speed, (a+n) as f64 / p.fps * c.speed) };
+    let (in_pt, speed, span) = if c.speed_curve.is_some() { (c.in_point, 1.0, (a+n) as f64 / p.fps) } else { (c.in_point, c.speed, (a+n) as f64 / p.fps * c.speed) };
     let fit = c.props.get("fit").map(|q| q.at(0.0)).unwrap_or(0.0);
     let fitf = if fit >= 1.5 { format!("scale={w}:{h}") } else if fit >= 0.5 { format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}") } else { format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0") };
     if p.color_pipeline.enabled&&path.to_lowercase().ends_with(".exr"){crate::color::interchange::validate_exr_source(path)?;}
@@ -91,9 +91,11 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
         if p.color_pipeline.enabled{let values=buf.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]) as f32/65535.).collect();buf=Vec::new();Some(values)}else{None}
     };
     let k = buf.len() / fs; buf.truncate(k * fs);
-    Ok(Frames { still:is_img,working_linear:native_fit,quantized:Default::default(),linear_buf, buf, fs, first: if c.speed_curve.is_some() { 0 } else { a } })
+    Ok(Frames { still:is_img,working_linear:native_fit,quantized:Default::default(),linear_buf, buf, fs, first: a })
 }
 
+fn media_index(c:&Clip,lt:f64,fps:f64)->usize{let t=if c.speed_curve.is_some(){c.source_time(lt.max(0.))}else{lt.max(0.)};(t*fps).floor() as usize}
+fn media_total(c:&Clip,fps:f64)->usize{let span=if c.speed_curve.is_some(){c.source_time(c.duration)}else{c.duration};((span*fps).ceil() as usize).max(1)}
 fn decode_cache_limit()->usize{(crate::guard::limits().mem_bytes/3).min(256*1024*1024).max(1024*1024)}
 
 pub fn prepare(p: &Project, cache: &mut Cache) -> Result<(), String> { prepare_at(p, cache, None) }
@@ -117,12 +119,12 @@ fn prepare_window(p: &Project, cache: &mut Cache, t0: f64, t1: f64, window:usize
     for c in &flat {
         let Source::Media { asset } = &c.source else { continue };
         if !active.contains(&c.id) || c.props.get("audio_only").map(|q| q.at(0.0)).unwrap_or(0.0) >= 0.5 { continue; }
-        let total = ((c.duration * p.fps).ceil() as usize).max(1);
+        let total = media_total(c,p.fps);
         let (ta, tb) = match c.time_mode { TimeMode::Normal => (t0, t1), TimeMode::Reverse => (c.start + c.duration - (t1 - c.start), c.start + c.duration - (t0 - c.start)), TimeMode::Freeze { at } => (c.start + at, c.start + at) };
         let (t0, t1) = (ta, tb);
-        let (ia, mut ib) = if all || c.speed_curve.is_some() { (0, total - 1) } else { ((((t0 - c.start).max(0.0) * p.fps).floor() as usize).min(total - 1), (((t1 - c.start).max(0.0) * p.fps).ceil() as usize).min(total - 1)) };
+        let (ia, mut ib) = if all { (0, total - 1) } else if c.speed_curve.is_some(){(media_index(c,(t0-c.start).min(c.duration),p.fps).min(total-1),media_index(c,(t1-c.start).min(c.duration),p.fps).min(total-1))}else { ((((t0 - c.start).max(0.0) * p.fps).floor() as usize).min(total - 1), (((t1 - c.start).max(0.0) * p.fps).ceil() as usize).min(total - 1)) };
         // Instant normal playback samples floor(index), except flow needs the next frame.
-        if !all&&c.speed_curve.is_none()&&matches!(c.time_mode,TimeMode::Normal)&&t0==t1{let flow=c.props.get("flow_blur").map(|v|v.at((t0-c.start).max(0.))>0.).unwrap_or(false);ib=if flow{(ia+1).min(total-1)}else{ia};}
+        if !all&&matches!(c.time_mode,TimeMode::Normal)&&t0==t1{let flow=c.props.get("flow_blur").map(|v|v.at((t0-c.start).max(0.))>0.).unwrap_or(false);ib=if flow{(ia+1).min(total-1)}else{ia};}
         let a = p.assets.get(asset).ok_or(format!("asset {asset} missing"))?;
         let stat=std::fs::metadata(&a.path).map_err(|e|format!("media stat: {e}"))?;
         let sig = format!("{asset}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()), p.color_pipeline,c.props.get("input_gamut"),c.props.get("input_transfer"),c.props.get("fit"),a.path,stat.len(),stat.modified().ok());
@@ -130,10 +132,10 @@ fn prepare_window(p: &Project, cache: &mut Cache, t0: f64, t1: f64, window:usize
         let shared=cache.frames.values().find(|(s,fr)|*s==sig&&fr.covers(ia,ib)).map(|(_,fr)|fr.clone());
         if let Some(fr)=shared{cache.frames.insert(c.id.clone(),(sig,fr));continue}
         if a.width == 0 { cache.frames.insert(c.id.clone(), (sig, std::sync::Arc::new(Frames { still:false,working_linear:false,quantized:Default::default(),linear_buf: None, buf: vec![], fs: 0, first: 0 }))); continue; }
-        // whole-clip decode only for speed-ramped clips (index mapping is in source time); everything else is windowed
-        let (start, count) = if c.speed_curve.is_some() || all { (0, total) } else { (ia, (ib - ia + 1).max(window).min(total - ia)) };
+        // Ramps cache source-frame windows; constant-speed clips cache output-frame windows.
+        let (start, count) = if all { (0, total) } else { (ia, (ib - ia + 1).max(window).min(total - ia)) };
         let mut count=count;
-        if !all && c.speed_curve.is_none(){let native=p.color_pipeline.enabled&&p.color_pipeline.linear_resample;let pixels=if native{let(dw,dh,_,_)=probe(&a.path)?;(dw as usize*dh as usize).max(p.width as usize*p.height as usize)}else{p.width as usize*p.height as usize};let per=pixels*4*if p.color_pipeline.enabled{8}else{1};count=count.min((decode_cache_limit()/media_count/per.max(1)).max(1));if count<ib-ia+1{return Err("active decode range exceeds cache budget".into())}}
+        if !all{let native=p.color_pipeline.enabled&&p.color_pipeline.linear_resample;let pixels=if native{let(dw,dh,_,_)=probe(&a.path)?;(dw as usize*dh as usize).max(p.width as usize*p.height as usize)}else{p.width as usize*p.height as usize};let per=pixels*4*if p.color_pipeline.enabled{8}else{1};count=count.min((decode_cache_limit()/media_count/per.max(1)).max(1));if count<ib-ia+1{return Err("active decode range exceeds cache budget".into())}}
         cache.frames.remove(&c.id);
         let fr = decode(p, c, &a.path, start, count)?;
         let bytes=|fr:&Frames|fr.buf.len()+fr.linear_buf.as_ref().map(|b|b.len()*5).unwrap_or(0);
@@ -198,7 +200,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         }
         Source::Media { .. } => if let Some(fr) = cache.frames_of(&c.id) {
             source_linear=fr.working_linear;
-            let idx = if c.speed_curve.is_some() { (c.source_time(lt) * p.fps) as usize } else { (lt * p.fps) as usize };
+            let idx = media_index(c,lt,p.fps);
             if let Some(b)=fr.get_float(idx){f.d.copy_from_slice(b)}else if let Some(b) = fr.get(idx) { for (i, v) in b.iter().enumerate() { f.d[i] = *v as f32 / 255.0; } }
             let fb = prop(c, "flow_blur", lt) as f32;
             if fb > 0.0 { let nxt=if fr.len()>0 {Some(idx+1)}else{None};
@@ -539,7 +541,7 @@ pub fn render_mask_png(p: &Project, clip_id: &str, mask_id: Option<&str>, t: f64
 pub fn render_flow_png(p: &Project, clip_id: &str, t: f64, path: &str, cache: &mut Cache) -> Result<f64, String> {
     let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == clip_id).ok_or("no such clip")?; let (w, h) = (p.width as usize, p.height as usize);
     if !t.is_finite()||t<c.start||t>=c.start+c.duration{return Err("flow time must be within clip".into())}
-    let lt0=t-c.start;let last=((c.duration*p.fps).ceil() as usize).saturating_sub(1);let fidx=|lt:f64|->usize{let d=c.display_time(lt.max(0.));(if c.speed_curve.is_some(){(c.source_time(d)*p.fps) as usize}else{(d*p.fps) as usize}).min(last)};
+    let lt0=t-c.start;let last=media_total(c,p.fps).saturating_sub(1);let fidx=|lt:f64|->usize{let d=c.display_time(lt.max(0.));media_index(c,d,p.fps).min(last)};
     let(i0,mut i1)=(fidx(lt0),fidx(lt0+1./p.fps));let mut lt1=lt0+1./p.fps;let mut swapped=false;
     if i1==i0{lt1=lt0-1./p.fps;i1=fidx(lt1);swapped=i1!=i0;}
     if i1==i0{return Err("no motion between displayed frames here (freeze or window end)".into())}
