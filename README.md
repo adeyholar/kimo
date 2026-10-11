@@ -25,7 +25,7 @@ The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve
 - **MCP first.** Add a tool in the registry and it is in the MCP server, the fuzz test and the schema automatically.
 - **CPU, small memory.** The renderer is CPU only and tuned for a 2 GB machine. GPU code is off by default with a CPU fallback.
 - **Measured, not claimed.** Every "better than X" line in FEATURES.md has a stated baseline and a measured number, including the cases where we lost.
-- **Few entry points.** `tools/list` returns 17 grouped tools (16.5 KB) instead of 255 (185 KB), measured 11.2x smaller. Every individual tool is still callable by its own name.
+- **Few entry points.** `tools/list` returns 17 grouped tools (16.7 KB) instead of 255 (185 KB), measured 11.1x smaller. Every individual tool is still callable by its own name.
 - **Fuzzed.** 255 tools, 9359 calls, 0 failures, before anything is published.
 
 ## Quick start
@@ -111,7 +111,7 @@ The default `tools/list` is grouped, so a client does not have to read 255 tool 
 | masks, text, graphics, vfx3d | masks and roto, text and captions, shapes and HUD, 3D, particles and fracture |
 | tracking, color_grade, color_science, scopes | tracking and camera solve, grading, color management, measurement |
 | audio, output | audio, render and export |
-| kimo_search, kimo_describe | find an action by keyword, get one action's full arguments |
+| kimo_search, kimo_describe | find an action by keywords (also searches the effect and transition catalogs), get one action's full arguments |
 
 Call a group with `{"action": "<tool name>", "args": {...}}`, for example `{"name": "vfx3d", "action": "add_scene3d", "args": {...}}`. Calling a tool by its own name (`add_scene3d`) still works, and `tools/list` with `{"mode": "flat"}` (or `KIMO_TOOLS=flat`) lists all 255. A new tool is placed in a group by name rules in `crates/kimo-core/src/toolgroups.rs`, and a unit test fails if one is left unassigned. `tests/group_proof.py` checks that every tool is in exactly one group and that grouped and direct calls give the same result.
 
