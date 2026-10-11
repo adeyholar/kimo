@@ -61,7 +61,9 @@ fn main() {
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
                 let text = |r: Result<Value, String>| match r { Ok(v) => json!({"content":[{"type":"text","text":serde_json::to_string(&v).unwrap()}],"isError":false}), Err(e) => json!({"content":[{"type":"text","text":e}],"isError":true}) };
                 Some(Ok(match name {
-                    "kimo_search" => text(Ok(toolgroups::search(args.get("query").and_then(|v| v.as_str()).unwrap_or(""), args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize))),
+                    "kimo_search" => { let qs = args.get("query").and_then(|v| v.as_str()).unwrap_or(""); let mut r = toolgroups::search(qs, args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize);
+                        let (ef, tr) = { let mut g = ss.lock().unwrap_or_else(|e| e.into_inner()); (dispatch(&mut g, "list_effects", &json!({})).unwrap_or(json!([])), dispatch(&mut g, "list_transitions", &json!({})).unwrap_or(json!([]))) };
+                        r["effects_and_transitions"] = json!(toolgroups::search_catalog(qs, &ef, &tr, 8)); text(Ok(r)) }
                     "kimo_describe" => text(toolgroups::describe(&args)),
                     n if toolgroups::is_group(n) => match toolgroups::resolve_group_call(n, &args) { Ok((a, ia)) => run_guarded(&ss, &a, &ia, &mut out, &id), Err(e) => text(Err(e)) },
                     _ => run_guarded(&ss, name, &args, &mut out, &id),

@@ -71,7 +71,7 @@ pub fn grouped_list() -> Vec<Value> {
         let names: Vec<&str> = m.iter().map(|c| c.name).collect();
         out.push(json!({"name": g.name, "description": format!("{} {} actions: {}. Call with action and args. Use kimo_describe for an action's arguments.", g.about, names.len(), names.join(", ")),
             "inputSchema": {"type":"object","properties":{"action":{"type":"string","enum":names,"description":"which action to run"},"args":{"type":"object","description":"arguments for that action (see kimo_describe)"}},"required":["action"]}})); }
-    out.push(json!({"name":"kimo_search","description":"Find actions by keyword across every group (names and descriptions). Returns group, action and a one-line summary.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}}));
+    out.push(json!({"name":"kimo_search","description":"Find actions by keywords (any word matches; ranked by name, argument names, description). Also searches the effect and transition catalogs and says how to use each hit, e.g. chroma_key is an effect used with add_effect. Returns group, action and a one-line summary.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}}));
     out.push(json!({"name":"kimo_describe","description":"Full description and argument schema of one action, or the action list of a group. Pass action (a tool name) or group.","inputSchema":{"type":"object","properties":{"action":{"type":"string"},"group":{"type":"string"}}}}));
     out
 }
@@ -87,11 +87,21 @@ pub fn resolve_group_call(group: &str, args: &Value) -> Result<(String, Value), 
 pub fn is_group(n: &str) -> bool { GROUPS.iter().any(|g| g.name == n && !members(n).is_empty()) }
 
 pub fn search(q: &str, limit: usize) -> Value {
-    let words: Vec<String> = q.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
-    let mut hits: Vec<(usize, &Command)> = reg().iter().filter_map(|c| { let (nm, ds) = (c.name.to_lowercase(), c.description.to_lowercase());
-        let sc: usize = words.iter().map(|w| (if nm.contains(w.as_str()) { 3 } else { 0 }) + (if ds.contains(w.as_str()) { 1 } else { 0 })).sum(); if sc > 0 && words.iter().all(|w| nm.contains(w.as_str()) || ds.contains(w.as_str())) { Some((sc, c)) } else { None } }).collect();
-    hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(b.1.name)));
-    json!({"matches": hits.iter().take(limit.clamp(1, 50)).map(|(_, c)| json!({"group": group_of(c.name), "action": c.name, "summary": first_sentence(c.description)})).collect::<Vec<_>>(), "total": hits.len()})
+    // OR search ranked by how many query words match: name (3), argument names (2), description (1). Words are lowercased and lightly stemmed.
+    const STOP: &[&str] = &["a", "an", "the", "to", "of", "for", "and", "or", "in", "on", "with", "add", "set", "make", "create"];
+    let stem = |w: &str| -> String { let w = w.to_lowercase(); for suf in ["ing", "es", "s"] { if w.len() > suf.len() + 3 && w.ends_with(suf) { return w[..w.len() - suf.len()].to_string(); } } w };
+    let mut words: Vec<String> = q.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty()).map(|w| w.to_string()).collect();
+    let kept: Vec<String> = words.iter().filter(|w| !STOP.contains(&w.to_lowercase().as_str())).cloned().collect(); if !kept.is_empty() { words = kept; }
+    let words: Vec<String> = words.iter().map(|w| stem(w)).collect();
+    let mut hits: Vec<(usize, usize, &Command)> = reg().iter().filter_map(|c| {
+        let nm = c.name.to_lowercase(); let ds = c.description.to_lowercase();
+        let args: String = c.schema.get("properties").and_then(|p| p.as_object()).map(|o| o.iter().map(|(k, v)| format!("{} {}", k, v.get("description").and_then(|d| d.as_str()).unwrap_or(""))).collect::<Vec<_>>().join(" ").to_lowercase()).unwrap_or_default();
+        let arg_names: String = c.schema.get("properties").and_then(|p| p.as_object()).map(|o| o.keys().cloned().collect::<Vec<_>>().join(" ").to_lowercase()).unwrap_or_default();
+        let (mut sc, mut matched) = (0usize, 0usize);
+        for w in &words { let w = w.as_str(); let mut m = 0; if nm.contains(w) { m = 3; } else if arg_names.contains(w) { m = 2; } else if ds.contains(w) || args.contains(w) { m = 1; } if m > 0 { sc += m; matched += 1; } }
+        if matched > 0 { Some((matched, sc, c)) } else { None } }).collect();
+    hits.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)).then(a.2.name.cmp(b.2.name)));
+    json!({"matches": hits.iter().take(limit.clamp(1, 50)).map(|(_, _, c)| json!({"group": group_of(c.name), "action": c.name, "summary": first_sentence(c.description)})).collect::<Vec<_>>(), "total": hits.len()})
 }
 
 pub fn describe(args: &Value) -> Result<Value, String> {
@@ -115,4 +125,19 @@ mod tests {
         let (n, a) = resolve_group_call("project", &json!({"action":"project_set","args":{"width":640}})).unwrap(); assert_eq!(n, "project_set"); assert_eq!(a["width"], 640);
         assert!(resolve_group_call("audio", &json!({"action":"project_set"})).is_err()); assert!(resolve_group_call("audio", &json!({})).is_err()); }
     #[test] fn grouped_list_is_small() { let l = grouped_list(); assert!(l.len() <= 20, "{}", l.len()); }
+}
+
+/// Effects and transitions are catalogs reached through add_effect / add_transition, so tool search alone cannot find them.
+/// This matches a query against those catalogs (kind, description, parameter names) and says how to use each hit.
+pub fn search_catalog(q: &str, effects: &Value, transitions: &Value, limit: usize) -> Vec<Value> {
+    let words: Vec<String> = q.split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 2).map(|w| { let w = w.to_lowercase(); if w.len() > 4 && w.ends_with('s') { w[..w.len() - 1].to_string() } else { w } }).collect();
+    let syn = |w: &str| -> Vec<&'static str> { match w { "green" | "greenscreen" | "screen" => vec!["chroma", "key"], "shatter" | "break" => vec!["fracture", "shard"], "slow" => vec!["speed"], _ => vec![] } };
+    let mut out: Vec<(usize, Value)> = vec![];
+    for e in effects.as_array().into_iter().flatten() {
+        let kind = e["kind"].as_str().unwrap_or("").to_lowercase(); let d = e["description"].as_str().unwrap_or("").to_lowercase();
+        let params: String = e["params"].as_array().into_iter().flatten().filter_map(|p| p["name"].as_str()).collect::<Vec<_>>().join(" ").to_lowercase();
+        let mut sc = 0; for w in &words { let mut ws = vec![w.as_str()]; ws.extend(syn(w)); if ws.iter().any(|x| kind.contains(x)) { sc += 3; } else if ws.iter().any(|x| d.contains(x)) { sc += 2; } else if ws.iter().any(|x| params.contains(x)) { sc += 1; } }
+        if sc > 0 { out.push((sc, json!({"type": "effect", "kind": e["kind"], "summary": e["description"], "use": format!("effects/add_effect with kind=\"{}\"", kind)}))); } }
+    for t in transitions.as_array().into_iter().flatten() { let n = t.as_str().unwrap_or("").to_lowercase(); if words.iter().any(|w| n.contains(w.as_str())) { out.push((3, json!({"type": "transition", "kind": n, "use": format!("effects/add_transition with kind=\"{}\"", n)}))); } }
+    out.sort_by(|a, b| b.0.cmp(&a.0)); out.into_iter().take(limit).map(|x| x.1).collect()
 }
