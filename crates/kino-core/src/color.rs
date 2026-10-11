@@ -8,6 +8,7 @@ pub mod curves;
 pub mod lut;
 pub mod scopes;
 pub mod matching;
+pub mod idt;
 pub mod cdl;
 pub mod blur;
 pub mod linear;
@@ -74,6 +75,7 @@ pub fn catalog3() -> &'static [Entry] {
         v.extend(managed::catalog());
         v.extend(curves::catalog());
         v.extend(matching::catalog());
+        v.extend(idt::catalog());
         v.extend(cdl::catalog());
         v.extend(linear::catalog());
         v.extend(shoulder::catalog());
@@ -140,6 +142,7 @@ pub fn apply3(kind: &str, pr: &Params, f: &mut Frame, t: f64, _seed: u64) -> Res
         "soft_gamut_ray" => return gamut_ray::apply(pr,f,t),
         "cdl" => return cdl::apply(pr, f, t),
         "lab_match" => return matching::apply(pr, f, t),
+        "camera_idt" => return idt::apply(pr, f, t),
         "point_curves" => return curves::apply(pr, f, t),
         "color_managed" => return managed::apply(pr, f, t),
         "color_space" => { let (a, b) = (g("from", 1.0) as u32, g("to", 0.0) as u32); for i in 0..n { for j in 0..3 { f.d[i * 4 + j] = from_lin(b, to_lin(a, f.d[i * 4 + j])); } } }
