@@ -784,3 +784,7 @@ cut operations may create fresh unbound clip IDs: explicitly bind those IDs.
 No-scope path preserves pixels; shared/group/timeline fixtures exact vs explicit
 serialreference and deterministic. NativeOCIO bindings remain explicit. Stage2
 is not Resolve shared-node/remote-grade semantic parity or a Fusion compositor.
+## Path arcs and path morph keys (MCP)
+- SVG `A`/`a` arcs in paths (endpoint to center conversion, radius scaling, glued flags).
+- `add_path_key` / `clear_path_keys`: keyframe the whole path (per-point animation) with ease; keys must share the base path structure.
+- Proof: `python3 tests/path_arcs_morph_proof.py`.

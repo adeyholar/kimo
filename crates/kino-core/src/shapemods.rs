@@ -25,7 +25,7 @@ pub struct Stack<'a> { pub path: Option<crate::paths::Path>, pub dist: Box<dyn F
 
 /// Build the distance function (pixel coords) for `base` modified by the clip's shape_* effects at clip-local time `t`.
 /// The clip's Bezier path (effect `shape_path`: strings.d = SVG path, strings.fill_rule = nonzero|evenodd), if any.
-pub fn path_of(effects: &[Effect]) -> Option<crate::paths::Path> { let e = effects.iter().find(|e| e.kind == "shape_path")?; crate::paths::Path::parse(e.strings.get("d")?, e.strings.get("fill_rule").map_or(false, |r| r == "evenodd")).ok() }
+pub fn path_of(effects: &[Effect], t: f64) -> Option<crate::paths::Path> { let e = effects.iter().find(|e| e.kind == "shape_path")?; let keys: Vec<(f64, String, String)> = e.strings.get("keys").and_then(|k| serde_json::from_str::<Vec<(f64, String, String)>>(k).ok()).unwrap_or_default(); crate::paths::Path::parse_at(e.strings.get("d")?, &keys, t, e.strings.get("fill_rule").map_or(false, |r| r == "evenodd")).ok() }
 
 pub fn build<'a>(effects: &'a [Effect], base: impl Fn(f64, f64) -> f64 + 'a, cx: f64, cy: f64, t: f64) -> Stack<'a> {
     let mut dist: Box<dyn Fn(f64, f64) -> f64 + 'a> = Box::new(base);
@@ -46,7 +46,7 @@ pub fn build<'a>(effects: &'a [Effect], base: impl Fn(f64, f64) -> f64 + 'a, cx:
             _ => { dist = prev; }
         }
     }
-    Stack { path: path_of(effects), dist, trim, grad }
+    Stack { path: path_of(effects, t), dist, trim, grad }
 }
 
 impl Stack<'_> {
