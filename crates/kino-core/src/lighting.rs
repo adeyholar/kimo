@@ -103,7 +103,7 @@ fn blur_plane(a: &mut Vec<f32>, w: usize, h: usize, r: usize) {
 }
 
 /// Lighting vector, attenuation and cone factor for pixel position `pt` (frame-height units, z = surface height).
-fn light_at(l: &LightDef, pt: [f64; 3]) -> ([f64; 3], f64) {
+pub fn light_at(l: &LightDef, pt: [f64; 3]) -> ([f64; 3], f64) {
     match l.kind.as_str() {
         "directional" => { let d = norm(l.dir); ([-d[0], -d[1], -d[2]], 1.0) }
         _ => { let v = [l.pos[0] - pt[0], l.pos[1] - pt[1], l.pos[2] - pt[2]]; let dist = dot(v, v).sqrt().max(1e-6); let ln = [v[0] / dist, v[1] / dist, v[2] / dist];

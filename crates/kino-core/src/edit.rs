@@ -63,7 +63,7 @@ pub fn commands() -> Vec<Command> { vec![
         schema: obj(vec![("track_id", s("track")), ("at", n("seconds")), ("duration", n("seconds"))], &["track_id","at","duration"]),
         run: |ss, a| { let (at, d) = (na(a, "at")?, na(a, "duration")?); let tid = sa(a, "track_id")?.to_string(); let nid = ss.project.gen_id("clip");
             let ti = ss.project.tracks.iter().position(|t| t.id == tid).ok_or("no such track")?; unlocked(&ss.project, ti)?; let tr = &mut ss.project.tracks[ti];
-            if let Some(ci) = tr.clips.iter().position(|c| c.start < at - EPS && c.start + c.duration > at + EPS) { let r = cut(&mut tr.clips[ci], at, nid); tr.clips.push(r); }
+            if let Some(ci) = tr.clips.iter().position(|c| c.start < at - EPS && c.start + c.duration > at + EPS) { let original=tr.clips[ci].id.clone();let r = cut(&mut tr.clips[ci], at, nid.clone()); tr.clips.push(r);ss.project.grade_scopes.copy_binding(&original,&nid); }
             shift_after(tr, at, d, ""); Ok(json!({"ok":true})) } },
     Command { name: "lift_range", description: "Lift: remove all material between `start` and `end` on a track, leaving a gap (clips are cut/trimmed as needed). extract=true closes the gap (ripple).", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("start", n("s")), ("end", n("s")), ("extract", json!({"type":"boolean"}))], &["track_id","start","end"]),
@@ -107,7 +107,7 @@ pub fn commands() -> Vec<Command> { vec![
     Command { name: "split_all_at", description: "Razor: split every unlocked clip crossing `at` on all tracks (Premiere 'razor all').", mutates: true,
         schema: obj(vec![("at", n("seconds"))], &["at"]),
         run: |ss, a| { let at = na(a, "at")?; let mut cnt = 0; let mut tracks = std::mem::take(&mut ss.project.tracks);
-            for tr in tracks.iter_mut() { if tr.locked { continue; } if let Some(ci) = tr.clips.iter().position(|c| c.start < at - EPS && c.start + c.duration > at + EPS) { let id = ss.project.gen_id("clip"); let r = cut(&mut tr.clips[ci], at, id); tr.clips.push(r); cnt += 1; } }
+            for tr in tracks.iter_mut() { if tr.locked { continue; } if let Some(ci) = tr.clips.iter().position(|c| c.start < at - EPS && c.start + c.duration > at + EPS) { let id = ss.project.gen_id("clip"); let original=tr.clips[ci].id.clone();let r = cut(&mut tr.clips[ci], at, id.clone()); tr.clips.push(r); ss.project.grade_scopes.copy_binding(&original,&id);cnt += 1; } }
             ss.project.tracks = tracks; Ok(json!({"split": cnt})) } },
     Command { name: "remove_silence_cuts", description: "Given [start,end] ranges (e.g. from silence detection), ripple-extract them from a track.", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("ranges", json!({"type":"array","items":{"type":"array","items":{"type":"number"}}}))], &["track_id","ranges"]),

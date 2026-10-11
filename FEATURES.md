@@ -762,3 +762,25 @@ Honest limits: distortion is off by default when focal is unknown (k1 and focal 
 ## Bezier paths (MCP)
 - `add_path_shape` (SVG `d` or points+smooth), `set_path`, `path_info`. Trim uses exact arc length; offset, merge (path with path), repeater, gradient stroke, even-odd fill all work on paths.
 - Proof: `python3 tests/bezier_paths_proof.py`.
+
+- fracture_glass `scene_lights` (default 0, off = unchanged pixels) and `light_gain`: shades shard faces with the shared project lights (set_light). GGX specular on each shard's real 3D tumble normal with per-shard roughness 0.04-0.26, so highlights flash per shard with angle instead of a procedural sin-wave sheen. Needs at least one enabled light or it errors. Honest limits: specular only (no diffuse/thickness absorption), difference from the legacy look is modest at gentle light settings, no light-blocked shadows, per-shard thickness variation not done.
+Node grading stage2: shared graph definitions, ordered clip refs, ordered
+membership-based grade groups and a final timeline grade chain. Adjustment
+layers can use local/shared graphs and keep their existing mask/opacity/duration.
+Order: legacyeffects -> localgraph -> clipsharedrefs -> groups -> clipmask/
+transform/composite -> timelinegraphs -> outputtransform. Clip/group clocks are
+clip-local; timeline uses compositiontime. Nested/precomp/matte subrenders do
+NOT apply the parent timeline chain again. Groups grade each member before
+compositing, not a flattened grouped image. No inferred domains/conversion.
+
+MCP: inspect_grade_scopes, set_grade_scopes (complete registry/membership/order/
+bypass/timelineJSON), create_shared_grade_graph, bind_shared_grade_graphs,
+remove_shared_grade_graph. All12node tools accept shared_graph_id instead of
+clip_id, so every shared node/edge/param/key/mask/cache field stays editable.
+Shareddefinition edits update all references. Results are NOT pixelcached across
+clips. Referenced deletion errors until refs cleared; split_clip/split_all_at/
+insert_gap copy cliprefs/group membership to the right segment. Other editorial
+cut operations may create fresh unbound clip IDs: explicitly bind those IDs.
+No-scope path preserves pixels; shared/group/timeline fixtures exact vs explicit
+serialreference and deterministic. NativeOCIO bindings remain explicit. Stage2
+is not Resolve shared-node/remote-grade semantic parity or a Fusion compositor.

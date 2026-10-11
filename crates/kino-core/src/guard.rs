@@ -53,6 +53,7 @@ pub fn sanitize(v: &Value, l: &Limits, depth: usize) -> Result<(), String> {
 
 /// Project-level limits, checked after a mutating call. Err means the call must be rolled back.
 pub fn check_project(p: &crate::model::Project, l: &Limits) -> Result<(), String> {
+    p.grade_scopes.validate(p)?;
     if (p.width as u64) * (p.height as u64) > l.max_pixels { return Err(format!("canvas {}x{} is over the {} pixel limit (KINO_MAX_PIXELS)", p.width, p.height, l.max_pixels)); }
     if !(p.fps > 0.0 && p.fps <= l.max_fps) { return Err(format!("fps {} outside 0..{}", p.fps, l.max_fps)); }
     let n: usize = p.tracks.iter().map(|t| t.clips.len()).sum(); if n > l.max_clips { return Err(format!("{n} clips is over the {} clip limit", l.max_clips)); }

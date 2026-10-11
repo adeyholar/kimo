@@ -380,7 +380,7 @@ pub fn registry() -> Vec<Command> {
             let c = tr.clips.iter_mut().find(|c| c.id == id).unwrap();
             if at <= c.start || at >= c.start + c.duration { return Err("split point outside clip".into()); }
             let mut r = c.clone(); r.id = nid.clone(); r.start = at; r.duration = c.start + c.duration - at; r.in_point = c.in_point + (at - c.start) * c.speed; r.transition_in = None;
-            c.duration = at - c.start; tr.clips.push(r); Ok(json!({"right_clip_id":nid})) } },
+            c.duration = at - c.start; tr.clips.push(r); ss.project.grade_scopes.copy_binding(&id,&nid); Ok(json!({"right_clip_id":nid})) } },
     Command { name: "delete_clip", description: "Delete a clip.", mutates: true,
         schema: obj(vec![("clip_id", s("clip"))], &["clip_id"]),
         run: |ss, a| { let id = str_arg(a, "clip_id")?; let mut found = false; for t in ss.project.tracks.iter_mut() { let l = t.clips.len(); t.clips.retain(|c| c.id != id); found |= t.clips.len() != l; } if found { Ok(json!({"ok":true})) } else { Err("no such clip".into()) } } },

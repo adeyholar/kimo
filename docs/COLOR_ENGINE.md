@@ -730,3 +730,36 @@ not all effect/mask scratch; global guards remain. No cross-frame result reuse,
 so source/params/config/seed changes cannot hit stale frame results. Static
 layer cache is disabled for graph-bearing clips. No group/shared/timeline node
 system or UI added in this phase.
+
+## Shared, group, timeline grades
+
+Project grade_scopes persists graphs (named shared Graph definitions),
+clip_bindings (clipID -> ordered graphIDs), groups (ordered id/clips/graphs/
+bypass objects), timeline (ordered graphIDs). Full replacement via
+set_grade_scopes is transactional, validates all graph/clip references and
+managed bindings. create_shared_grade_graph starts identity unless fullJSON
+provided; existing12node tools choose exactly one clip_id/shared_graph_id.
+inspect/evaluate works for both. remove_shared_grade_graph refuses referenced
+removal; bound clip deletion fails until its refs/membership are removed.
+Registry capped128definitions/128groups/16graphrefs perchain; eachDAG existing
+nodecachebudget applies independently. Definitions share, framepixels don't.
+
+Render clock/order: clip legacyeffects, localDAG, sharedrefs, matchinggroups in
+storedorder, then clipmask/transform/composite. Adjustmentgraphs grade backdrop
+through existing adjustmentmask/opacity/duration. Group members are individual
+clips, NOT groupedflattenedcomposites; multiplegroups stack deterministically.
+Finaltimeline chain grades compositedworking pixels before declaredprojectoutput
+or nativeview; it is not a displayfinish afterODT. ExplicitOCIO nodewrappers work.
+Timeline clock/seed is compositiontime/frame; clip/group parameter keys use each
+clip's localclock. Nestedcompositions/matte renders carry matching clip/group
+bindings but timeline suppressed to avoid repeatedglobalgrade. Staticlayercache
+is disabled for scopedclips, so live shared edits cannot hit cachedstalegrades.
+
+No inferred membership/domain; IDs/order/bypass are explicitMCPdata. split_clip,
+split_all_at, insert_gap inherit bindings/groupmembership on rightsegment;
+other editorialcut operations can introduce freshunboundIDs, caller explicitly
+assigns those. Deleting bound members requires clearingreferences first. Empty
+scopes gives previouslinearpath. Testscover multipleclipsharededit, noncommuting
+grouporder, clocks, adjustmentgraph, nestedtimelineonce, exactrealserialreference,
+missingrefs/rollback, split/delete, nativeOCIO and JSONroundtrip. No groupcache,
+looksuperiority or industrysemanticparity claim.

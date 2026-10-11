@@ -34,6 +34,7 @@ pub mod shoulder;
 pub mod finish;
 pub mod film_response;
 pub mod node_graph;
+pub mod grade_scopes;
 pub mod printstock;
 pub mod denoise;
 pub mod subject_match;
