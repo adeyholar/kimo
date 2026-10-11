@@ -22,6 +22,7 @@ pub mod exposure;
 pub mod output_audit;
 pub mod shoulder;
 pub mod finish;
+pub mod printstock;
 pub mod neutral;
 pub mod adaptation;
 pub mod gamut_ray;
@@ -75,6 +76,7 @@ pub fn catalog3() -> &'static [Entry] {
         v.extend(linear::catalog());
         v.extend(shoulder::catalog());
         v.extend(finish::catalog());
+        v.extend(printstock::catalog());
         v.extend(adaptation::catalog());
         v.extend(gamut_ray::catalog());
         v.extend(crate::keying::catalog4());
@@ -129,6 +131,7 @@ pub fn apply3(kind: &str, pr: &Params, f: &mut Frame, t: f64, _seed: u64) -> Res
         "film_finish" => return finish::apply(pr,f,t,_seed),
         "linear_grade" => return linear::apply(pr, f, t),
         "luminance_shoulder" => return shoulder::apply(pr,f,t),
+        "print_stock" => return printstock::apply(pr,f,t),
         "white_adaptation" => return adaptation::apply(pr,f,t),
         "soft_gamut_ray" => return gamut_ray::apply(pr,f,t),
         "cdl" => return cdl::apply(pr, f, t),
