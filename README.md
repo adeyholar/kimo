@@ -74,7 +74,7 @@ Emitters take `colliders` (circle, rect or plane, analytic and deterministic) th
 
 ### Particles from a layer
 
-An emitter with `shape: layer` and `emit_clip` spawns on that clip's alpha silhouette (`emit_edge` for the outline only), so embers can rise off a title's letters; sparks can also bounce off it (`colliders` kind `layer`). Shown: a 5 s 1280x720 title clip, export 18.8 s. Limit: the silhouette is read at the current frame and held for the particle's history, so a moving title emits from where it is now, not from its past positions.
+An emitter with `shape: layer` and `emit_clip` spawns on that clip's alpha silhouette (`emit_edge` for the outline only), so embers can rise off a title's letters; sparks can also bounce off it (`colliders` kind `layer`). Shown: a 5 s 1280x720 title clip, export 18.8 s. With `emit_follow` each particle spawns on the silhouette as it was at its own birth time (0.1 s bins), so a moving or animating title leaves a trail of its past positions; without it the silhouette at the current frame is used. Limit: bins are 0.1 s wide, so a very fast layer steps between bins, and each bin costs one clip render.
 
 ![embers from title outline](docs/media/title-embers.jpg)
 
