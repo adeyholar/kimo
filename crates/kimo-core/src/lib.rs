@@ -46,6 +46,7 @@ pub mod guard;
 pub mod speedlines;
 pub mod par;
 pub mod fracture;
+pub mod frosted;
 
 pub mod long_gap;
 
