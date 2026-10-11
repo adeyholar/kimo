@@ -76,7 +76,11 @@ Point, planar and mesh trackers, feature tracking with homography fits, long-gap
 
 ### The film
 
-A short film is being built on the engine: a native 1080 rural-road piece with relit KIMO titles that sit in the scene, type tracked to moving surfaces, fracture glass and particles. It is the test that drives which engine tools get built next. Engine first, film second.
+A short film is being built on the engine: a native 1080p rural-road piece with a relit KIMO title, type that sits in the scene, fracture glass and particles. It is the test that drives which engine tools get built next. Engine first, film second. These are frames from the final render.
+
+![road, 1.2 s](docs/media/film-01-road.jpg)
+![relit KIMO title, 22.2 s](docs/media/film-02-relit-title.jpg)
+![final lockup, 38 s](docs/media/film-03-lockup.jpg)
 
 ## What is inside
 
