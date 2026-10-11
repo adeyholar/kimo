@@ -16,8 +16,10 @@ impl Frames {
     pub fn get(&self, g: usize) -> Option<&[u8]> { let n = self.len(); if n == 0 { return None; } let i = g.saturating_sub(self.first).min(n - 1); let buf=if let Some(f)=&self.linear_buf{self.quantized.get_or_init(||f.iter().map(|v|(v.clamp(0.,1.)*255.+0.5) as u8).collect())}else{&self.buf};Some(&buf[i * self.fs..(i + 1) * self.fs]) }
 }
 impl std::ops::Index<usize> for Frames { type Output = [u8]; fn index(&self, i: usize) -> &[u8] { self.get(self.first+i).expect("no decoded frame") } }
-pub struct Cache { frames: HashMap<String, (String, std::sync::Arc<Frames>)>, pub size: (u32, u32, f64) }
-impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new(), size: (0, 0, 0.0) } } pub fn frames_of(&self, id: &str) -> Option<&Frames> { self.frames.get(id).map(|x| x.1.as_ref()) } }
+pub struct Cache { frames: HashMap<String, (String, std::sync::Arc<Frames>)>, pub size: (u32, u32, f64), /// Export-only static layer cache (project is immutable for the cache's lifetime).
+    pub export_mode: bool, statics: std::sync::RwLock<HashMap<String, std::sync::Arc<StaticCrop>>> }
+pub struct StaticCrop { x0: usize, y0: usize, x1: usize, y1: usize, d: Vec<f32> }
+impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new(), size: (0, 0, 0.0), export_mode: false, statics: std::sync::RwLock::new(HashMap::new()) } } pub fn new_export() -> Self { let mut c = Cache::new(); c.export_mode = true; c } pub fn frames_of(&self, id: &str) -> Option<&Frames> { self.frames.get(id).map(|x| x.1.as_ref()) } }
 
 pub fn probe(path: &str) -> Result<(u32, u32, f64, f64), String> {
     if [".tif",".tiff"].iter().any(|e|path.to_lowercase().ends_with(e)){let(w,h)=crate::color::interchange::tiff_size(path)?;return Ok((w,h,0.,25.))}
@@ -382,8 +384,9 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
             for i in 0..w*h { let k = op * mk.as_ref().map(|m| m.d[i*4+3]).unwrap_or(1.0); for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - k) + adj.d[i*4+j] * k; } }
             continue;
         }
+        let mut f = if let Some(fr) = static_layer(p, c, lt, seed, t, cache)? { fr } else {
         let tp=std::time::Instant::now(); let mut f = source_frame(p, c, lt, cache); prof("source", tp);
-        let tp=std::time::Instant::now(); apply_effects_masked(p, c, &mut f, lt, seed, t, cache)?; prof("effects", tp);
+        let tp=std::time::Instant::now(); apply_effects_masked(p, c, &mut f, lt, seed, t, cache)?; prof("effects", tp); f };
         if let Some(m) = &c.mask { apply_mask(&mut f, m, lt); if !m.layers.is_empty() { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut f, &m.layers, lt, &ctx); } }
         let mut op = prop(c, "opacity", lt) as f32;
         let mut c_blend = c.blend.as_str();
@@ -458,7 +461,7 @@ pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) ->
     let t_out = t_out.min(p.duration()); if t_in >= t_out { return Err("range starts after the end of the timeline".into()); }
     let f0 = (t_in * p.fps).round() as usize; let f1 = ((t_out * p.fps).round() as usize).max(f0 + 1);
     if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) { return Err("HDR delivery requires export_high_bit; legacy export is 8-bit SDR".into()); }
-    let mut cache = Cache::new();
+    let mut cache = Cache::new_export();
     let n = f1 - f0;
     let mut command=legacy_encoder_command(p,path,crf)?;
     let frame_bytes=(p.width as usize).checked_mul(p.height as usize).and_then(|v|v.checked_mul(4)).ok_or("legacy encoder frame overflow")?;
@@ -468,7 +471,7 @@ pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) ->
     while i < n {
         crate::guard::check();
         let mut end = (i + nt * 4).min(n);
-        loop{let last=(f0+end-1) as f64/p.fps;match prepare_export_range(p,&mut cache,(f0+i) as f64/p.fps,last){Ok(())=>break,Err(e)if end-i>1&&(e.contains("cache budget")||e.contains("memory cap")||e.contains("bounded cache"))=>{end=i+(end-i).div_ceil(2);cache=Cache::new();},Err(e)=>return Err(e)}}
+        loop{let last=(f0+end-1) as f64/p.fps;match prepare_export_range(p,&mut cache,(f0+i) as f64/p.fps,last){Ok(())=>break,Err(e)if end-i>1&&(e.contains("cache budget")||e.contains("memory cap")||e.contains("bounded cache"))=>{end=i+(end-i).div_ceil(2);cache=Cache::new_export();},Err(e)=>return Err(e)}}
         // work queue: nt workers pull frame indices, so one slow frame (shards) no longer idles the other cores
         let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
         std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
@@ -687,4 +690,31 @@ pub fn target_screen_occ(p: &Project, id: &str, t: f64) -> Option<std::sync::Arc
     let tm = if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 { let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(&c, "rotation", lt) + rot_extra], scale: sc }; crate::three_d::render_layer(&mf, &cam, &pose, prop(&c, "backface", lt) != 0.0) } else { transform_bb(&mf, Some((0, 0, w - 1, h - 1)), sc, prop(&c, "rotation", lt) + rot_extra, dx, dy) };
     let occ: Vec<f32> = (0..w * h).map(|i| { let a = tm.d[i * 4 + 3].clamp(0.0, 1.0); 1.0 - (tm.d[i * 4] * a + (1.0 - a)) }).collect();
     let arc = std::sync::Arc::new(occ); crate::shards::TARGET_MATTE.with(|m| { m.borrow_mut().insert(id.to_string(), (t, arc.clone())); }); Some(arc)
+}
+
+/// Effects that depend only on their (constant) parameters and the pixels: no time, seed or randomness.
+const STATIC_EFFECTS: &[&str] = &["exposure", "contrast", "saturation", "temperature", "tint", "color_wheels", "curves", "teal_orange", "vignette", "blur", "glow", "invert", "sharpen", "posterize", "sepia", "outline", "outer_glow", "long_shadow", "choker", "feather_alpha", "silhouette_fill"];
+fn is_static_text(c: &Clip) -> bool {
+    let Source::Text { text, .. } = &c.source else { return false };
+    let constant = |pr: &crate::keyframe::Prop| pr.keys.is_empty() && pr.expr.is_empty();
+    !text.contains('{') && c.text_fx.is_none() && c.mask.is_none() && c.echo.is_none() && c.posterize_fps == 0.0
+        && c.props.get("reveal").map_or(true, constant)
+        && c.effects.iter().all(|e| STATIC_EFFECTS.contains(&e.kind.as_str()) && e.strings.is_empty() && e.params.values().all(constant))
+}
+/// Static text layers (constant text, params, effects) render identically every frame: render once per export, keep only the non-zero crop, rebuild by pasting.
+/// Only active for export caches; a bit-exact crop (any non-zero channel) so the rebuilt frame equals the full render.
+fn static_layer(p: &Project, c: &Clip, lt: f64, seed: u64, t: f64, cache: &Cache) -> Result<Option<Frame>, String> {
+    if !cache.export_mode || !is_static_text(c) { return Ok(None); }
+    let (w, h) = (p.width as usize, p.height as usize);
+    if let Some(cr) = cache.statics.read().unwrap().get(&c.id).cloned() {
+        let mut f = Frame::new(w, h); let cw = cr.x1 - cr.x0;
+        for (k, y) in (cr.y0..cr.y1).enumerate() { f.d[(y * w + cr.x0) * 4..(y * w + cr.x1) * 4].copy_from_slice(&cr.d[k * cw * 4..(k + 1) * cw * 4]); }
+        return Ok(Some(f));
+    }
+    let mut f = source_frame(p, c, lt, cache); apply_effects_masked(p, c, &mut f, lt, seed, t, cache)?;
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize);
+    for y in 0..h { let row = &f.d[y * w * 4..(y + 1) * w * 4]; if let Some(a) = (0..w).find(|&x| (0..4).any(|j| row[x * 4 + j].to_bits() != 0)) { let b = (0..w).rev().find(|&x| (0..4).any(|j| row[x * 4 + j].to_bits() != 0)).unwrap(); x0 = x0.min(a); x1 = x1.max(b + 1); y0 = y0.min(y); y1 = y1.max(y + 1); } }
+    if x1 <= x0 { x0 = 0; y0 = 0; x1 = 0; y1 = 0; }
+    if (x1 - x0) * (y1 - y0) * 16 <= 64 * 1024 * 1024 { let cw = x1 - x0; let mut d = Vec::with_capacity(cw * (y1 - y0) * 4); for y in y0..y1 { d.extend_from_slice(&f.d[(y * w + x0) * 4..(y * w + x1) * 4]); } cache.statics.write().unwrap().insert(c.id.clone(), std::sync::Arc::new(StaticCrop { x0, y0, x1, y1, d })); }
+    Ok(Some(f))
 }
