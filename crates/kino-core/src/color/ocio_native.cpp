@@ -64,9 +64,9 @@ void *kino_ocio_load(const char *text, char *err, size_t cap) noexcept {
         if(c->getNumDisplaysAll()>4096) throw std::runtime_error("OCIO display count limit");
         for (int i=0;i<c->getNumDisplaysAll();++i) {
             const char *d=c->getDisplayAll(i);
-            if(c->getNumViews(OCIO::VIEW_DISPLAY_DEFINED, d)>4096) throw std::runtime_error("OCIO view count limit");
-            for(int j=0;j<c->getNumViews(OCIO::VIEW_DISPLAY_DEFINED, d);++j) {
-                result->displays.emplace_back(d); result->views.emplace_back(c->getView(OCIO::VIEW_DISPLAY_DEFINED, d,j));
+            if(c->getNumViews(d)>4096) throw std::runtime_error("OCIO view count limit");
+            for(int j=0;j<c->getNumViews(d);++j) {
+                result->displays.emplace_back(d); result->views.emplace_back(c->getView(d,j));
             }
         }
         result->config=c; return result.release();
@@ -94,6 +94,28 @@ void *kino_ocio_processor(const void *p, const char *src, const char *dst, char 
         return result.release();
     } catch(const std::exception &e) { error(err,cap,e.what()); }
       catch(...) { error(err,cap,"unknown OCIO processor error"); }
+    return nullptr;
+}
+void *kino_ocio_display_processor(const void *p, const char *src, const char *display, const char *view, char *err, size_t cap) noexcept {
+    try {
+        auto c=static_cast<const KinoConfig*>(p);
+        if(!c->config->getColorSpace(src)) throw std::runtime_error("unknown OCIO source colorspace");
+        bool found=false;
+        for(int i=0;i<c->config->getNumDisplaysAll();++i) {
+            const char *d=c->config->getDisplayAll(i);
+            if(std::strcmp(d,display)!=0) continue;
+            for(int j=0;j<c->config->getNumViews(d);++j)
+                if(std::strcmp(c->config->getView(d,j),view)==0) found=true;
+        }
+        if(!found) throw std::runtime_error("unknown OCIO display/view pair");
+        auto transform=OCIO::DisplayViewTransform::Create();
+        transform->setSrc(src); transform->setDisplay(display); transform->setView(view);
+        transform->setLooksBypass(false);
+        auto result=std::make_unique<KinoProcessor>();
+        result->cpu=c->config->getProcessor(transform)->getOptimizedCPUProcessor(OCIO::OPTIMIZATION_NONE);
+        return result.release();
+    } catch(const std::exception &e) { error(err,cap,e.what()); }
+      catch(...) { error(err,cap,"unknown OCIO display processor error"); }
     return nullptr;
 }
 void kino_ocio_processor_free(void *p) noexcept { delete static_cast<KinoProcessor*>(p); }

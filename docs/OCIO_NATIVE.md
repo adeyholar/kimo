@@ -25,8 +25,8 @@ only new build dependency. Existing extension discovery stays intact.
 
 `color::ocio_config::Config::from_text/from_file` loads a UTF-8 config of at most
 4 MiB using the real OCIO parser. `colorspaces()` includes inactive spaces.
-`views()` lists display-defined views. Shared views and virtual displays are not
-listed in this version. The library version is inspectable. No global current
+`views()` lists configured views attached to each concrete display, including
+shared views. Virtual display templates are not enumerated. The library version is inspectable. No global current
 config is set. Search paths/environment variable definitions are cleared in the
 local config. Environment-independent display listing uses the all-displays API.
 
@@ -82,8 +82,9 @@ spaces that clip/gamut-map may lose information on the round trip.
 
 For realtime/export integration, cache a `DomainProcessor` in the caller.
 The string-dispatch convenience path reloads/recompiles per call and is not
-performance-qualified. No production display-view processor or MCP effect
-setter is included; existing generic effect string configuration may be used.
+performance-qualified. No MCP effect setter is included; existing generic effect string configuration
+may be used. The separate forward display-view API below does not change this
+invertible effect-domain sandwich.
 
 ## Proven tests
 
@@ -105,3 +106,38 @@ render-wide integration, throughput or industry parity.
 An optional integration test loads the official built-in ACES2 CG config when
 `KINO_TEST_NATIVE_ACES_CONFIG` points to its serialized .ocio file. It checks
 space/view discovery and ACEScg-to-ACEScct gray, not its output display views.
+
+
+## Forward display-view CPU pipeline
+
+`Config::display_processor(source, display, view)` compiles an OCIO
+DisplayViewTransform in the forward direction with configured looks ENABLED.
+This is the full pipeline defined by that config/view (including ACES output
+rendering where the config defines it), not a source-to-display colorspace
+sandwich. It reuses transactional RGB-only Processor application, preserves
+alpha and may outlive Config. Wrong display/view combinations fail.
+
+`transform_ocio_view_samples` takes config_path, source, display, view and flat
+rgba (1..4096 samples). Signed/HDR floats are allowed; alpha0..1. It returns
+unquantized transformed samples, no project changes. Arbitrary source/output
+semantics remain caller-declared, not inferred from names.
+
+`render_ocio_display_view` is an explicit SDR still-preview path. Required fields:
+config_path, source, display, view, time, path (.png), output_encoding=sRGB_SDR.
+The project must be managed AP1/D60 scene-linear (working_gamut3); source must
+represent those pixels in the selected config. Caller explicitly declares the
+view produces sRGB SDR, never PQ/HLG. It renders one frame, bypasses the configured
+project output transform, applies the forward view and writes an 8-bit PNG.
+Out-of-range pixel count is reported; PNG quantizes/clips0..1. The config remains
+self-contained, with external FileTransforms rejected. No video export, GPU,
+HDR image encoding, display calibration, global config changes or defaults.
+
+Native library2.5.1 proof uses its official built-in
+cg-config-v4.0.0_aces-v2.0_ocio-v2.5 serialized config, sourceACEScg,
+display "sRGB - Display", view "ACES 2.0 - SDR 100 nits (Rec.709)".
+The real-footage still is SDR-origin, explicitly decoded sRGB then converted to
+AP1 by Kino before the selected display-view transform. Actual pixels inspected.
+A separate1280x720 declared-AP1 float fixture matches Python DisplayViewTransform
+from the SAME OCIO library exactly (3,686,400 RGBA samples). That is API parity,
+not an independent ACES implementation, full conformance suite or camera proof.
+Configured-look inclusion and wrong names/input rollback are regression-tested.

@@ -10,6 +10,7 @@ unsafe extern "C" {
     fn kino_ocio_count(p:*const c_void, catalog:i32)->usize;
     fn kino_ocio_name(p:*const c_void,catalog:i32,index:usize)->*const c_char;
     fn kino_ocio_processor(p:*const c_void,src:*const c_char,dst:*const c_char,err:*mut c_char,cap:usize)->*mut c_void;
+    fn kino_ocio_display_processor(p:*const c_void,src:*const c_char,display:*const c_char,view:*const c_char,err:*mut c_char,cap:usize)->*mut c_void;
     fn kino_ocio_processor_free(p:*mut c_void);
     fn kino_ocio_noop(p:*const c_void)->i32;
     fn kino_ocio_apply(p:*const c_void,rgba:*mut f32,pixels:usize,err:*mut c_char,cap:usize)->i32;
@@ -45,6 +46,12 @@ impl Config {
         (0..unsafe{kino_ocio_count(self.handle.as_ptr(),1)}).map(|i|View{
             display:string(unsafe{kino_ocio_name(self.handle.as_ptr(),1,i)}),
             view:string(unsafe{kino_ocio_name(self.handle.as_ptr(),2,i)})}).collect()
+    }
+    /// Forward display-view pipeline, including configured looks. Not a colorspace sandwich.
+    pub fn display_processor(&self,src:&str,display:&str,view:&str)->Result<Processor,String>{
+        let (src,display,view)=(name(src)?,name(display)?,name(view)?);let mut err=[0;4096];
+        let handle=NonNull::new(unsafe{kino_ocio_display_processor(self.handle.as_ptr(),src.as_ptr(),display.as_ptr(),view.as_ptr(),err.as_mut_ptr(),err.len())}).ok_or_else(||diagnostic(&err))?;
+        Ok(Processor{handle})
     }
     /// Processor owns OCIO's CPU handle and may outlive this Config.
     pub fn processor(&self,src:&str,dst:&str)->Result<Processor,String>{
