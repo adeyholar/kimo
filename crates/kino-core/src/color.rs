@@ -7,6 +7,8 @@ pub(crate) mod frame;
 pub mod curves;
 pub mod lut;
 pub mod scopes;
+pub mod scope_image;
+pub mod scope_command;
 pub mod matching;
 pub mod idt;
 pub mod cdl;

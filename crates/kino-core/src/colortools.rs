@@ -28,7 +28,7 @@ fn clip_frame(p: &Project, clip_id: &str, t: f64) -> Result<Frame, String> {
     q.tracks = vec![tr];
     let mut cache = render::Cache::new(); render::prepare_at(&q, &mut cache, Some(snapped))?; render::render_frame(&q, snapped, &cache)
 }
-fn any_frame(p: &Project, clip: Option<&str>, t: f64) -> Result<Frame, String> { match clip { Some(c) => clip_frame(p, c, t), None => { let mut cache = render::Cache::new(); render::prepare_at(p, &mut cache, Some(t))?; render::render_frame(p, t, &cache) } } }
+pub(crate) fn any_frame(p: &Project, clip: Option<&str>, t: f64) -> Result<Frame, String> { match clip { Some(c) => clip_frame(p, c, t), None => { let mut cache = render::Cache::new(); render::prepare_at(p, &mut cache, Some(t))?; render::render_frame(p, t, &cache) } } }
 fn stats(f: &Frame, region: Option<[f64; 4]>) -> Result<([f32; 3], [f32; 3]),String> {
     if let Some(r)=region{if r.iter().any(|v|!v.is_finite())||r[0]<0.||r[1]<0.||r[2]<=0.||r[3]<=0.||r[0]+r[2]>1.||r[1]+r[3]>1.{return Err("sample region must be positive and within0..1".into())}}
     let (x0, y0, x1, y1) = match region { Some(r) => ((r[0] * f.w as f64) as usize, (r[1] * f.h as f64) as usize, ((r[0] + r[2]) * f.w as f64) as usize, ((r[1] + r[3]) * f.h as f64) as usize), None => (0, 0, f.w, f.h) };
