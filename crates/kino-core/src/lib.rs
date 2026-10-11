@@ -25,7 +25,7 @@ pub mod particles;
 pub mod titles;
 pub mod transitions;
 pub mod audio;
-pub mod tracking;
+pub mod tracking; pub mod roto;
 pub mod edit;
 pub mod effects2;
 pub mod color;
