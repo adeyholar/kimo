@@ -1,4 +1,4 @@
-use kino_core::sfm::*;
+use kimo_core::sfm::*;
 fn gauss(r: &mut Rng) -> f64 { let u = (r.next() % 1_000_000) as f64 / 1e6 + 1e-7; let v = (r.next() % 1_000_000) as f64 / 1e6; (-2.0 * u.ln()).sqrt() * (6.2831853 * v).cos() }
 fn scene(nf: usize, noise: f64, outl: f64, seed: u64, f: f64) -> (Vec<Track>, Vec<Pose>, Vec<V3>) { scene_d(nf, noise, outl, seed, f, 0.0, 0.0) }
 fn scene_d(nf: usize, noise: f64, outl: f64, seed: u64, f: f64, k1: f64, k2: f64) -> (Vec<Track>, Vec<Pose>, Vec<V3>) {

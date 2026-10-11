@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end proof for solve_camera: render a textured 3D scene with a known camera path (numpy), encode to H.264,
-drive kino-mcp over stdio (import, solve_camera, apply_camera_solve), and measure error vs ground truth.
-usage: python3 examples/camera_solve_proof.py [path/to/kino-mcp]"""
+drive kimo-mcp over stdio (import, solve_camera, apply_camera_solve), and measure error vs ground truth.
+usage: python3 examples/camera_solve_proof.py [path/to/kimo-mcp]"""
 import sys, json, subprocess, os, numpy as np, tempfile
 W, H, N, F = 640, 360, 48, 560.0
 rng = np.random.default_rng(3)
@@ -41,7 +41,7 @@ mp4 = os.path.join(tmp, "scene.mp4")
 p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", "24", "-i", "-", "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", mp4], stdin=subprocess.PIPE)
 for f in frames: p.stdin.write(f.tobytes())
 p.stdin.close(); p.wait()
-exe = sys.argv[1] if len(sys.argv) > 1 else "target/release/kino-mcp"
+exe = sys.argv[1] if len(sys.argv) > 1 else "target/release/kimo-mcp"
 srv = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True); mid = [0]
 def rpc(method, params=None):
     mid[0] += 1; srv.stdin.write(json.dumps({"jsonrpc": "2.0", "id": mid[0], "method": method, "params": params or {}}) + "\n"); srv.stdin.flush(); return json.loads(srv.stdout.readline())

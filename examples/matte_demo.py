@@ -1,10 +1,10 @@
 # track_matte proof on real footage: hold-out accuracy against a seed that was NOT given to the tracker, flicker before/after.
-import sys,json,time,subprocess; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
+import sys,json,time,subprocess; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
 import numpy as np
 from PIL import Image
 SRC=sys.argv[1]; SEEDS=json.load(open(sys.argv[2])); W,H,FPS=960,540,30
-k=Kino(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
+k=Kimo(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
 a=C("import_media",path=SRC)["asset_id"]; t=C("add_track")["track_id"]; m=C("add_clip",track_id=t,source_type="media",asset_id=a,start=0,duration=1.6,fit="cover")["clip_id"]
 mode=sys.argv[3] if len(sys.argv)>3 else "holdout"
 use=[SEEDS[0],SEEDS[-1]] if mode=="holdout" else SEEDS

@@ -1,6 +1,6 @@
 # Rotoscope assist test: keys at two moments (hand-traced finger outline), held-out middle frame hand-traced as ground truth.
 # Compares plain keyframe interpolation (baseline) with roto_propagate (flow warp + edge snap). Usage: roto_test.py <media.mp4> <in_point>
-import sys,subprocess,numpy as np;sys.path.insert(0,'/home/sandbox/kino/examples');from mcp_client import Kino
+import sys,subprocess,numpy as np;sys.path.insert(0,'/home/sandbox/kimo/examples');from mcp_client import Kimo
 from PIL import Image,ImageDraw
 mp4=sys.argv[1];ip=float(sys.argv[2]) if len(sys.argv)>2 else 5.0
 W,H=720,1280;OX,OY=0,300
@@ -13,7 +13,7 @@ def gtmask(pl):
 def iou(a,b):
     box=np.zeros_like(a);box[OY:OY+400,OX:OX+400]=True;a=a&box;b=b&box;return (a&b).sum()/max(1,(a|b).sum())
 def run(snap,tag):
-    subprocess.run(['pkill','kino-mcp']);k=Kino();C=k.call;C('project_set',width=W,height=H,fps=25)
+    subprocess.run(['pkill','kimo-mcp']);k=Kimo();C=k.call;C('project_set',width=W,height=H,fps=25)
     a=C('import_media',path=mp4)['asset_id'];t=C('add_track')['track_id'];c=C('add_clip',track_id=t,source_type='media',asset_id=a,start=0,duration=3,in_point=ip)['clip_id']
     m=C('add_mask',clip_id=c,kind='path',points=norm(P[0.5]),closed=True,interp='linear')['mask_id']
     for tt in (0.5,1.0): C('set_mask_path_key',clip_id=c,mask_id=m,time=tt,points=norm(P[tt]))

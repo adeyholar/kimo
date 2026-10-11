@@ -49,7 +49,7 @@ Reproduce the external-fixture regression explicitly (not silently skipped):
 
 ```
 curl -L https://raw.githubusercontent.com/opencv/opencv_extra/5.x/testdata/cv/tracking/faceocc2/data/faceocc2.webm -o /tmp/faceocc2.webm
-KINO_FACEOCC2_WEBM=/tmp/faceocc2.webm cargo test -p kino-core --test webm_probe -- --ignored
+KIMO_FACEOCC2_WEBM=/tmp/faceocc2.webm cargo test -p kimo-core --test webm_probe -- --ignored
 ```
 
 The real-footage test is ignored in the default suite to avoid network access

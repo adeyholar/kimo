@@ -1,7 +1,7 @@
 # track_matte ground-truth proof: synthetic textured subject with analytic alpha, tracked from the first and last frame only.
-import os,sys,math,subprocess,json; sys.path.insert(0,'/home/sandbox/kino/examples')
+import os,sys,math,subprocess,json; sys.path.insert(0,'/home/sandbox/kimo/examples')
 import numpy as np; from PIL import Image,ImageDraw,ImageFilter
-from mcp_client import Kino
+from mcp_client import Kimo
 W,H,FPS,N=640,360,30,60; rng=np.random.default_rng(3)
 base=np.array([[0,-60],[18,-50],[22,-20],[60,-45],[66,-38],[30,-5],[26,40],[34,75],[18,78],[8,45],[-8,45],[-14,78],[-30,76],[-24,36],[-28,-5],[-62,-30],[-68,-38],[-24,-20],[-18,-50]],float)
 def shape(i):
@@ -18,7 +18,7 @@ for i in range(N):
     ft=Image.fromarray((fgt*255).astype(np.uint8)).transform((W,H),Image.AFFINE,(c/sc,sn/sc,c0[0]-(c*ci[0]+sn*ci[1])/sc,-sn/sc,c/sc,c0[1]-(-sn*ci[0]+c*ci[1])/sc),Image.BICUBIC); f=np.array(ft).astype(np.float32)/255; b=bg
     fr=A[...,None]*f+(1-A[...,None])*b; Image.fromarray((fr*255).astype(np.uint8)).save("/tmp/gt/f%03d.png"%i); GT.append(A)
 subprocess.run("ffmpeg -v error -y -framerate 30 -i /tmp/gt/f%03d.png -c:v libx264 -crf 12 -pix_fmt yuv420p /tmp/gt.mp4",shell=True,check=True)
-k=Kino();C=k.call;C("project_set",width=W,height=H,fps=FPS)
+k=Kimo();C=k.call;C("project_set",width=W,height=H,fps=FPS)
 a=C("import_media",path="/tmp/gt.mp4")["asset_id"];t=C("add_track")["track_id"];m=C("add_clip",track_id=t,source_type="media",asset_id=a,start=0,duration=N/FPS,fit="cover")["clip_id"]
 nseed=int(sys.argv[1]) if len(sys.argv)>1 else 2; idx=[0,N-1] if nseed==2 else [0,N//2,N-1]
 r=C("track_matte",clip_id=m,seeds=[{"time":i/FPS,"points":shape(i).tolist()} for i in idx],temporal=float(sys.argv[2]) if len(sys.argv)>2 else 0.6,band=float(os.environ.get("BAND","14")),colour=float(os.environ.get("COL","0.9")))

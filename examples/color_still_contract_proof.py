@@ -1,4 +1,4 @@
-"""Explicit real-media still parity proof. Requires a built kino-mcp, ffmpeg and ffprobe.
+"""Explicit real-media still parity proof. Requires a built kimo-mcp, ffmpeg and ffprobe.
 
 Example: python3 examples/color_still_contract_proof.py source.mp4 --output-dir /tmp/proof
 Optional --ocio needs installed pinned OpenColorIO2.5.1; never installs dependencies.
@@ -127,7 +127,7 @@ def main():
                     time=args.time, width=320, height=180, fps=25, ocio=args.ocio, outputs={},
                     note='Same-engine byte parity, not HDR/ACES certification; PQ is not an SDR preview.')
     with (args.output_dir / 'engine-stderr.log').open('w') as log:
-        engine = Engine(repo / 'target/release/kino-mcp', log)
+        engine = Engine(repo / 'target/release/kimo-mcp', log)
         try:
             engine.call('project_set', width=320, height=180, fps=25)
             asset = engine.call('import_media', path=str(args.source))['asset_id']

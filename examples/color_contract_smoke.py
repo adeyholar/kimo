@@ -1,8 +1,8 @@
 """Color contract smoke over real footage. Optional OCIO requires explicit --ocio and installed2.5.1."""
 import argparse,json,time,pathlib
-from mcp_client import Kino
+from mcp_client import Kimo
 ap=argparse.ArgumentParser();ap.add_argument('source');ap.add_argument('--ocio',action='store_true');ap.add_argument('--out',default='/downloads/color-contract-smoke');a=ap.parse_args();out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True)
-k=Kino();rows=[]
+k=Kimo();rows=[]
 def verify_delivery(result,primaries,transfer):
  video=[s for s in result['streams'] if s.get('codec_type')=='video'];assert len(video)==1
  v=video[0];assert (v['width'],v['height'],v['pix_fmt'],v['bits_per_raw_sample'])==(320,180,'gbrp16le','16')

@@ -1,5 +1,5 @@
-from mcp_client import Kino
-k = Kino(); k.call("project_set", width=320, height=180, fps=30)
+from mcp_client import Kimo
+k = Kimo(); k.call("project_set", width=320, height=180, fps=30)
 A = k.call("import_media", path="/tmp/src_a.mp4")["asset_id"]
 t = k.call("add_track")["track_id"]
 ids = [k.call("add_clip", track_id=t, source_type="media", asset_id=A, start=i*2, duration=2)["clip_id"] for i in range(3)]

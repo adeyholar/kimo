@@ -1,4 +1,4 @@
-use kino_core::ext::undistort::undistort_frame; use kino_core::sfm::{norm_obs, Intr};
+use kimo_core::ext::undistort::undistort_frame; use kimo_core::sfm::{norm_obs, Intr};
 #[test] fn undistort_inverts_the_solver_lens_model() {
     let (w, h, f, k1, k2) = (320usize, 180usize, 300.0, -0.18, 0.05); let ki = Intr { f, cx: w as f64 / 2.0, cy: h as f64 / 2.0, k1, k2 };
     let ideal = |x: f64, y: f64| -> f32 { (0.5 + 0.25 * (x * 0.09).sin() + 0.25 * (y * 0.07 + x * 0.03).cos()) as f32 };

@@ -1,5 +1,5 @@
-from mcp_client import Kino
-k = Kino(); k.call("project_set", width=640, height=360, fps=30)
+from mcp_client import Kimo
+k = Kimo(); k.call("project_set", width=640, height=360, fps=30)
 A = k.call("import_media", path="/tmp/src_a.mp4")["asset_id"]
 t = k.call("add_track")["track_id"]
 c = k.call("add_clip", track_id=t, source_type="media", asset_id=A, start=0, duration=2)["clip_id"]

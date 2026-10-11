@@ -13,9 +13,9 @@ Base: 205e0137f4018895d59ac90f4008cca2c65bcf21. This is numerical and decoded-si
 From repo root, with cargo/python3/ffmpeg/libx265/ffprobe installed:
 
 ```
-cargo test -p kino-core --test hdr_validation --test color_managed --test color_metadata --test color_delivery --test color_pipeline --test video_delivery
-python3 tools/hdr_validate.py fixture /tmp/kino-hdr-proof
-python3 tools/hdr_validate.py audit /tmp/kino-hdr-proof/pq-hevc.mp4 --max-frames 500
+cargo test -p kimo-core --test hdr_validation --test color_managed --test color_metadata --test color_delivery --test color_pipeline --test video_delivery
+python3 tools/hdr_validate.py fixture /tmp/kimo-hdr-proof
+python3 tools/hdr_validate.py audit /tmp/kimo-hdr-proof/pq-hevc.mp4 --max-frames 500
 ```
 
 The Python oracle imports no engine code. It supplies known-nit linear float ramps/checkers to a Rust example which exercises TIFF import, timeline, configured output transform and both high-bit exporters. It independently decodes raw RGB16 or10bit YUV420 with declared narrow-range BT2020NC matrix, then PQ to nits. Reports max/p50/p95/p99 error, neutral-ramp and interior-neutral errors, independent ideal quantization floors, clipping probes, tags, range excursions and first-frame static SEI. No metadata rewrite.

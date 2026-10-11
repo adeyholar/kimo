@@ -1,8 +1,8 @@
 # simulate_physics demo: 14 layers (discs and polygons, spinning) drop into the frame, collide, bounce and settle. Motion-blurred.
-import sys,time,random,math; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
+import sys,time,random,math; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
 W,H,FPS,D=1280,720,25,5.0; random.seed(4)
-k=Kino(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
+k=Kimo(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
 bg=C("add_track")["track_id"]; C("add_clip",track_id=bg,source_type="solid",color=[0.07,0.08,0.12],start=0,duration=D)
 bodies=[]; pal=[[0.95,0.3,0.3],[0.2,0.7,0.95],[0.98,0.8,0.2],[0.5,0.9,0.5],[0.8,0.4,0.95]]
 for i in range(14):

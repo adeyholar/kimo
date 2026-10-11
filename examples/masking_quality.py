@@ -1,8 +1,8 @@
 # Masking quality before/after. usage: masking_quality.py legacy|new
-import sys, time, math; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
+import sys, time, math; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
 mode=sys.argv[1]; leg=1.0 if mode=="legacy" else 0.0
-k=Kino(); C=k.call; C("project_set",width=1280,height=720,fps=25)
+k=Kimo(); C=k.call; C("project_set",width=1280,height=720,fps=25)
 def trk(): return C("add_track")["track_id"]
 def img(p,st,d,t=None):
     a=C("import_media",path=p)["asset_id"]; return C("add_clip",track_id=t or trk(),source_type="media",asset_id=a,start=st,duration=d,fit="stretch")["clip_id"]

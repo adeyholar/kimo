@@ -74,7 +74,7 @@ Run:
 
 ```
 cargo test --workspace
-KINO_SCOPE_FIXTURES=/tmp/scopes cargo test -p kino-core --lib scope_image
+KIMO_SCOPE_FIXTURES=/tmp/scopes cargo test -p kimo-core --lib scope_image
 ```
 
 The opt-in fixtures include SDR bars+ramp, Rec2020 PQ 0..1000-nit ramp, and

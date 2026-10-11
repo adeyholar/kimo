@@ -1,7 +1,7 @@
 # Pin a graphic onto the occluded plate via the context route + occluder_matte; renders frames showing the graphic tucking under the "finger". Writes /tmp/pin_occ.png
-import sys,os,numpy as np;sys.path.insert(0,'/home/sandbox/kino/examples')
+import sys,os,numpy as np;sys.path.insert(0,'/home/sandbox/kimo/examples')
 os.environ['CTX']='1'
-src=open('/home/sandbox/kino/examples/planar_occlusion_test.py').read().split("Q=np.array")[0]
+src=open('/home/sandbox/kimo/examples/planar_occlusion_test.py').read().split("Q=np.array")[0]
 sys.argv=['x',sys.argv[1]];exec(src)
 from PIL import Image,ImageDraw
 g=Image.new('RGBA',(640,440),(255,200,0,255));ImageDraw.Draw(g).rectangle([10,10,630,430],outline=(0,0,0,255),width=12);g.save('/tmp/pin_g.png')
@@ -13,6 +13,6 @@ for i in (5,20,32,52):
     C('render_frame',time=i/30,path='/tmp/po_%d.png'%i);tiles.append(Image.open('/tmp/po_%d.png'%i).convert('RGB').resize((640,360)))
 s=Image.new('RGB',(1280,720));[s.paste(im,((j%2)*640,(j//2)*360)) for j,im in enumerate(tiles)];s.save('/tmp/pin_occ.png')
 # persistence: save, restart the server (anchors are session memory), reload, re-render a frame; must match the pre-reload render
-C('render_frame',time=32/30,path='/tmp/po_before.png');C('save_project',path='/tmp/pin_occ.kino.json')
-import subprocess;subprocess.run(['pkill','kino-mcp']);k2=Kino();C2=k2.call;C2('load_project',path='/tmp/pin_occ.kino.json');C2('render_frame',time=32/30,path='/tmp/po_after.png')
+C('render_frame',time=32/30,path='/tmp/po_before.png');C('save_project',path='/tmp/pin_occ.kimo.json')
+import subprocess;subprocess.run(['pkill','kimo-mcp']);k2=Kimo();C2=k2.call;C2('load_project',path='/tmp/pin_occ.kimo.json');C2('render_frame',time=32/30,path='/tmp/po_after.png')
 a=np.array(Image.open('/tmp/po_before.png').convert('RGB')).astype(float);b=np.array(Image.open('/tmp/po_after.png').convert('RGB')).astype(float);print('reload mean abs diff %.4f max %.1f'%(np.abs(a-b).mean(),np.abs(a-b).max()))

@@ -1,6 +1,6 @@
 # Mesh tracker proof: a waving flag (known per-vertex ground truth), tracked, then text pinned to the deforming surface.
-import sys,time,math,json; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
+import sys,time,math,json; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
 W,H,FPS,D=1280,720,25,4.0; N=int(D*FPS); NX,NY=9,6
 def verts(t):
     out=[]; cx=640+60*math.sin(t*0.9); cy=360+20*math.sin(t*1.3)
@@ -10,7 +10,7 @@ def verts(t):
             amp=34*u**1.2; ph=2*math.pi*(u*1.4-t*0.9); y+=amp*math.sin(ph)+ (v-0.5)*10*math.sin(ph+1); x-=amp*0.35*(1-math.cos(ph))
             out+= [x,y]
     return out
-k=Kino(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
+k=Kimo(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
 if sys.argv[1]=='plate':
     bg=C("add_track")["track_id"]; C("add_clip",track_id=bg,source_type="solid",color=[0.55,0.7,0.85],start=0,duration=D)
     a=C("import_media",path="/tmp/flag.png")["asset_id"]; t=C("add_track")["track_id"]; f=C("add_clip",track_id=t,source_type="media",asset_id=a,start=0,duration=D)["clip_id"]

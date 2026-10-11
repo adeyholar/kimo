@@ -2,7 +2,7 @@
 # Reports mean/max corner error (px) overall and during occlusion. usage: planar_occlusion_test.py <texture> [expand-less]
 import json,os
 EXTRA=json.loads(os.environ.get("TP","{}"))
-import sys,time,subprocess,os,numpy as np;sys.path.insert(0,'/home/sandbox/kino/examples');from mcp_client import Kino
+import sys,time,subprocess,os,numpy as np;sys.path.insert(0,'/home/sandbox/kimo/examples');from mcp_client import Kimo
 from PIL import Image,ImageDraw,ImageFilter
 TEX=sys.argv[1];tex=Image.open(TEX).convert('RGB').resize((640,440));W,H,N=1280,720,60
 def quad(i):
@@ -20,7 +20,7 @@ for i in range(N):
         f=Image.new('RGBA',(W,H),(0,0,0,0));dr=ImageDraw.Draw(f);y=-200+d*480;dr.ellipse([480,y-420,880,y+40],fill=tuple(int(v) for v in os.environ.get('FC','225,160,130').split(','))+(255,));f=f.filter(ImageFilter.GaussianBlur(3));bg.paste(f,(0,0),f)
     bg.save('/tmp/pof/f%03d.png'%i)
 subprocess.run(['ffmpeg','-v','error','-y','-framerate','30','-i','/tmp/pof/f%03d.png','-c:v','libx264','-crf','10','-pix_fmt','yuv420p','/tmp/po.mp4'],check=True)
-k=Kino();C=k.call;C('project_set',width=W,height=H,fps=30)
+k=Kimo();C=k.call;C('project_set',width=W,height=H,fps=30)
 a=C('import_media',path='/tmp/po.mp4')['asset_id'];t0=C('add_track')['track_id'];cl=C('add_clip',track_id=t0,source_type='media',asset_id=a,start=0,duration=N/30/float(os.environ.get('SP','1')),speed=float(os.environ.get('SP','1')))['clip_id']
 CTX=os.environ.get('CTX')
 def inner(i):  # target = central region of the plate (tex 192..448 x 132..308), exact through the plate homography

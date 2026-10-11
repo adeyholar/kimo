@@ -1,7 +1,7 @@
 """Tiny MCP stdio client used by examples/tests."""
 import json, subprocess
-class Kino:
-    def __init__(self, exe="target/release/kino-mcp"):
+class Kimo:
+    def __init__(self, exe="target/release/kimo-mcp"):
         self.p = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, stderr=None); self.i = 0
         self.rpc("initialize", {})
     def rpc(self, m, params):

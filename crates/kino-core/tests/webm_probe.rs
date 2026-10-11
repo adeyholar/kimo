@@ -1,4 +1,4 @@
-use kino_core::{
+use kimo_core::{
     commands::{dispatch, Session},
     render,
 };
@@ -58,7 +58,7 @@ fn verify_webm(path: &str, expected_duration: f64, expected_size: (u32, u32)) {
 }
 #[test]
 fn generated_webm_uses_container_duration() {
-    let path = std::env::temp_dir().join(format!("kino-webm-probe-{}.webm", std::process::id()));
+    let path = std::env::temp_dir().join(format!("kimo-webm-probe-{}.webm", std::process::id()));
     assert!(Command::new("ffmpeg")
         .args([
             "-v",
@@ -81,8 +81,8 @@ fn generated_webm_uses_container_duration() {
 #[test]
 fn still_and_audio_remain_compatible() {
     let dir = std::env::temp_dir();
-    let png = dir.join(format!("kino-probe-{}.png", std::process::id()));
-    let wav = dir.join(format!("kino-probe-{}.wav", std::process::id()));
+    let png = dir.join(format!("kimo-probe-{}.png", std::process::id()));
+    let wav = dir.join(format!("kimo-probe-{}.wav", std::process::id()));
     assert!(Command::new("ffmpeg")
         .args([
             "-v",
@@ -129,16 +129,16 @@ fn failed_probe_cannot_import() {
     assert!(dispatch(
         &mut s,
         "import_media",
-        &json!({"path":"/missing/kino-probe-not-a-file.webm"})
+        &json!({"path":"/missing/kimo-probe-not-a-file.webm"})
     )
     .is_err());
     assert_eq!(before, serde_json::to_value(&s.project).unwrap());
 }
-/// Download original fixture from OpenCV, then run with KINO_FACEOCC2_WEBM.
+/// Download original fixture from OpenCV, then run with KIMO_FACEOCC2_WEBM.
 #[test]
-#[ignore = "external real-footage fixture; set KINO_FACEOCC2_WEBM and run --ignored"]
+#[ignore = "external real-footage fixture; set KIMO_FACEOCC2_WEBM and run --ignored"]
 fn faceocc2_original_webm_import_and_late_decode() {
-    let path = std::env::var("KINO_FACEOCC2_WEBM")
-        .expect("set KINO_FACEOCC2_WEBM to original faceocc2.webm");
+    let path = std::env::var("KIMO_FACEOCC2_WEBM")
+        .expect("set KIMO_FACEOCC2_WEBM to original faceocc2.webm");
     verify_webm(&path, 32.48, (320, 240));
 }

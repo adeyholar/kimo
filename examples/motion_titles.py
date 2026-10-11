@@ -1,8 +1,8 @@
 import sys; sys.path.insert(0,'examples')
-from mcp_client import Kino
+from mcp_client import Kimo
 from motion_lib import MG
 W,H=int(sys.argv[1]) if len(sys.argv)>1 else 640, int(sys.argv[2]) if len(sys.argv)>2 else 360
-k=Kino(); k.call("project_set",width=W,height=H,fps=24); m=MG(k,W,H); u=m.u; PX=W/1920.0
+k=Kimo(); k.call("project_set",width=W,height=H,fps=24); m=MG(k,W,H); u=m.u; PX=W/1920.0
 bgs=[k.call("import_media",path=f"/tmp/bg{x}.png")["asset_id"] for x in "ABC"]
 tr={n:k.call("add_track")["track_id"] for n in ["bg","lights","dust","shapes","text","fx"]}
 def bg(asset,off,dur):

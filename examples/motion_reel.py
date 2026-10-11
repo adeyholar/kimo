@@ -1,8 +1,8 @@
 # Motion reel: expressions (wiggle / sin orbits / loops), bezier overshoot, echo light trails, motion blur, glow.
-import sys, math; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
+import sys, math; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
 W,H,FPS=1280,720,25
-k=Kino(); k.call("project_set",width=W,height=H,fps=FPS); C=k.call
+k=Kimo(); k.call("project_set",width=W,height=H,fps=FPS); C=k.call
 def trk(): return C("add_track")["track_id"]
 def shape(t,s,st,d,w,h,col,x=0,y=0,**kw):
     c=C("add_shape",track_id=t,shape=s,start=st,duration=d,width=w,height=h,fill=col,**kw)["clip_id"]
@@ -33,8 +33,8 @@ for i,(col,R,f,ph) in enumerate([([1,1,1],260,0.30,0.0),([0.4,0.85,1],260,0.30,0
     C("set_expression",clip_id=d,property="y",op="sin",freq=abs(f),amp=R*(1 if f>0 else -1)*0.62,phase=ph)
     C("set_echo",clip_id=d,count=18,spacing=0.022,decay=0.86,mode="add"); C("set_motion_blur",clip_id=d,shutter_angle=180)
     C("add_effect",clip_id=d,kind="outer_glow",params={"radius":18,"intensity":1.0}) ; key(d,"scale",[(0.2,0),(0.9,1)],"out_back"); fade(d,D,0.5,0.4)
-# KINO title
-tt=trk(); ti=C("add_text",track_id=tt,text="KINO",start=0,duration=D,size=230,color=[1,1,1],letter_spacing=26)["clip_id"]
+# KIMO title
+tt=trk(); ti=C("add_text",track_id=tt,text="KIMO",start=0,duration=D,size=230,color=[1,1,1],letter_spacing=26)["clip_id"]
 C("add_effect",clip_id=ti,kind="outer_glow",params={"radius":26,"intensity":0.7}); C("set_motion_blur",clip_id=ti,shutter_angle=200)
 key(ti,"scale",[(0.35,0.35),(1.15,1.0)],"linear",bez=[0.34,1.75,0.64,1]); key(ti,"opacity",[(0.35,0),(0.6,1),(D-0.5,1),(D,0)])
 C("set_expression",clip_id=ti,property="rotation",op="wiggle",freq=0.8,amp=1.1,octaves=2,seed=2)

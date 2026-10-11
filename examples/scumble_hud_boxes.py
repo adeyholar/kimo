@@ -1,7 +1,7 @@
 # SCUMBLE 3.7-7.7s: HUD viewfinder screen, detection boxes snap in, then fill with the photo (box-fill reveal via animated mask).
-import sys; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); k.call("project_set",width=1280,height=720,fps=25)
+import sys; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); k.call("project_set",width=1280,height=720,fps=25)
 D=4.0
 def trk(): return k.call("add_track")["track_id"]
 t=trk(); k.call("add_hud_frame",track_id=t,start=0,duration=D,label="BOXES",bpm=125,tc_start=4.32)

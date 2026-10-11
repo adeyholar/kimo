@@ -173,7 +173,7 @@ Gamutrayfollow-up: fixedboundarydistanceinitialization toallowactualinsidecubedi
 
 ## Optional pinned OpenColorIO ACES2 reference preview
 `render_aces2_reference` is an opt-in reference-onlySDR100Rec709PNG from explicitlydeclaredACEScg/AP1scene-linear workingframe. Requirespython3withopencolorio==2.5.1 available to theserver; noautomaticinstall. Usespinnedbuiltin`cg-config-v4.0.0_aces-v2.0_ocio-v2.5`, display`sRGB - Display`, view`ACES 2.0 - SDR 100 nits (Rec.709)`. Bypassesourconfiguredoutput transform, no doubleencoding. Notprojectdefault, industrysuperiority, measuredmasteringorACEScertification. Missing/wrongdependencyfailsclearly. Optional CPU processor is now reused per explicit reference video export; not production HDR delivery. OCIOitselfnotvendoredhere.
-Actual640x360referenceCPU0.109s; fullMCPdecode/bridge/PNG0.672s. IndependentdirectPyOpenColorIO vsbridgePNGmaxcodeerror0 on sameEXRinput; actualpixelsvisuallyinspected intactdarkerfilmiccards. Domainrejectiontests and optionalrealprocessorfinite/alpha testpassed withKINO_TEST_OCIO=1. Sources: https://opencolorio.readthedocs.io/en/v2.5.1/releases/ocio%5F2%5F5.html ; https://github.com/AcademySoftwareFoundation/OpenColorIO-Config-ACES/releases/tag/v3.0.0 ; https://docs.acescentral.com/system-components/output-transforms/implementer-notes/ ; https://docs.acescentral.com/system-components/output-transforms/parameters/ . UpstreamOCIOlicense https://raw.githubusercontent.com/AcademySoftwareFoundation/OpenColorIO/main/LICENSE permitsredistributionwithnotice, noendorsement; installer/dependencyredistributors mustretainupstreamlicense. Currentimplementationdoesnotcopyupstreamalgorithmcode, callsinstalledprocessor.
+Actual640x360referenceCPU0.109s; fullMCPdecode/bridge/PNG0.672s. IndependentdirectPyOpenColorIO vsbridgePNGmaxcodeerror0 on sameEXRinput; actualpixelsvisuallyinspected intactdarkerfilmiccards. Domainrejectiontests and optionalrealprocessorfinite/alpha testpassed withKIMO_TEST_OCIO=1. Sources: https://opencolorio.readthedocs.io/en/v2.5.1/releases/ocio%5F2%5F5.html ; https://github.com/AcademySoftwareFoundation/OpenColorIO-Config-ACES/releases/tag/v3.0.0 ; https://docs.acescentral.com/system-components/output-transforms/implementer-notes/ ; https://docs.acescentral.com/system-components/output-transforms/parameters/ . UpstreamOCIOlicense https://raw.githubusercontent.com/AcademySoftwareFoundation/OpenColorIO/main/LICENSE permitsredistributionwithnotice, noendorsement; installer/dependencyredistributors mustretainupstreamlicense. Currentimplementationdoesnotcopyupstreamalgorithmcode, callsinstalledprocessor.
 
 
 ## Persistent optional ACES2 reference video
@@ -234,7 +234,7 @@ Caller-declared mastering white must lie within its primary triangle (nonnegativ
 Decoded windows now carry explicit `still` identity. A one-frame video window at frame0 no longer claims to cover every later timeline index; only actual still-image paths get that reuse. This prevents frozen first-frame output when decode budgets shrink video windows to one frame or a source ends early. Direct window regression plus actual shared-source/nested-export/float-interchange tests pass. This intentionally changes a public Rust `Frames` struct field, so external literal initializers must set `still`; MCP schemas unchanged.
 
 ## Fractional instant cache range
-Normal playback instant samples request their floor frame rather than floor..ceil, avoiding false memory rejection when only one frame is needed. Flow blur explicitly retains the next-frame requirement and fails if the budget cannot hold it instead of pretending duplicate-frame flow. Range, reverse/freeze and speed-curve paths retain prior bounds. Actual KINO_MEM_MB=3 /4active managed128x72clips: fractional.28frame now renders blue correctly; flowblur at the same time still returns active-range budget error. Five cache tests pass; blue output pixels inspected.
+Normal playback instant samples request their floor frame rather than floor..ceil, avoiding false memory rejection when only one frame is needed. Flow blur explicitly retains the next-frame requirement and fails if the budget cannot hold it instead of pretending duplicate-frame flow. Range, reverse/freeze and speed-curve paths retain prior bounds. Actual KIMO_MEM_MB=3 /4active managed128x72clips: fractional.28frame now renders blue correctly; flowblur at the same time still returns active-range budget error. Five cache tests pass; blue output pixels inspected.
 
 ## Stalled reference process timeout regression
 A real optional OCIO child is stopped with SIGSTOP in the test, then a private short-deadline invocation confirms timeout poisons the session, kills/reaps the stalled process and rejects reuse within2seconds. Production apply still uses60seconds and100ms cancellation/check intervals; no user-configurable bypass. Six library and7OCIO tests pass. This verifies stalled Python processor lifecycle, not synchronous ffmpeg write deadlines.
@@ -408,7 +408,7 @@ Deliberate behavior change: a scope encoder that exits unsuccessfully now return
 
 Real source footage rendered at320x180 produced exact old/new PNG file hashes for all three diagnostic/reference tools, all four scope kinds and a configured AP0/PQ16-bit still. The scope and high-bit proof also compared decoded RGBA8/RGBA16LE samples exactly. For the four scopes, file SHA256 values were waveform `ffe98824674418c15f89349b3e1f1165da50b124d67b913ad28bcbab8d51d980`, parade `b885fb2dda33ebb65422729c6d538ee25df99702ba7ae6c5c890f15c1bdec8ce`, vectorscope `a01ab497f3ea3ef04bdbdd518bc9448679f96d01cb4fa00f8b45ef54a0b7fb4f`, histogram `f048a72c81b4dc807693cb0081fea3b1d648f3bb648f932b2f2f2481fef6ae10`. The PQ still file SHA256 was `37bdc78943759a0b38db13ad892b782451efdb796968e0d53586bbdc251ce1d5`; its460800decoded bytes had SHA256 `51ec1570d949110bbe4a921ed5057000c53309f110f3d4d426ea313b8bbc85d3`. This is same-engine output parity on SDR-origin footage, not HDR source validation, display calibration or certification. The encoded PQ PNG is not an SDR preview.
 
-198tests passed with the actual optional reference-test gate `KINO_TEST_OCIO=1` and the pinned dependency available; dependency presence alone does not activate those test bodies. Publication fuzz covered157tools/6101calls with0failures. Timings were recorded per render, without a speedup claim. At that checkpoint, scope raster cancellation and optional reference lifecycle were separate review areas; the next sections record those changes. Encoder deadlines include waiting for ffmpeg file-output completion, but do not make direct Rust file writes interruptible. Legacy audio decode/analysis and local file IO remain separate review areas.
+198tests passed with the actual optional reference-test gate `KIMO_TEST_OCIO=1` and the pinned dependency available; dependency presence alone does not activate those test bodies. Publication fuzz covered157tools/6101calls with0failures. Timings were recorded per render, without a speedup claim. At that checkpoint, scope raster cancellation and optional reference lifecycle were separate review areas; the next sections record those changes. Encoder deadlines include waiting for ffmpeg file-output completion, but do not make direct Rust file writes interruptible. Legacy audio decode/analysis and local file IO remain separate review areas.
 
 
 ### Scope raster cooperative cancellation (123)
@@ -417,7 +417,7 @@ Scope PNG generation checks the call guard before work, every32source rows for w
 ### Optional reference invalid-output lifecycle (124)
 The OCIO processor validates returned RGBA shape, finite RGB/alpha and alpha0..1 through the shared frame contract. Invalid output closes the input queue, kills/reaps the child, joins its workers and refuses reuse. Finite signed/HDR RGB remains untouched; alpha0,0.5and1 pass exactly. Invalid input still fails before queueing and leaves a valid processor usable. The production python command, pinned bridge/config, dependency requirements and opt-in/default behavior are unchanged.
 
-Three dependency-free fake-child regressions cover nonfinite RGB, invalid alpha, truncated/stalled output cleanup and no reuse, plus exact extended-RGB/alpha echo after a recoverable input error. Actual pinned OCIO real-footage reference output file hashes were identical before/after: SDR PNG SHA256 `168fed5480361aae731343d938c1ace7990a3ad109cea45bb550830045b33b88`,1s/25frame video-only reference MP4 SHA256 `c12ae14b7bc00d2f15c59780848305a6203644e61193570c810f26f17943bc59`.202tests passed with `KINO_TEST_OCIO=1` and the pinned dependency available; publication fuzz covered157tools/6109calls with0failures. The reference artifacts were visually checked as well. This is lifecycle and same-engine output parity evidence, not independent ACES/HDR certification or proof for every subprocess failure mode.
+Three dependency-free fake-child regressions cover nonfinite RGB, invalid alpha, truncated/stalled output cleanup and no reuse, plus exact extended-RGB/alpha echo after a recoverable input error. Actual pinned OCIO real-footage reference output file hashes were identical before/after: SDR PNG SHA256 `168fed5480361aae731343d938c1ace7990a3ad109cea45bb550830045b33b88`,1s/25frame video-only reference MP4 SHA256 `c12ae14b7bc00d2f15c59780848305a6203644e61193570c810f26f17943bc59`.202tests passed with `KIMO_TEST_OCIO=1` and the pinned dependency available; publication fuzz covered157tools/6109calls with0failures. The reference artifacts were visually checked as well. This is lifecycle and same-engine output parity evidence, not independent ACES/HDR certification or proof for every subprocess failure mode.
 
 
 ### Speed-ramp source windows and overrun policy (127/128)
@@ -505,7 +505,7 @@ existing clip-only export_grade_lut. fields: steps (1..64), path(.cube),
 size17/33/65(default33), time(frozen parameter time, default0),
 domain_min/domain_max (three finite numbers, default[0,0,0]/[1,1,1], within+-16).
 Steps:
-- {type:effect, kind:exposure, params:{stops:{base:0.5}}}; params use Kino Prop
+- {type:effect, kind:exposure, params:{stops:{base:0.5}}}; params use Kimo Prop
   JSON (base, optionalkeys/expr). Only supported pointwise kinds; wrapper encoding
   supported. Explicit color_managed steps name gamut/transfer conversions.
 - {type:ocio, config_path:..., source:ACEScg, destination:ACEScct}
@@ -521,7 +521,7 @@ matte-dependent grades, tracking, motion or automatic per-shot analysis. These
 are rejected, not silently omitted. Animation freezes at the explicit time.
 Alpha behavior is not encoded. Red changes fastest in standard.cube data order.
 Output is finite and unbounded up to parser1e6 limit; inputs outside domain clamp
-on Kino reapplication. Other apps may clamp outputs or interpolate differently.
+on Kimo reapplication. Other apps may clamp outputs or interpolate differently.
 
 Tool reports deterministic4105pixel tetrahedral error metrics from the serialized
 LUT against direct transform: max, p99, RMS. These probes are not an error bound
@@ -560,7 +560,7 @@ proof. NativeOCIO2 required, self-containedconfigs. No defaults/outputchanges.
 
 Numeric params: lift_r/g/b(default0, -1..1exclusive), gamma_r/g/b(default1,
 0.1..10), gain_r/g/b(default1,0.01..10), offset_r/g/b(default0,+-1), inverse0/1.
-Exact Kino formula in encodedACEScct: y=signedpow(x+lift*(1-x),1/gamma)*gain+offset.
+Exact Kimo formula in encodedACEScct: y=signedpow(x+lift*(1-x),1/gamma)*gain+offset.
 Inverse: x=(signedpow((y-offset)/gain,gamma)-lift)/(1-lift).
 This black-pivot/white-anchor lift, signedgamma, gain thenoffset is explicit,
 NOT a promise of Resolve/Baselight wheel semantics or perceptual hue preservation.
@@ -700,7 +700,7 @@ Prop per input), effect (grade only: id/kind/params/strings), optional MaskLayer
 bypass. Grade accepts one input. Parallel normalizes nonnegative0..1weights
 and averages RGB; layer uses first input as base, then blends later RGB inputs
 by their weights in order (first weight ignored). First input alpha is exact.
-These are defined kino mixers, not claimed Resolve mixer semantics. Mask/key
+These are defined kimo mixers, not claimed Resolve mixer semantics. Mask/key
 coverage is computed on first input and blends node output to it. Mask kinds:
 rect/ellipse/path/linear/radial/luma/color/hsl/alpha/noise; no cross-clip mattes.
 Mask props/path keys are fully editable. `grade_node_tracking` imports normalized

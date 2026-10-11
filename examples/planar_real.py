@@ -1,7 +1,7 @@
 # Real-footage planar track: overpass face in the reference (camera shake + zoom), translucent quad pinned to the tracked surface.
-import sys,time; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); C=k.call; C("project_set",width=1280,height=720,fps=25); a=C("import_media",path="/downloads/video-c61877f1.mp4")["asset_id"]; t=C("add_track")["track_id"]
+import sys,time; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); C=k.call; C("project_set",width=1280,height=720,fps=25); a=C("import_media",path="/downloads/video-c61877f1.mp4")["asset_id"]; t=C("add_track")["track_id"]
 D=float(sys.argv[2]); m=C("add_clip",track_id=t,source_type="media",asset_id=a,start=0,duration=D,in_point=float(sys.argv[1]))["clip_id"]
 t2=C("add_track")["track_id"]; q=C("add_clip",track_id=t2,source_type="solid",color=[1,0.1,0.6],start=0,duration=D)["clip_id"]; C("set_opacity",clip_id=q,value=0.45) if False else None
 C("set_keyframe",clip_id=q,property="opacity",time=0,value=0.45)

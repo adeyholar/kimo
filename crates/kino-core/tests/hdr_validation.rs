@@ -1,5 +1,5 @@
-use kino_core::color::{hdr_validation::*, metadata::Mastering};
-use kino_core::effects::Frame;
+use kimo_core::color::{hdr_validation::*, metadata::Mastering};
+use kimo_core::effects::Frame;
 fn metadata() -> Mastering {
     Mastering {
         red: [0.68, 0.32],
@@ -184,7 +184,7 @@ fn static_metadata_exact_serialization_and_independent_content_peak() {
 }
 #[test]
 fn read_only_diagnostics_and_identity_paths() {
-    use kino_core::{
+    use kimo_core::{
         color::pipeline::output,
         commands::{dispatch, Session},
     };
@@ -218,7 +218,7 @@ fn read_only_diagnostics_and_identity_paths() {
     output(&s.project, &mut f).unwrap();
     assert_eq!(bits, f.d.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
     assert_eq!(
-        kino_core::color::managed::encode(7, 0.18, 100.0).to_bits(),
-        kino_core::color::managed::encode(7, 0.18, 203.0).to_bits()
+        kimo_core::color::managed::encode(7, 0.18, 100.0).to_bits(),
+        kimo_core::color::managed::encode(7, 0.18, 203.0).to_bits()
     );
 }

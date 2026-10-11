@@ -1,4 +1,4 @@
-"""Motion-graphics recipes built only from kino MCP tools (real easing, staggers, motion blur, restrained light)."""
+"""Motion-graphics recipes built only from kimo MCP tools (real easing, staggers, motion blur, restrained light)."""
 import math
 class MG:
     def __init__(s, k, W, H, fps=24): s.off=0; s.k=k; s.W=W; s.H=H; s.u=H/1080.0; s.fps=fps

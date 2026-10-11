@@ -1,4 +1,4 @@
-use kino_core::matting::*; use kino_core::sfm::Rng;
+use kimo_core::matting::*; use kimo_core::sfm::Rng;
 fn noise_tex(w: usize, h: usize, seed: u64, base: [f32; 3]) -> Vec<f32> { let mut r = Rng(seed); let mut o = vec![0f32; w * h * 3]; let mut grid = vec![[0f32; 3]; 40 * 40]; for g in grid.iter_mut() { for c in 0..3 { g[c] = (r.next() % 1000) as f32 / 1000.0; } }
     for y in 0..h { for x in 0..w { let (fx, fy) = (x as f32 / 8.0, y as f32 / 8.0); let (gx, gy) = (fx as usize, fy as usize); let (ax, ay) = (fx - gx as f32, fy - gy as f32); for c in 0..3 { let g = |a: usize, b: usize| grid[(b % 40) * 40 + a % 40][c]; let v = g(gx, gy) * (1.0 - ax) * (1.0 - ay) + g(gx + 1, gy) * ax * (1.0 - ay) + g(gx, gy + 1) * (1.0 - ax) * ay + g(gx + 1, gy + 1) * ax * ay; o[(y * w + x) * 3 + c] = (base[c] + 0.35 * (v - 0.5)).clamp(0.0, 1.0); } } } o }
 #[test] fn refines_soft_edges_and_hair_better_than_rough_seed() {

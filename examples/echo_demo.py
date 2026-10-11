@@ -1,7 +1,7 @@
 # Echo / temporal smear / posterize time proof: 4 rows moving the same object.
-import sys; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); k.call("project_set",width=1280,height=720,fps=25); D=3.0
+import sys; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); k.call("project_set",width=1280,height=720,fps=25); D=3.0
 def row(y,col,shape="ellipse"):
     t=k.call("add_track")["track_id"]; c=k.call("add_shape",track_id=t,shape=shape,start=0,duration=D,width=90,height=90,fill=col)["clip_id"]
     k.call("set_property",clip_id=c,property="y",value=y)

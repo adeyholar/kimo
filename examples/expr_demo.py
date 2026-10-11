@@ -1,7 +1,7 @@
 # Expressions + bezier handles proof: 4 squares. A wiggle, B loop_out pingpong, C bezier overshoot vs D linear, with posterize_time on a 5th.
-import sys; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); k.call("project_set",width=1280,height=720,fps=25)
+import sys; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); k.call("project_set",width=1280,height=720,fps=25)
 D=3.0
 def box(x,y,col):
     t=k.call("add_track")["track_id"]; return k.call("add_shape",track_id=t,shape="rect",start=0,duration=D,width=110,height=110,fill=col,corner_radius=12)["clip_id"]

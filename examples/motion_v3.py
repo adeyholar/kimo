@@ -1,8 +1,8 @@
 import sys; sys.path.insert(0,'examples')
-from mcp_client import Kino
+from mcp_client import Kimo
 from motion_lib import MG
 W,H=int(sys.argv[1]) if len(sys.argv)>1 else 640, int(sys.argv[2]) if len(sys.argv)>2 else 360
-k=Kino(); k.call("project_set",width=W,height=H,fps=24); m=MG(k,W,H); u=m.u; D=6.0; PX=W/1920.0
+k=Kimo(); k.call("project_set",width=W,height=H,fps=24); m=MG(k,W,H); u=m.u; D=6.0; PX=W/1920.0
 tr={n:k.call("add_track")["track_id"] for n in ["bg","geo","dust","rings","text","fx"]}
 def ring_shape(track,start,dur,size,color,sw,shape="ellipse",sides=6):
     c=k.call("add_shape",track_id=track,shape=shape,start=start,duration=dur,width=size*u,height=size*u,fill=[-1,-1,-1],stroke_width=sw*u,stroke_color=list(color),sides=sides)["clip_id"]; return c

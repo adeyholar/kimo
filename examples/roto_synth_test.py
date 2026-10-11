@@ -1,6 +1,6 @@
 # Rotoscope assist test with exact ground truth: a textured, rotating, accelerating ellipse composited over real footage (first N frames of a video),
 # keys at the two ends (exact outline), IoU measured on every held-out frame for baseline interpolation vs roto_propagate.
-import sys,subprocess,math,numpy as np,time;sys.path.insert(0,'/home/sandbox/kino/examples');from mcp_client import Kino
+import sys,subprocess,math,numpy as np,time;sys.path.insert(0,'/home/sandbox/kimo/examples');from mcp_client import Kimo
 from PIL import Image,ImageDraw,ImageFilter
 src=sys.argv[1];ip=float(sys.argv[2]);N=int(sys.argv[3]) if len(sys.argv)>3 else 25;snaps=[None,6.0]
 W,H,FPS=720,1280,25
@@ -24,7 +24,7 @@ def iou(a,b): return (a&b).sum()/max(1,(a|b).sum())
 def pts(i): return [{'x':x/W,'y':y/H} for x,y in poly(i)]
 out={}
 for snap in snaps:
-    subprocess.run(['pkill','kino-mcp']);k=Kino();C=k.call;C('project_set',width=W,height=H,fps=FPS)
+    subprocess.run(['pkill','kimo-mcp']);k=Kimo();C=k.call;C('project_set',width=W,height=H,fps=FPS)
     a=C('import_media',path='/tmp/roto_synth.mp4')['asset_id'];t=C('add_track')['track_id'];c=C('add_clip',track_id=t,source_type='media',asset_id=a,start=0,duration=N/FPS+0.04)['clip_id']
     m=C('add_mask',clip_id=c,kind='path',points=pts(0),closed=True,interp='linear')['mask_id'];C('set_mask_path_key',clip_id=c,mask_id=m,time=0.0,points=pts(0));C('set_mask_path_key',clip_id=c,mask_id=m,time=N/FPS,points=pts(N))
     t0=time.time();info=C('roto_propagate',clip_id=c,mask_id=m,snap=snap,trust=float(__import__('os').environ.get('TR','0.12'))) if snap is not None else {};dt=time.time()-t0;ious=[]

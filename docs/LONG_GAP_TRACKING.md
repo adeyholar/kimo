@@ -33,7 +33,7 @@ clip transforms, effects and masks, not to the final composited result.
 
 ## Proof at e9c4762 + this patch
 
-`cargo test -p kino-core --lib`: 91 passed (85 baseline + 6 focused tests).
+`cargo test -p kimo-core --lib`: 91 passed (85 baseline + 6 focused tests).
 Focused tests cover 300-frame disappearance, shifted reappearance and confirmation,
 identical distractors, interrupted confirmation, affine intensity changes,
 malformed/flat/out-of-frame inputs, command registration and read-only errors.

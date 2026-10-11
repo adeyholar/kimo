@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """MCP-level proof for refine_matte on H.264 footage: textured fg with soft edge + hair strands over a textured bg, rough outline seed, measures alpha error vs ground truth.
-usage: python3 examples/refine_matte_proof.py [kino-mcp]; writes /tmp/matte_proof_{seed,alpha,gt,frame}.png"""
+usage: python3 examples/refine_matte_proof.py [kimo-mcp]; writes /tmp/matte_proof_{seed,alpha,gt,frame}.png"""
 import sys, json, subprocess, os, numpy as np, tempfile
 W, H = 640, 360; rng = np.random.default_rng(4)
 def tex(base):
@@ -18,7 +18,7 @@ img = gt[..., None] * fg + (1 - gt[..., None]) * bg; tmp = tempfile.mkdtemp(); m
 p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", "24", "-i", "-", "-t", "0.2", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", mp4], stdin=subprocess.PIPE)
 for _ in range(5): p.stdin.write((img * 255).astype(np.uint8).tobytes())
 p.stdin.close(); p.wait()
-srv = subprocess.Popen([sys.argv[1] if len(sys.argv) > 1 else "target/release/kino-mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True); mid = [0]
+srv = subprocess.Popen([sys.argv[1] if len(sys.argv) > 1 else "target/release/kimo-mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True); mid = [0]
 def rpc(m, params=None): mid[0] += 1; srv.stdin.write(json.dumps({"jsonrpc": "2.0", "id": mid[0], "method": m, "params": params or {}}) + "\n"); srv.stdin.flush(); return json.loads(srv.stdout.readline())
 def call(n, a):
     r = rpc("tools/call", {"name": n, "arguments": a})["result"]; t = r["content"][0]["text"]
@@ -28,7 +28,8 @@ rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientI
 call("project_set", {"width": W, "height": H, "fps": 24}); a = call("import_media", {"path": mp4})["asset_id"]; tr = call("add_track", {})["track_id"]
 cid = call("add_clip", {"track_id": tr, "source_type": "media", "asset_id": a, "start": 0, "duration": 0.2})["clip_id"]
 th = np.linspace(0, 2 * np.pi, 72, endpoint=False); poly = [[float(322 + 168 * np.cos(t)), float(178 + 121 * np.sin(t))] for t in th]  # rough, ~3px off
-r = call("refine_matte", {"clip_id": cid, "time": 0.0, "points": poly, "band": 10, "out_png": "/tmp/matte_proof_alpha.png", "fg_png": "/tmp/matte_proof_fg.png"})
+r = call("refine_matte", {"clip_id": cid, "time": 0.0, "points": poly, "band": 10, "out_png": "/tmp/matte_proof_alpha.png", "fg_png": "/tmp/matte_proof_fg.png", **__import__("json").loads(__import__("os").environ.get("MATTE_FLAGS", "{}"))})
+print("per_frame", r["per_frame"])
 print(json.dumps({k: r[k] for k in ("method", "frames", "seconds", "per_frame", "mask_id")}))
 raw = open(os.path.join(r["dir"], "matte.bin"), "rb").read()[16:]; al = np.frombuffer(raw, np.uint8)[: W * H].reshape(H, W) / 255.0
 seed = (((xs - 322) / 168) ** 2 + ((ys - 178) / 121) ** 2 < 1).astype(np.float32)
