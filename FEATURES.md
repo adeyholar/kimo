@@ -364,3 +364,5 @@ must match the current working gamut and does not affect ordinary export.
 Caller declares source gamut/white and view output encoding; tags do not prove
 these declarations. Existing mastering metadata is NOT inherited. No native
 HDR mastering certification. Integer outputs clip 0..1 and HEVC uses YUV420.
+
+- Backdrop access for effects (BETA, engine capability): an effect can declare `needs_backdrop` (effects2::needs_backdrop); the renderer then gives it a read-only copy of the composite below its layer via render::backdrop() (one frame copy, built only for clips carrying such an effect; thread-local so parallel export is safe). First user: fracture_glass `transmission` (0..1, default 0, so existing output is unchanged): shard faces mix in the real background, refracted with per-channel dispersion. Verified visually on the test rig (faces show the background instead of flat source chips); not yet verified on the film, and refraction is a distortion offset, not a ray-traced lens. Limit: only fracture_glass uses it so far.
