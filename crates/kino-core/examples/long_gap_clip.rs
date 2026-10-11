@@ -18,6 +18,9 @@ fn main() {
     if let Some(f) = a.get(2) {
         args["end_frame"] = json!(f.parse::<usize>().unwrap());
     }
+    if a.get(3).map(|v| v == "memory").unwrap_or(false) {
+        args["appearance_memory"] = json!(true);
+    }
     let now = std::time::Instant::now();
     let mut result = dispatch(&mut s, "track_long_gap", &args).unwrap();
     assert_eq!(before, serde_json::to_value(&s.project).unwrap());

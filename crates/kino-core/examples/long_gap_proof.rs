@@ -26,6 +26,9 @@ fn main() {
         2,
     )
     .unwrap();
+    if a.get(10).map(|v| v == "memory").unwrap_or(false) {
+        t.enable_memory();
+    }
     let mut out = vec![Sample {
         frame: 0,
         time: 0.,

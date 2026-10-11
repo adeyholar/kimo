@@ -47,12 +47,16 @@ struct Candidate {
     b: BoxPx,
     score: f64,
 }
-/// The immutable seed cannot be contaminated by an occluder. Memory independent of gap length.
+/// Immutable seed plus optional bounded trusted appearance bank. Memory independent of gap length.
 pub struct Tracker {
     w: usize,
     h: usize,
     anchor: Vec<f64>,
     seed: BoxPx,
+    memory: Vec<Vec<f64>>,
+    memory_enabled: bool,
+    last_box: Option<BoxPx>,
+    stable: usize,
     threshold: f64,
     margin: f64,
     visible: bool,
@@ -124,6 +128,10 @@ impl Tracker {
             h,
             anchor,
             seed: b,
+            memory: vec![],
+            memory_enabled: false,
+            last_box: Some(b),
+            stable: 0,
             threshold,
             margin,
             visible: true,
@@ -132,14 +140,28 @@ impl Tracker {
             confirm,
         })
     }
+    /// Opt-in: store up to eight trusted appearance anchors; seed is never replaced.
+    pub fn enable_memory(&mut self) {
+        self.memory_enabled = true;
+    }
     fn score(&self, g: &[f32], b: BoxPx) -> f64 {
         descriptor(g, self.w, self.h, b)
-            .map(|v| v.iter().zip(&self.anchor).map(|(a, b)| a * b).sum::<f64>())
+            .map(|v| {
+                std::iter::once(&self.anchor)
+                    .chain(self.memory.iter())
+                    .map(|anchor| v.iter().zip(anchor).map(|(a, b)| a * b).sum::<f64>())
+                    .fold(-1., f64::max)
+            })
             .unwrap_or(-1.)
     }
     fn search(&self, g: &[f32]) -> (Candidate, f64) {
         let mut coarse = Vec::new();
-        for scale in [0.65, 0.8, 1., 1.2, 1.5] {
+        let scales: &[f64] = if self.memory_enabled {
+            &[0.8, 1., 1.2]
+        } else {
+            &[0.65, 0.8, 1., 1.2, 1.5]
+        };
+        for &scale in scales {
             let (bw, bh) = (self.seed.w * scale, self.seed.h * scale);
             if bw < 8. || bh < 8. || bw > self.w as f64 || bh > self.h as f64 {
                 continue;
@@ -251,6 +273,32 @@ impl Tracker {
             self.pending = None;
             self.hits = 0;
         }
+        if self.memory_enabled {
+            if bbox.is_some()
+                && self.last_box.map(|b| b.iou(c.b) > 0.5).unwrap_or(false)
+                && c.score >= 0.88
+                && margin >= 0.12
+            {
+                self.stable += 1;
+                if self.stable >= 3 {
+                    if let Some(v) = descriptor(g, self.w, self.h, c.b) {
+                        let novelty = std::iter::once(&self.anchor)
+                            .chain(self.memory.iter())
+                            .map(|a| a.iter().zip(&v).map(|(a, b)| a * b).sum::<f64>())
+                            .fold(-1., f64::max);
+                        if novelty < 0.98 {
+                            if self.memory.len() == 8 {
+                                self.memory.remove(0);
+                            }
+                            self.memory.push(v);
+                        }
+                    }
+                }
+            } else {
+                self.stable = 0;
+            }
+            self.last_box = bbox;
+        }
         Ok(Sample {
             frame,
             time,
@@ -287,6 +335,7 @@ pub fn run(p: &Project, a: &Value) -> Result<Value, String> {
         "threshold",
         "margin",
         "confirm_frames",
+        "appearance_memory",
     ];
     let obj = a.as_object().ok_or("expected object")?;
     if obj.keys().any(|k| !allowed.contains(&k.as_str())) {
@@ -356,6 +405,11 @@ pub fn run(p: &Project, a: &Value) -> Result<Value, String> {
         number(a, "margin", 0.08)?,
         integer(a, "confirm_frames", 2)?,
     )?;
+    match a.get("appearance_memory") {
+        None | Some(Value::Bool(false)) => {}
+        Some(Value::Bool(true)) => tracker.enable_memory(),
+        _ => return Err("appearance_memory must be boolean".into()),
+    }
     let mut samples = vec![Sample {
         frame: first,
         time: first as f64 / p.fps,
@@ -379,7 +433,7 @@ pub fn run(p: &Project, a: &Value) -> Result<Value, String> {
         }
     }
     Ok(
-        json!({"samples":samples,"coordinate_space":"fitted_canvas_pixels_pre_effects","time_space":"clip_local_seconds","analysis_size":[w,h],"mutated":false,"limits":"Immutable grayscale appearance template; translation and discrete seed-relative scales .65/.8/1/1.2/1.5 only. Not semantic re-ID, rotation or deformation. Lost/tentative boxes are null. Identical-looking objects can remain ambiguous or swap."}),
+        json!({"samples":samples,"coordinate_space":"fitted_canvas_pixels_pre_effects","time_space":"clip_local_seconds","analysis_size":[w,h],"appearance_memory":tracker.memory_enabled,"learned_anchors":tracker.memory.len(),"mutated":false,"limits":"Grayscale appearance templates; immutable seed, optional bounded learned anchors. Translation and discrete seed-relative scales only (.65/.8/1/1.2/1.5 without memory; .8/1/1.2 with memory). Not semantic re-ID, rotation or deformation. Lost/tentative boxes are null. Identical-looking objects can remain ambiguous or swap."}),
     )
 }
 
@@ -447,6 +501,63 @@ mod tests {
         let s = t.step(&g, 1, 1.).unwrap();
         assert_eq!(s.state, "visible");
         assert!((s.bbox.unwrap().x - 60.).abs() <= 1.);
+    }
+    #[test]
+    fn memory_duplicate_and_occlusion_cannot_update() {
+        let mut t = tracker();
+        t.enable_memory();
+        // Trusted slight appearance change creates bank entries.
+        let mut g = frame(&[10]);
+        for y in 20..44 {
+            for x in 10..34 {
+                g[y * 96 + x] += (x as f32 * 0.8).sin() * 35.;
+            }
+        }
+        for i in 1..=6 {
+            let s = t.step(&g, i, i as f64).unwrap();
+            assert_eq!(s.state, "visible");
+        }
+        assert!(!t.memory.is_empty());
+        let before = t.memory.clone();
+        let mut duplicate = g.clone();
+        for y in 20..44 {
+            for x in 0..24 {
+                duplicate[y * 96 + 60 + x] = g[y * 96 + 10 + x];
+            }
+        }
+        let s = t.step(&duplicate, 7, 7.).unwrap();
+        assert_eq!(s.state, "lost");
+        assert!(s.bbox.is_none());
+        assert_eq!(t.memory, before);
+        for i in 8..108 {
+            let s = t.step(&frame(&[]), i, i as f64).unwrap();
+            assert_eq!(s.state, "lost");
+            assert!(s.bbox.is_none());
+        }
+        assert_eq!(t.memory, before);
+        assert_eq!(t.step(&g, 108, 108.).unwrap().state, "tentative");
+        assert_eq!(t.memory, before);
+        assert_eq!(t.step(&g, 109, 109.).unwrap().state, "reacquired");
+        assert!(t.memory.len() <= 8);
+    }
+    #[test]
+    fn memory_stops_on_discontinuous_appearance() {
+        let mut t = tracker();
+        t.enable_memory();
+        for i in 1..5 {
+            t.step(&frame(&[10]), i, i as f64).unwrap();
+        }
+        let before = t.memory.clone();
+        let mut g = frame(&[10]);
+        for y in 20..44 {
+            for x in 10..34 {
+                g[y * 96 + x] = 255. - g[y * 96 + x];
+            }
+        }
+        let s = t.step(&g, 5, 5.).unwrap();
+        assert_eq!(s.state, "lost");
+        assert!(s.bbox.is_none());
+        assert_eq!(before, t.memory);
     }
     #[test]
     fn flat_and_invalid_inputs() {

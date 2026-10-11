@@ -83,3 +83,48 @@ Boxes can shrink to a face subregion even if the seed included more of the head.
 The default is intentionally allowed to abstain. Threshold tuning cannot turn
 this into semantic re-ID. Returned null gaps must stay null unless separately
 reviewed; do not interpolate them as observed motion.
+
+## Level 2: opt-in appearance memory
+
+`appearance_memory: true` enables an eight-entry descriptor bank plus the
+immutable seed. Default false preserves the previous behavior. Memory mode
+uses .8/1/1.2 seed-relative scales to reduce runaway box shrinkage. Learning
+requires three consecutive accepted observations with IoU > .5 versus the
+previous reported box, NCC >= .88 and distinct-candidate margin >= .12.
+Learn only novel descriptors (maximum existing-anchor correlation < .98).
+Evict the oldest learned descriptor, never the seed. No learning on lost,
+ambiguous or tentative frames. Reacquisition still needs consecutive-frame
+confirmation. Scores are maximum correlation over all anchors; duplicate
+ambiguity is evaluated against that same bank, not merely the seed.
+Output includes `appearance_memory` and `learned_anchors` for diagnostics.
+
+Natural faceocc2 proof, same original seed and thresholds: 528/812 boxes
+versus 220/812 without memory. Reacquisitions at 39, 87, 272, 499, 568, 573,
+579, 584 and 599. Read-only command including real windowed decode: 43.41s
+on losslessly re-encoded MP4 (the original WebM has no stream duration,
+which the existing import probe reports as zero; no probe changes here).
+Mean reported-box center error 8.15px, maximum 20.72px. All 528 reported
+boxes overlap the annotated subject at IoU >= .544; zero IoU < .5 boxes
+on this clip. This is evidence against a false spatial lock on this clip,
+not an identity guarantee in arbitrary footage. Ground truth is used only
+for scoring, never for choosing anchors or adjusting observed boxes.
+
+The contact sheet was inspected: frame 317 remains on the face; tilted face
+with book occluder is recovered at 499; 568 and 599 are during the cap-change
+sequence and remain on the annotated head. Later cap-wearing frames at
+650/700/750/800 still abstain. The bank extends gradual change but does NOT
+solve the full new-cap appearance. No claim of complete cap re-ID.
+
+Memory-mode controlled blackout command: zero boxes across the same 300-frame
+blackout, frame 308 tentative/null, 309 reacquired. 56/61 post-return boxes,
+3.24px mean center error, 7.02px maximum, minimum IoU .679. 3.64s including
+decode. Eight anchors retained after both real-footage runs.
+
+Two extra tests enforce learned-anchor duplicate ambiguity, no learning
+through 100 occluded frames or tentative returns, and abstention on a sudden
+inverted appearance. The six level-1 tests also remain. Unrestricted small-scale
+memory was tested and rejected because it shrank toward subregions and raised
+max center error to 28.86px. Keep memory opt-in: contamination and lookalike
+swaps remain possible despite conservative learning. Avoid calling these
+scores identity confidence. Multi-anchor scores increase the false-match
+surface; abstention and per-frame review remain necessary on unseen footage.
