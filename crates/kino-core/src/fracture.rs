@@ -87,8 +87,8 @@ pub fn apply(pr: &Params, f: &mut Frame, t: f64, seed: u64) -> Result<(), String
     let est = |gr: f32| -> usize { let (mut r, mut k, mut tot) = (r0, 0usize, 1usize); while r < dmax && k < 200 { tot += ((nr * (1.0 + 0.4 * (k / 3) as f32)).round() as usize).clamp(5, 90); r = r * gr + 0.01 * hh * (k as f32 / 8.0).min(1.0); k += 1; } tot };
     let mut grow = grow; let mut guard_i = 0; while est(grow) > budget && guard_i < 60 { grow *= 1.03; guard_i += 1; }
     let mut sites: Vec<V> = vec![imp]; let mut r = r0; let mut rprev = 0f32; let mut k = 0usize; let two = std::f32::consts::TAU; let ph0 = rg.f() * two;
-    while r < dmax && k < 200 { let gap = (r - rprev).max(r0 * 0.5); let nk = ((nr * (1.0 + 0.4 * (k / 3) as f32)).round() as usize).clamp(5, 90); let ph = ph0 + 0.1 * two / nk as f32 * rg.s();
-        for i in 0..nk { let a = ph + two * (i as f32 + 0.22 * rg.s()) / nk as f32; let rr = r + 0.12 * gap * rg.s(); if sites.len() < max_cells { sites.push((ix + rr * a.cos(), iy + rr * a.sin())); } }
+    while r < dmax && k < 200 { let gap = (r - rprev).max(r0 * 0.5); let nk = ((nr * (1.0 + 0.4 * (k / 3) as f32)).round() as usize).clamp(5, 90); let ph = ph0 + (0.1 + 0.4 * (k as f32 / 12.0).min(1.0)) * two / nk as f32 * rg.s();
+        for i in 0..nk { let a = ph + two * (i as f32 + 0.34 * rg.s()) / nk as f32; let rr = r + 0.25 * gap * rg.s(); if sites.len() < max_cells { sites.push((ix + rr * a.cos(), iy + rr * a.sin())); } }
         rprev = r; r *= grow; r += 0.02 * hh * rg.f() * (k as f32 / 8.0).min(1.0); k += 1; }
     for _ in 0..debris { let rr = 0.3 * hh * rg.f().powf(1.7) + 0.004 * hh; let a = rg.f() * two; sites.push((ix + rr * a.cos(), iy + rr * a.sin())); }
     let pad = 0.05 * w as f32; let polys = voronoi(&sites, (-pad, -pad, w as f32 + pad, hh + pad));
@@ -140,7 +140,7 @@ pub fn apply(pr: &Params, f: &mut Frame, t: f64, seed: u64) -> Result<(), String
             let (near, far) = if front_up { (&pf, &pbk) } else { (&pbk, &pf) };
             let edge_col = [etint[0] * c.shade, etint[1] * c.shade, etint[2] * c.shade]; let light = 0.5 + 0.5 * (th * 1.3 + c.z * 6.0).sin(); let ecol = [edge_col[0] * (0.4 + 0.8 * light), edge_col[1] * (0.4 + 0.8 * light), edge_col[2] * (0.4 + 0.8 * light)];
             let mut put = |y: usize, x: usize, col: [f32; 3], al: f32| { if al <= 0.0 { return; } let o = (y * w + x) * 4; let oa = lay[o + 3]; for j in 0..3 { lay[o + j] = col[j] * al + lay[o + j] * (1.0 - al); } lay[o + 3] = al + oa * (1.0 - al); };
-            if thick > 0.2 { spans(far, w, h, |y, x, cv| put(y, x, ecol, cv * fade)); for e in 0..m { let e2 = (e + 1) % m; let quad = [pf[e], pf[e2], pbk[e2], pbk[e]]; spans(&quad, w, h, |y, x, cv| put(y, x, ecol, cv * fade)); } }
+            if thick > 0.2 { spans(far, w, h, |y, x, cv| put(y, x, ecol, cv * fade * face_op * 0.5)); for e in 0..m { let e2 = (e + 1) % m; let quad = [pf[e], pf[e2], pbk[e2], pbk[e]]; spans(&quad, w, h, |y, x, cv| put(y, x, ecol, cv * fade)); } }
             if cth.abs() < 0.03 { spans(near, w, h, |y, x, cv| put(y, x, ecol, cv * fade)); continue; }
             let back = cth < 0.0; let shade = if back { 0.8 } else { 1.0 } * c.shade;
             spans(near, w, h, |y, x, cv| { let (dxp, dyp) = (x as f32 + 0.5 - cxd, y as f32 + 0.5 - cyd); let da = dxp * ux + dyp * uy; let db = dxp * nx + dyp * ny; let den = kk * fp * cth + db * sth; if den.abs() < 1e-3 { return; }

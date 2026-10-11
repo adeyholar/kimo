@@ -413,7 +413,7 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
                 if let Some((rx0, ry0, rx1, ry1)) = LAST_RECT.with(|l| l.get()) { u = Some(match u { Some((a, b, c2, d)) => (a.min(rx0), b.min(ry0), c2.max(rx1), d.max(ry1)), None => (rx0, ry0, rx1, ry1) });
                 for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; let a = tf.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += tf.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; wsum[i] += a; } } } } }
             if let Some((rx0, ry0, rx1, ry1)) = u { for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } } } acc }
-            else { transform_bb(&f, bbf, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
+            else if (sc - 1.0).abs() < 1e-9 && prop(c, "rotation", lt) + rot_extra == 0.0 && dx == 0.0 && dy == 0.0 { f } else { transform_bb(&f, bbf, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
         prof("transform", tp);
         let mut f = f; if let Some(mt) = c.mask.as_ref().and_then(|m| m.matte.as_ref()) { if let Some(src) = render_clip_alone(p, &mt.source, t, cache) { let cov = crate::masks::matte_coverage(mt, &src); for i in 0..w * h { f.d[i * 4 + 3] *= cov[i]; } } }
         if let Some(cf) = tplan.as_ref().and_then(|pl| pl.compose.as_ref()) { out = cf(&out, &f); continue; }
@@ -451,10 +451,15 @@ fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Result<Command,String>{
     let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v","libx264","-vf","scale=out_color_matrix=bt709:out_range=tv","-pix_fmt","yuv420p","-color_range","tv","-color_primaries","bt709","-color_trc",transfer,"-colorspace","bt709","-crf",&crf.to_string(),path]);Ok(cmd)
 }
 
-pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
+pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> { export_range(p, path, crf, 0.0, p.duration()) }
+/// Export [t_in, t_out) seconds. Frame k renders at t_in + k/fps (absolute time, so frames equal the same frames of a full export).
+pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) -> Result<f64, String> {
+    if !t_in.is_finite() || !t_out.is_finite() || t_in < 0.0 || t_out <= t_in { return Err("range must satisfy 0 <= start < end".into()); }
+    let t_out = t_out.min(p.duration()); if t_in >= t_out { return Err("range starts after the end of the timeline".into()); }
+    let f0 = (t_in * p.fps).round() as usize; let f1 = ((t_out * p.fps).round() as usize).max(f0 + 1);
     if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) { return Err("HDR delivery requires export_high_bit; legacy export is 8-bit SDR".into()); }
     let mut cache = Cache::new();
-    let n = (p.duration() * p.fps).round() as usize;
+    let n = f1 - f0;
     let mut command=legacy_encoder_command(p,path,crf)?;
     let frame_bytes=(p.width as usize).checked_mul(p.height as usize).and_then(|v|v.checked_mul(4)).ok_or("legacy encoder frame overflow")?;
     let mut encoder=crate::color::process::EncodeStream::new(&mut command,frame_bytes,crate::color::process::encode_deadline(n))?;
@@ -463,18 +468,18 @@ pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     while i < n {
         crate::guard::check();
         let mut end = (i + nt * 4).min(n);
-        loop{let last=(end-1) as f64/p.fps;match prepare_export_range(p,&mut cache,i as f64/p.fps,last){Ok(())=>break,Err(e)if end-i>1&&(e.contains("cache budget")||e.contains("memory cap")||e.contains("bounded cache"))=>{end=i+(end-i).div_ceil(2);cache=Cache::new();},Err(e)=>return Err(e)}}
+        loop{let last=(f0+end-1) as f64/p.fps;match prepare_export_range(p,&mut cache,(f0+i) as f64/p.fps,last){Ok(())=>break,Err(e)if end-i>1&&(e.contains("cache budget")||e.contains("memory cap")||e.contains("bounded cache"))=>{end=i+(end-i).div_ceil(2);cache=Cache::new();},Err(e)=>return Err(e)}}
         // work queue: nt workers pull frame indices, so one slow frame (shards) no longer idles the other cores
         let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
         std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
-            let res = render_frame(p, k as f64 / p.fps, cache).and_then(|mut f| {crate::color::pipeline::output(p,&mut f)?;Ok(to_rgba8(&f))}); *slots[k - i].lock().unwrap() = Some(res); }); } });
+            let res = render_frame(p, (f0 + k) as f64 / p.fps, cache).and_then(|mut f| {crate::color::pipeline::output(p,&mut f)?;Ok(to_rgba8(&f))}); *slots[k - i].lock().unwrap() = Some(res); }); } });
         let frames: Vec<Result<Vec<u8>, String>> = slots.into_iter().map(|m| m.into_inner().unwrap().unwrap()).collect();
         for f in frames { encoder.write(f?)?; }
         i = end;
     }
     encoder.finish()?;
     // mux mixed audio
-    let pcm = crate::audio::mix(p);
+    let pcm_full = crate::audio::mix(p); let (s0, s1) = ((f0 as f64 / p.fps * crate::audio::SR as f64) as usize * 2, (f1 as f64 / p.fps * crate::audio::SR as f64) as usize * 2); let pcm: Vec<f32> = { let a = s0.min(pcm_full.len()); let b = s1.min(pcm_full.len()); let mut v = pcm_full[a..b].to_vec(); v.resize(s1 - s0, 0.0); v };
     if pcm.iter().any(|v|v.abs()>1e-6){crate::color::mux::legacy_audio(path,&pcm,n)?}
     Ok(n as f64 / p.fps)
 }
