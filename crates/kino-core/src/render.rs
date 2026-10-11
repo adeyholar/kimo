@@ -237,7 +237,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         Source::Solid { color } => for i in 0..w*h { f.d[i*4]=color[0] as f32; f.d[i*4+1]=color[1] as f32; f.d[i*4+2]=color[2] as f32; f.d[i*4+3]=1.0; },
         Source::Gradient { c1, c2 } => for y in 0..h { let k = y as f64 / h as f64; for x in 0..w { let i=(y*w+x)*4; for j in 0..3 { f.d[i+j] = (c1[j]*(1.0-k)+c2[j]*k) as f32; } f.d[i+3]=1.0; } },
         Source::Adjustment => {}
-        Source::Precomp { tracks } => { let mut sub = Project { editorial: p.editorial.clone(), ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: tracks.clone(), assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 }; sub.name = c.id.clone(); match render_frame_opts(&sub, lt, cache, true) {Ok(fr)=>f=fr,Err(_)=>f.d.fill(f32::NAN)} }
+        Source::Precomp { tracks } => { let mut sub = Project { lights: p.lights.clone(), materials: p.materials.clone(), editorial: p.editorial.clone(), ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: tracks.clone(), assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 }; sub.name = c.id.clone(); match render_frame_opts(&sub, lt, cache, true) {Ok(fr)=>f=fr,Err(_)=>f.d.fill(f32::NAN)} }
         Source::Shape { shape, width, height, fill, stroke_width, stroke_color, sides, corner_radius } => {
             let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0); let (hw, hh) = (width / 2.0, height / 2.0);
             // signed distance (negative inside), then shape modifiers (offset/repeater/merge) from shapemods.rs
@@ -408,7 +408,8 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         let tp=std::time::Instant::now(); let mut f = source_frame(p, c, lt, cache); prof("source", tp);
         // set only now: nested precomp children render inside source_frame and would otherwise clear it
         if c.effects.iter().any(|e| crate::effects2::needs_backdrop(&e.kind)) { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); }
-        let tp=std::time::Instant::now(); let r = apply_effects_masked(p, c, &mut f, lt, seed, t, cache); BACKDROP.with(|b| *b.borrow_mut() = None); r?; prof("effects", tp); f };
+        if c.effects.iter().any(|e| e.kind == "relight") { crate::lighting::set_scene(Some(std::rc::Rc::new(crate::lighting::build_scene(&p.lights, &p.materials, t)))); }
+        let tp=std::time::Instant::now(); let r = apply_effects_masked(p, c, &mut f, lt, seed, t, cache); crate::lighting::set_scene(None); BACKDROP.with(|b| *b.borrow_mut() = None); r?; prof("effects", tp); f };
         if let Some(m) = &c.mask { apply_mask(&mut f, m, lt); if !m.layers.is_empty() { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut f, &m.layers, lt, &ctx); } }
         let mut op = prop(c, "opacity", lt) as f32;
         let mut c_blend = c.blend.as_str();
@@ -556,7 +557,7 @@ pub fn render_clip_alone(p: &Project, id: &str, t: f64, cache: &Cache) -> Option
     let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?.clone();
     if t < c.start - 1e-9 || t >= c.start + c.duration - 1e-9 { return Some(Frame::new(p.width as usize, p.height as usize)); }
     let mut c = c; if let Some(m) = c.mask.as_mut() { m.matte = None; }
-    let sub = Project { editorial: p.editorial.clone(), ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![c], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 };
+    let sub = Project { lights: p.lights.clone(), materials: p.materials.clone(), editorial: p.editorial.clone(), ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![c], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 };
     MATTE_DEPTH.with(|d| d.set(d.get() + 1)); let r = render_frame_opts(&sub, t, cache, true).ok(); MATTE_DEPTH.with(|d| d.set(d.get() - 1)); r
 }
 
@@ -767,7 +768,7 @@ fn is_static_text(c: &Clip) -> bool {
 /// Static text layers (constant text, params, effects) render identically every frame: render once per export, keep only the non-zero crop, rebuild by pasting.
 /// Only active for export caches; a bit-exact crop (any non-zero channel) so the rebuilt frame equals the full render.
 fn static_layer(p: &Project, c: &Clip, lt: f64, seed: u64, t: f64, cache: &Cache) -> Result<Option<Frame>, String> {
-    if !cache.export_mode || !is_static_text(c) { return Ok(None); }
+    if !cache.export_mode || !is_static_text(c) || c.effects.iter().any(|e| e.kind == "relight") { return Ok(None); }
     let (w, h) = (p.width as usize, p.height as usize);
     if let Some(cr) = cache.statics.read().unwrap().get(&c.id).cloned() {
         let mut f = Frame::new(w, h); let cw = cr.x1 - cr.x0;

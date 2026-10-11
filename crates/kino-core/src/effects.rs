@@ -59,6 +59,7 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
 ];
 
 pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f: &mut Frame, t: f64, seed: u64) -> Result<(), String> {
+    if kind == "relight" { return crate::lighting::apply_relight(params, strings, f, t); }
     if kind.starts_with("ls_") { return crate::layerstyles::apply(kind, params, strings, f, t); }
     if kind.starts_with("shape_") { return Ok(()); } // shape modifiers act on the vector source (shapemods.rs), not on pixels
     if kind=="asc_cdl"{if strings.contains_key("wrapper_working_gamut")||strings.contains_key("ocio_domain"){return Err("ASC CDL owns declareddomain; noextra wrapper".into())}return crate::color::cdl_file::apply(strings,f)}
