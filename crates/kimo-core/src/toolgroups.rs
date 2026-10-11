@@ -112,7 +112,7 @@ pub fn search(q: &str, limit: usize) -> Value {
 pub fn describe(args: &Value) -> Result<Value, String> {
     if let Some(a) = args.get("action").and_then(|v| v.as_str()) {
         let c = reg().iter().find(|c| c.name == a).ok_or_else(|| format!("unknown action '{a}'; try kimo_search"))?;
-        return Ok(json!({"group": group_of(c.name), "action": c.name, "description": c.description, "mutates": c.mutates, "args_schema": enrich(c.schema.clone()), "call": {"tool": group_of(c.name), "arguments": {"action": c.name, "args": "{...per args_schema}"}}}));
+        return Ok(json!({"group": group_of(c.name), "action": c.name, "description": c.description, "mutates": c.mutates, "args_schema": enrich(c.name, c.schema.clone()), "call": {"tool": group_of(c.name), "arguments": {"action": c.name, "args": "{...per args_schema}"}}}));
     }
     if let Some(g) = args.get("group").and_then(|v| v.as_str()) {
         let gi = GROUPS.iter().find(|x| x.name == g).ok_or_else(|| format!("unknown group '{g}'; groups: {}", GROUPS.iter().map(|x| x.name).collect::<Vec<_>>().join(", ")))?;
@@ -149,10 +149,16 @@ pub fn search_catalog(q: &str, effects: &Value, transitions: &Value, limit: usiz
 
 /// Fills in the shape of colour arguments, which many tools take as plain arrays with no description. Only facts verified in the
 /// code are added (colours are [r,g,b] or [r,g,b,a] floats in 0..1); other untyped arguments are left as they are.
-fn enrich(mut schema: Value) -> Value {
+fn enrich(tool: &str, mut schema: Value) -> Value {
     if let Some(props) = schema.get_mut("properties").and_then(|p| p.as_object_mut()) {
         for (k, v) in props.iter_mut() {
             let is_color = k.contains("color") || matches!(k.as_str(), "accent" | "albedo" | "emissive");
+            let note = match (tool, k.as_str()) {
+                ("group_clips", "clip_ids") => Some("array of clip id strings; must not be empty"),
+                ("add_mask" | "update_mask", "ngon") => Some("polygon or star for kind=path: {sides, inner, r, cx, cy, rot, aspect}; all optional (defaults sides 5, inner 0, r 0.3, cx 0.5, cy 0.5, rot 0, aspect 16/9)"),
+                ("track_mesh", "corners") => Some("exactly 8 numbers: x0,y0,x1,y1,x2,y2,x3,y3 (an error is returned for any other length)"),
+                _ => None };
+            if let Some(n) = note { if v.get("description").is_none() { v["description"] = json!(n); } }
             if is_color && v.get("type").and_then(|t| t.as_str()) == Some("array") && v.get("description").is_none() { v["description"] = json!("color [r,g,b] or [r,g,b,a], floats 0..1"); }
         }
     }
