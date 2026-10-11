@@ -6,4 +6,4 @@ def n(q): return [v/(W if i%2==0 else H) for i,v in enumerate(q)]
 tq=n([411,353,770,303,790,464,424,557]);cq=n([430,399,744,340,749,477,442,579])
 t0=time.time();r=C('validate_planar_track',clip_id=c,corners=tq,context_corners=cq,anchors=3,threshold_px=3);print('wall',round(time.time()-t0,1))
 pf=r.pop('per_frame');print(json.dumps(r)[:900]);json.dump(pf,open('/tmp/vt_pf.json','w'))
-print([ (x['frame'],round(x['max_corner_px'],1)) for x in pf[::10]])
+print([ (x['frame'],(round(x['max_target_corner_px'],1) if x['tested'] else None)) for x in pf[::10]])

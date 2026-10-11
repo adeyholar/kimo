@@ -373,7 +373,7 @@ pub fn detect(img: &[f32], w: usize, h: usize, max: usize, min_dist: f32, avoid:
         if ok { grid[gy * gw + gx].push((x as f32, y as f32)); out.push((x as f64, y as f64)); } }
     out
 }
-fn lk_level(p: &(Vec<f32>, usize, usize), c: &(Vec<f32>, usize, usize), pt: (f32, f32), mut g: (f32, f32), win: i32) -> Option<(f32, f32, f32)> {
+pub fn lk_level(p: &(Vec<f32>, usize, usize), c: &(Vec<f32>, usize, usize), pt: (f32, f32), mut g: (f32, f32), win: i32) -> Option<(f32, f32, f32)> {
     let (w, h) = (p.1, p.2); let mut tx = vec![]; let mut gxv = vec![]; let mut gyv = vec![]; let (mut a, mut b, mut cc) = (0f32, 0f32, 0f32);
     for dy in -win..=win { for dx in -win..=win { let (x, y) = (pt.0 + dx as f32, pt.1 + dy as f32); let t = bil(&p.0, w, h, x, y); let gx = (bil(&p.0, w, h, x + 1.0, y) - bil(&p.0, w, h, x - 1.0, y)) * 0.5; let gy = (bil(&p.0, w, h, x, y + 1.0) - bil(&p.0, w, h, x, y - 1.0)) * 0.5; tx.push(t); gxv.push(gx); gyv.push(gy); a += gx * gx; b += gx * gy; cc += gy * gy; } }
     let det = a * cc - b * b; if det < 1e-3 * (tx.len() as f32) { return None; } let mut err = 0f32;
