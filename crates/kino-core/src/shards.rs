@@ -18,8 +18,11 @@ pub struct ShardBurst {
     #[serde(default)] pub thickness: Option<[f64; 2]>, #[serde(default)] pub glass: f64, #[serde(default)] pub aspect: Option<[f64; 2]>, #[serde(default)] pub fresnel: f64, #[serde(default)] pub refract: f64, #[serde(default)] pub falloff: f64,
     #[serde(default)] pub plane: Option<Plane>,
     /// Contact shadows cast onto the receiving surface (the z = `shadow_plane_z` plane, i.e. the plate the pane sat in): strength 0..1 (0 = off), falls off with height over `shadow_reach` (720p px, 0 = 220), blur grows with height.
+    /// Motion blur: shutter angle in degrees (180 = the previous fixed half-frame shutter, 0 = off) and temporal samples (0 = automatic: 4, or 8 with a texture). More samples remove the stepped ghost copies of fast shards (cost is linear).
+    #[serde(default = "d_shut")] pub shutter_deg: f64, #[serde(default)] pub blur_samples: u32,
     #[serde(default)] pub contact_shadow: f64, #[serde(default)] pub shadow_reach: f64, #[serde(default)] pub shadow_plane_z: f64,
 }
+fn d_shut() -> f64 { 180.0 }
 fn d_rest() -> f64 { 0.35 } fn d_fric() -> f64 { 0.5 } fn d_tr() -> bool { true }
 
 /// `plane_fracture` birth mode: a coplanar pane split into connected, non-overlapping Voronoi cells (small near the impact, large far away).
@@ -79,7 +82,7 @@ struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, ri
 
 pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
     let (w, hh) = (f.w, f.h); let cv = CamView::new(w, hh, cam); let fl = cv.focal(); let k = w.min(hh) as f64 / 720.0;
-    let nsub = if e.plane.as_ref().map(|p| p.texture.is_some()).unwrap_or(false) { 8usize } else { 4usize }; let shutter = 0.5 / fps.max(1.0); let mut accc = vec![0f32; w * hh * 3]; let mut acca = vec![0f32; w * hh]; let rf = e.refract > 0.0; let mut dacc = vec![0f32; if rf { w * hh * 2 } else { 0 }]; let mut dsum = vec![0f32; if rf { w * hh * 2 } else { 0 }];
+    let nsub = if e.shutter_deg <= 0.0 { 1usize } else if e.blur_samples > 0 { (e.blur_samples as usize).clamp(1, 64) } else if e.plane.as_ref().map(|p| p.texture.is_some()).unwrap_or(false) { 8usize } else { 4usize }; let shutter = (e.shutter_deg.clamp(0.0, 720.0) / 360.0) / fps.max(1.0); let mut accc = vec![0f32; w * hh * 3]; let mut acca = vec![0f32; w * hh]; let rf = e.refract > 0.0; let mut dacc = vec![0f32; if rf { w * hh * 2 } else { 0 }]; let mut dsum = vec![0f32; if rf { w * hh * 2 } else { 0 }];
     let lg = { let l = e.light; let m = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt().max(1e-9); [l[0] / m, l[1] / m, l[2] / m] };
     let focus = if e.focus > 0.0 { e.focus } else { fl };
     let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));

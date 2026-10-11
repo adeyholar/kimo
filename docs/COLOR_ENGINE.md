@@ -436,3 +436,36 @@ The experiment was discarded. Main-process high-water RSS was99628KiB sequential
 
 ## Explicit ordinary-video delivery (COLOR132)
 Ordinary H264 export uses explicit BT709 RGB-to-YUV coefficients and limited range at every resolution, with Rec709 primaries, BT709 matrix and exact transfer signaling (disabled display-sRGB projects use sRGB; enabled Rec709 output supports linear/sRGB/BT709 OETF). Other managed ordinary-output domains fail before encoder spawn; BT601 delivery is unsupported. High-bit non-Rec2020 HLG now fails closed like non-Rec2020 PQ. This does not change project rendering/defaults or make lossy H264/4:2:0 exact at chroma edges. Migration: legacy MP4 delivery pixels changed from implicit conversion; re-export older MP4s for the explicit contract.
+
+## Opt-in `film_finish` (COLOR133)
+
+This is a display-sRGB/Rec709 creative finishing effect, not a calibrated film
+stock, ACES output transform or HDR mastering effect. It leaves old effects and
+project/export defaults unchanged. Use `add_effect` with kind `film_finish` on
+footage, an outer precomp clip, or an adjustment layer. Place it below titles if
+the titles should stay clean. In a managed linear project, configure the existing
+`set_effect_encoding` wrapper with Rec709 gamut0 and sRGB transfer1; never apply
+it directly to log, PQ, HLG or unconverted scene-linear data.
+
+Controls: bloom0.12, halation0.08, grain0.025, vignette0.12; threshold0.7,
+knee0.15, radius0.018 (fraction of shorter output edge, bounded512px),
+grain_size1.5 (output pixels), vignette_softness0.6. All four amounts0 is exact
+identity. This preset is mild; shot-specific tuning is expected.
+
+Order: highlight extraction from the PRE-GRAIN image, alpha-weighted linear-light
+blur, neutral bloom plus red-biased highlight rim, vignette, then luminance-shaped
+monochrome grain LAST. Alpha is unchanged; fully transparent pixels do not emit
+light and their stored RGB is unchanged. RGB is not clipped, so later delivery can
+still clip highlights. The rim is an artistic approximation, not physical
+emulsion scattering. Grain size is in output pixels (not scene/world units).
+
+Grain uses the existing render seed `round(t * fps)`. On an outer clip or adjustment
+layer this is absolute timeline frame: a cold bounded frame matches the same full
+export frame, including a clip that starts later. Inside a nested precomp the
+existing renderer uses its local clock, so the seed is local, not absolute.
+Apply finishing to the OUTER precomp/adjustment for absolute-frame behavior.
+The proposed absolute-seed propagation follow-up is not part of COLOR133.
+
+CPU-only. Three-pass separable box blur approximates smooth scattering; no GPU or
+real-time playback claim. Effect validation and output use a temporary buffer;
+invalid inputs/params and output overflow return errors without partial edits.
