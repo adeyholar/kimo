@@ -32,6 +32,7 @@ pub mod effects2;
 pub mod color;
 pub mod keying;
 pub mod colortools;
+pub mod subject_preview;
 
 pub mod guard;
 pub mod speedlines;

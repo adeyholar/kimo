@@ -469,3 +469,31 @@ The proposed absolute-seed propagation follow-up is not part of COLOR133.
 CPU-only. Three-pass separable box blur approximates smooth scattering; no GPU or
 real-time playback claim. Effect validation and output use a temporary buffer;
 invalid inputs/params and output overflow return errors without partial edits.
+
+## Preview-only semantic shot matching
+
+`preview_subject_match` fits the existing subject_match core to two explicit
+clip/time samples and writes before/after PNGs. source_regions/ref_regions name
+mask-layer IDs in skin/background/lighting slots. Absent regions are disabled;
+source and reference must name the same nonempty set. This is caller-designated
+semantic sampling, not skin detection or estimated illumination. Overlaps with
+sum>1, empty/undersampled active regions, unknown keys and deleted IDs are errors.
+Options: amount, three region_amount values (missing slots must be0),
+regularization, contrast_amount, max_exposure_stops and three exposure_target
+entries (reference, preserve_source, or explicit linear luminance).
+
+First version requires identity clip transforms; rejects 3D/pins/corners,
+precomp/adjustment, transition/echo/motion path/clipblur/posterized timing and
+masked effects. Semantic masks are detached from clip visibility in a scratch
+project, not allowed to crop the preview. Reference-matte layers are not supported.
+Existing clip effects are included. Mask coverage uses clip-local time on the
+untransformed isolated image. Disabled layers are rejected. Coverage numerical
+noise within1e-6 of0/1 is bounded; meaningful invalid weights are rejected.
+Managed working RGB is explicitly converted to Rec709/sRGB for analysis; samples
+outside the subject_match [0,1] display domain fail, not silently clipped.
+
+The project is unchanged. There is no stored recipe, renderer wiring, automatic
+mask tracking or reference dependency at playback. This tool is a preview, not a
+persistent shot-match effect. Soft masks and low amount are important: a hard
+sample rectangle can make a visible grade boundary. Review actual pixels before
+accepting a look. Fit statistics describe this sample pair, not a quality score.
