@@ -382,3 +382,5 @@ speed mode. These samples do not certify all finite inputs or export speed.
 
 - export_alpha (BETA): timeline or range with transparency as ProRes 4444 .mov (10-bit 4:4:4:4), WebM VP9 + alpha, or RGBA PNG sequence. Verified: all three decode clean, PNG sequence has alpha 0 at empty pixels and opaque text pixels, ffprobe reports prores yuva444p. Straight alpha, no audio, managed color pipeline must be off (errors otherwise). Named export presets are not done.
 - Backdrop fix: the backdrop is now set right before a layer's own effects, so it also works on precomp layers (nested render of children no longer clears it). Verified: a precomp-wrapped fracture_glass with transmission renders pixel-identical to the flat clip, and transmission 0.9 differs from 0.0 in the nested case.
+
+- Review cleanups: text.rs non-snake-case warnings removed (pure rename, prompt box output unchanged); add_speed_lines default ray count 70 to 48 (gentler; pass count to restore). Detection-box default softening not done.

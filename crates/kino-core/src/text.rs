@@ -90,12 +90,12 @@ fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f
         for si in 0..ns { let ff = if ns > 1 { (si as f32 + 0.5) / ns as f32 } else { 1.0 }; let u = U { x: u0.x + (u1.x - u0.x) * ff, y: u0.y + (u1.y - u0.y) * ff, sc: u0.sc + (u1.sc - u0.sc) * ff, rot: u0.rot + (u1.rot - u0.rot) * ff, op: u1.op, track: u1.track, blur: u1.blur };
         let (gcx, gcy) = (ox + g.adv * 0.5, oy - sf.ascent() * 0.35);
         let band = if fx.map(|x| x.line_mask).unwrap_or(false) { let lh = sf.height() * fx.map(|x| x.line_spacing as f32).unwrap_or(1.15); Some((by + g.line as f32 * lh - lh * 0.02, by + (g.line as f32 + 1.0) * lh + lh * 0.02)) } else { None };
-        let put = |cov: &mut Vec<f32>, X: i32, Y: i32, v: f32| { let wgt = wgt; if X < 0 || Y < 0 || X >= cw as i32 || Y >= ch as i32 { return; } if let Some((y0, y1)) = band { let yy = Y as f32 + 0.5; if yy < y0 || yy > y1 { return; } } let i = Y as usize * cw + X as usize; let a = (v * u.op).min(1.0); if ns > 1 { cov[i] = (cov[i] + a * wgt).min(1.0); } else if a > cov[i] { cov[i] = a; } };
+        let put = |cov: &mut Vec<f32>, xx: i32, yy: i32, v: f32| { let wgt = wgt; if xx < 0 || yy < 0 || xx >= cw as i32 || yy >= ch as i32 { return; } if let Some((y0, y1)) = band { let yy = yy as f32 + 0.5; if yy < y0 || yy > y1 { return; } } let i = yy as usize * cw + xx as usize; let a = (v * u.op).min(1.0); if ns > 1 { cov[i] = (cov[i] + a * wgt).min(1.0); } else if a > cov[i] { cov[i] = a; } };
         if u.rot.abs() < 0.01 {
             let s = size * u.sc.max(0.01); let (px, py) = (gcx + u.x - (gcx - ox) * u.sc + 0.0, gcy + u.y + (oy - gcy) * u.sc);
             let sk = fx.map(|x| x.italic_skew as f32).unwrap_or(0.0);
             let glyph = gid.with_scale_and_position(PxScale::from(s), ab_glyph::point(px, py));
-            if let Some(o) = f.outline_glyph(glyph) { let b = o.px_bounds(); o.draw(|x, y, v| { let X = b.min.x as i32 + x as i32; let Y = b.min.y as i32 + y as i32; let sh = (sk * (py - Y as f32)) as i32; put(&mut cov, X + sh, Y, v); }); }
+            if let Some(o) = f.outline_glyph(glyph) { let b = o.px_bounds(); o.draw(|x, y, v| { let xx = b.min.x as i32 + x as i32; let yy = b.min.y as i32 + y as i32; let sh = (sk * (py - yy as f32)) as i32; put(&mut cov, xx + sh, yy, v); }); }
         } else {
             let glyph = gid.with_scale_and_position(PxScale::from(size), ab_glyph::point(0.0, 0.0));
             let Some(o) = f.outline_glyph(glyph) else { continue }; let b = o.px_bounds(); let (gw, gh) = ((b.max.x - b.min.x).ceil() as usize + 2, (b.max.y - b.min.y).ceil() as usize + 2); let mut loc = vec![0f32; gw * gh];
@@ -103,11 +103,11 @@ fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f
             let (s_, c_) = (u.rot.to_radians().sin(), u.rot.to_radians().cos()); let inv = 1.0 / u.sc.max(1e-3); let (lx0, ly0) = (b.min.x, b.min.y);
             let rad = (gw.max(gh) as f32 * u.sc.max(1.0) * 1.5 + 4.0) as i32;
             let (px0, py0) = ((gcx + u.x) as i32 - rad - (g.adv as i32), (gcy + u.y) as i32 - rad - size as i32); let (px1, py1) = ((gcx + u.x) as i32 + rad + g.adv as i32, (gcy + u.y) as i32 + rad + size as i32);
-            for Y in py0.max(0)..py1.min(ch as i32) { for X in px0.max(0)..px1.min(cw as i32) {
-                let (dx, dy) = (X as f32 + 0.5 - gcx - u.x, Y as f32 + 0.5 - gcy - u.y); let (rx, ry) = ((c_ * dx + s_ * dy) * inv, (-s_ * dx + c_ * dy) * inv);
+            for yy in py0.max(0)..py1.min(ch as i32) { for xx in px0.max(0)..px1.min(cw as i32) {
+                let (dx, dy) = (xx as f32 + 0.5 - gcx - u.x, yy as f32 + 0.5 - gcy - u.y); let (rx, ry) = ((c_ * dx + s_ * dy) * inv, (-s_ * dx + c_ * dy) * inv);
                 let (sx, sy) = (rx + gcx - ox - lx0 - 0.5, ry + gcy - oy - ly0 - 0.5); if sx < 0.0 || sy < 0.0 || sx > (gw - 1) as f32 || sy > (gh - 1) as f32 { continue; }
                 let (x0, y0) = (sx.floor() as usize, sy.floor() as usize); let (x1, y1) = ((x0 + 1).min(gw - 1), (y0 + 1).min(gh - 1)); let (fx_, fy_) = (sx - x0 as f32, sy - y0 as f32);
-                let v = (loc[y0 * gw + x0] * (1.0 - fx_) + loc[y0 * gw + x1] * fx_) * (1.0 - fy_) + (loc[y1 * gw + x0] * (1.0 - fx_) + loc[y1 * gw + x1] * fx_) * fy_; put(&mut cov, X, Y, v); } }
+                let v = (loc[y0 * gw + x0] * (1.0 - fx_) + loc[y0 * gw + x1] * fx_) * (1.0 - fy_) + (loc[y1 * gw + x0] * (1.0 - fx_) + loc[y1 * gw + x1] * fx_) * fy_; put(&mut cov, xx, yy, v); } }
         }
         }
         if u.blur > 0.5 { /* per-unit blur approximated below by whole-mask softening when any unit blurs */ }

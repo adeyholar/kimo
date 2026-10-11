@@ -22,7 +22,7 @@ pub struct SpeedLines {
     #[serde(default)] pub spin: f64,
     #[serde(default)] pub seed: u64,
 }
-fn d_count() -> u32 { 70 } fn d_inner() -> f64 { 0.28 } fn d_w() -> [f64; 2] { [0.5, 2.2] } fn d_col() -> [f64; 3] { [1.0, 1.0, 1.0] } fn d_c() -> f64 { 0.5 } fn d_fl() -> f64 { 12.0 }
+fn d_count() -> u32 { 48 } fn d_inner() -> f64 { 0.28 } fn d_w() -> [f64; 2] { [0.5, 2.2] } fn d_col() -> [f64; 3] { [1.0, 1.0, 1.0] } fn d_c() -> f64 { 0.5 } fn d_fl() -> f64 { 12.0 }
 fn hash(mut x: u64) -> f64 { x = x.wrapping_add(0x9E3779B97F4A7C15); x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9); x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 31; (x >> 11) as f64 / (1u64 << 53) as f64 }
 
 pub fn render(s: &SpeedLines, f: &mut Frame, lt: f64) {
