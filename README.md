@@ -68,7 +68,7 @@ Left, default hole. Right, `hole_fill=1` (same frame, 1280x720 city plate, t=1.0
 
 ### Particles that hit things
 
-Emitters take `colliders` (circle, rect or plane, analytic and deterministic) that sparks bounce off with `bounce` and `friction`, plus a `vortex` swirl force. Left to right: no obstacle, a circle and a floor plane, a vortex with a floor (same seed). Limits: obstacles are static shapes, not the silhouette of another layer; particles do not collide with each other; thin rects can be tunnelled by very fast particles (60 integration steps per second).
+Emitters take `colliders` (circle, rect or plane, analytic and deterministic) that sparks bounce off with `bounce` and `friction`, plus a `vortex` swirl force. Left to right: no obstacle, a circle and a floor plane, a vortex with a floor (same seed). Colliders can also be another layer's alpha silhouette (`kind: layer`, `clip_id`), so sparks bounce off a title or shape; the silhouette is read at the current frame and held still for the particle's history, so a fast-moving obstacle is approximate. Limits: particles do not collide with each other; thin rects can be tunnelled by very fast particles (60 integration steps per second).
 
 ![particle physics](docs/media/particle-physics.jpg)
 
