@@ -44,14 +44,6 @@ The binary is about 10 MB and answers its first MCP request in about 2 ms (measu
 
 macOS and Windows binaries are not shipped in v1.0.0; build from source there (below).
 
-**Use it from any MCP client:**
-
-```json
-{ "mcpServers": { "kimo": { "command": "/path/to/kimo-mcp" } } }
-```
-
-Start with `project_set`, `import_media`, `add_track`, `add_clip`, `add_effect`, `render_frame`, `export`. Or ask the server: `kimo_search` finds a tool by what you want to do, `kimo_describe` shows its arguments.
-
 **Build from source** (Rust stable):
 
 ```
@@ -59,6 +51,103 @@ cargo build --release                 # target/release/kimo-mcp
 python3 examples/demo_grade.py        # graded 2-clip sequence with a transition, built only with MCP calls
 python3 examples/effects_gallery.py   # renders every effect
 ```
+
+## Setup: add kimo to your AI client
+
+kimo is a local MCP server that speaks over stdin/stdout (the "stdio" transport). There is nothing to start by hand: your client launches `kimo-mcp` itself. You only need the path to the binary.
+
+**1. Get the binary** (see Install above) and put it somewhere stable, for example:
+
+```
+mkdir -p ~/.local/bin && cp kimo-v1.0.0-linux-x86_64/kimo-mcp ~/.local/bin/
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | ~/.local/bin/kimo-mcp
+```
+
+The second command should print a JSON reply containing `"serverInfo":{"name":"kimo"`. Install `ffmpeg` and `ffprobe` too (`sudo apt install ffmpeg`, or your package manager).
+
+**2. Add it to your client.** Replace `/home/you/.local/bin/kimo-mcp` with your absolute path. Config formats below were checked against each client's public docs on 2026-10-11; client configs change, so if one fails, check the linked page.
+
+### Claude Code
+([docs](https://code.claude.com/docs/en/mcp-servers))
+
+```
+claude mcp add --transport stdio kimo -- /home/you/.local/bin/kimo-mcp
+```
+
+Add `--scope user` to make it available in every project, or `--scope project` to write it to a shared `.mcp.json`. Check with `claude mcp list`, or type `/mcp` inside Claude Code. The same thing as a `.mcp.json` file in your project:
+
+```json
+{ "mcpServers": { "kimo": { "command": "/home/you/.local/bin/kimo-mcp", "args": [] } } }
+```
+
+### OpenAI Codex (CLI and IDE extension)
+([docs](https://developers.openai.com/codex/mcp))
+
+```
+codex mcp add kimo -- /home/you/.local/bin/kimo-mcp
+```
+
+Or edit `~/.codex/config.toml` (or `.codex/config.toml` in a trusted project):
+
+```toml
+[mcp_servers.kimo]
+command = "/home/you/.local/bin/kimo-mcp"
+```
+
+### Cursor
+([docs](https://cursor.com/docs/context/mcp))
+
+Create `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one project):
+
+```json
+{ "mcpServers": { "kimo": { "command": "/home/you/.local/bin/kimo-mcp", "args": [] } } }
+```
+
+Then open Cursor's MCP settings and switch the `kimo` server on.
+
+### OpenCode
+([docs](https://opencode.ai/docs/mcp-servers/))
+
+Put this in `opencode.json` in your project, or in `~/.config/opencode/opencode.json` for all projects. Note that OpenCode takes `command` as a list and uses `type: "local"`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "kimo": { "type": "local", "command": ["/home/you/.local/bin/kimo-mcp"], "enabled": true }
+  }
+}
+```
+
+### Any other MCP client (Claude Desktop, Windsurf, Zed, Cline, ...)
+Most clients use the same shape. Register a stdio server whose command is the path to `kimo-mcp`, no arguments:
+
+```json
+{ "mcpServers": { "kimo": { "command": "/home/you/.local/bin/kimo-mcp", "args": [] } } }
+```
+
+Windows and macOS: there are no prebuilt binaries in v1.0.0; build from source (below) and use the path to `target/release/kimo-mcp`.
+
+**3. Try it.** Ask your assistant: "Use kimo to import /path/to/clip.mp4, add a title, and render a frame." Or drive it yourself with the Python client in `examples/mcp_client.py`.
+
+### Grouped or flat tool list
+By default the server lists 16 grouped tools (about 15.7 KB) so small context windows are not flooded; call a group with `action` and `args`, or use `kimo_search` to find a tool by intent and `kimo_describe` to see its arguments. Every one of the 255 tools can still be called by its own name. To list all 255 individually, set `KIMO_TOOLS=flat` in the server's environment:
+
+```
+claude mcp add --transport stdio --env KIMO_TOOLS=flat kimo -- /home/you/.local/bin/kimo-mcp
+```
+
+```toml
+[mcp_servers.kimo.env]
+KIMO_TOOLS = "flat"
+```
+
+For JSON configs add `"env": { "KIMO_TOOLS": "flat" }` to the server entry (OpenCode: `"environment": { "KIMO_TOOLS": "flat" }`).
+
+### Troubleshooting
+- Server shows as failed: run the `initialize` line above by hand; if that works, the path in your config is wrong (use an absolute path).
+- Tools that read or write video fail: `ffmpeg` and `ffprobe` are not on the PATH your client launches with.
+- A long export times out in your client: raise the client's MCP tool timeout; `KIMO_TIMEOUT_S` sets the server-side limit per tool call.
 
 ## Work made with kimo
 
