@@ -1,7 +1,7 @@
 import subprocess,json
 from pathlib import Path
 import argparse
-parser=argparse.ArgumentParser();parser.add_argument('--binary',default='target/debug/kino-mcp');parser.add_argument('--output',default='/tmp/gap4-followup');args=parser.parse_args()
+parser=argparse.ArgumentParser();parser.add_argument('--binary',default='target/debug/kimo-mcp');parser.add_argument('--output',default='/tmp/gap4-followup');args=parser.parse_args()
 root=Path(args.output).resolve()
 subprocess.run(['python3','tests/gap4_proof.py','--binary',args.binary,'--output',str(root)],check=True)
 p=subprocess.Popen([str(Path(args.binary).resolve())],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True,stderr=open(root/'followup.stderr','w'))

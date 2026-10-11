@@ -1,7 +1,7 @@
 """Gap #3 proof: typed modifiers, shape modifiers, layer styles, all via MCP only. Run from repo root after cargo build --release."""
 import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'examples'))
-from mcp_client import Kino
-k = Kino(); k.call("project_set", width=640, height=360, fps=25)
+from mcp_client import Kimo
+k = Kimo(); k.call("project_set", width=640, height=360, fps=25)
 names = {t["name"] for t in k.tools()}
 for n in ["add_modifier","list_modifiers","remove_modifier","add_shape_modifier","remove_shape_modifier","list_shape_modifiers","set_layer_style","list_layer_styles","remove_layer_style"]: assert n in names, n
 t = k.call("add_track")["track_id"]

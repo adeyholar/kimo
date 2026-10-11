@@ -1,8 +1,8 @@
 # Clip boundary reproducibility: clip A (red) ends and clip B (blue) starts at an accumulated-float time (0.1+0.2 style).
 # The frame at k/fps must belong to B exactly (half-open [start,start+dur)). Writes only to /tmp.
-import sys,os;sys.path.insert(0,os.path.join(os.path.dirname(__file__),'..','examples'));from mcp_client import Kino
+import sys,os;sys.path.insert(0,os.path.join(os.path.dirname(__file__),'..','examples'));from mcp_client import Kimo
 from PIL import Image
-k=Kino();C=k.call;bad=0;n=0
+k=Kimo();C=k.call;bad=0;n=0
 for fps in (24,25,30,50,60):
   for kb in [x for x in range(1,200) if sum([1.0/fps]*x)>x/fps][:6]+[3,7]:
     C('new_project') if False else None

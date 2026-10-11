@@ -1,9 +1,9 @@
 # Contact shadows: shard_burst contact_shadow darkens the receiving plate near airborne shards. Measures plate darkening on pixels the shards do not cover, on vs off.
-import sys,subprocess,numpy as np,time;sys.path.insert(0,'/home/sandbox/kino/examples');from mcp_client import Kino
+import sys,subprocess,numpy as np,time;sys.path.insert(0,'/home/sandbox/kimo/examples');from mcp_client import Kimo
 from PIL import Image
 Image.new('RGB',(640,440),(255,0,255)).save('/tmp/mag.png')
 def run(v,T=1.0):
-    subprocess.run(['pkill','kino-mcp']);k=Kino();C=k.call;C('project_set',width=1280,height=720,fps=30)
+    subprocess.run(['pkill','kimo-mcp']);k=Kimo();C=k.call;C('project_set',width=1280,height=720,fps=30)
     t1=C('add_track')['track_id'];C('add_clip',track_id=t1,source_type='solid',color=[.5,.5,.5],start=0,duration=3)
     t2=C('add_track')['track_id']
     cfg={'plane':{'quad':[[320,180],[960,180],[960,540],[320,540]],'region':[640,440],'impact_uv':[0.5,0.5],'cells':60,'radius':70,'wave_speed':300,'impulse':900,'lift':1.0,'texture':'/tmp/mag.png','opaque':1.0,'hidden_until_birth':False,'max_delay':0.4},'gravity':0,'drag':1.6,'spin':120,'thickness':[.02,.06],'dof':0.0,'contact_shadow':v}

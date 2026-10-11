@@ -1,7 +1,7 @@
 """Robustness runner: calls every MCP tool with hostile args. Fails on crash, hang, or non-JSON reply.
 Usage (from repo root): python3 tests/tool_fuzz.py"""
 import json, subprocess, sys, select, time
-EXE = "target/release/kino-mcp"
+EXE = "target/release/kimo-mcp"
 class S:
     def __init__(s):
         s.p = subprocess.Popen([EXE], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True); s.i = 0; s.rpc("initialize", {})

@@ -1,6 +1,6 @@
 """20s showcase built entirely through MCP calls: beat-synced cuts, grade, glow, particles, text, transitions, audio."""
-import sys; from mcp_client import Kino
-k = Kino(); k.call("project_set", width=1280, height=720, fps=30, name="showcase")
+import sys; from mcp_client import Kimo
+k = Kimo(); k.call("project_set", width=1280, height=720, fps=30, name="showcase")
 A = k.call("import_media", path="/tmp/s_grad.mp4")["asset_id"]; B = k.call("import_media", path="/tmp/s_mandel.mp4")["asset_id"]; M = "/tmp/music.m4a"
 Mm = k.call("import_media", path=M)  # audio-only asset is fine for mixing
 beats = k.call("detect_beats", path=M, min_gap=0.9)["beats"]; print("beats", len(beats), "bpm", k.call("detect_beats", path=M)["bpm"])
@@ -31,6 +31,6 @@ mus = k.call("add_clip", track_id=tau, source_type="media", asset_id=Mm["asset_i
 k.call("set_audio", clip_id=mus, fade_in=0.5, fade_out=1.5, compress=True)
 lb = k.call("add_clip", track_id=tfx, source_type="solid", color=[0, 0, 0], start=0, duration=0.01)["clip_id"]  # placeholder removed below
 k.call("delete_clip", clip_id=lb)
-k.call("save_project", path="/tmp/showcase.kino.json")
+k.call("save_project", path="/tmp/showcase.kimo.json")
 for t, n in [(1.2, 1), (4.5, 2), (9.0, 3), (15.0, 4)]: k.call("render_frame", time=t, path=f"/tmp/sc_{n}.png")
 print(k.call("export", path="/tmp/showcase.mp4", crf=20))

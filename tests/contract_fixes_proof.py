@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """add_text x without anchor, add_shape RGBA fill. Writes only to /tmp."""
 import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'examples'))
-from mcp_client import Kino
+from mcp_client import Kimo
 from PIL import Image
 import numpy as np
-k = Kino(); C = k.call; C('project_set', width=640, height=360, fps=25)
+k = Kimo(); C = k.call; C('project_set', width=640, height=360, fps=25)
 b = C('add_track')['track_id']; C('add_clip', track_id=b, source_type='solid', color=[0, 0, 0], start=0, duration=1)
 t = C('add_track')['track_id']
-c0 = C('add_text', track_id=t, text='KINO', start=0, duration=1, size=80)['clip_id']
-t2 = C('add_track')['track_id']; c1 = C('add_text', track_id=t2, text='KINO', start=0, duration=1, size=80, x=150)['clip_id']
+c0 = C('add_text', track_id=t, text='KIMO', start=0, duration=1, size=80)['clip_id']
+t2 = C('add_track')['track_id']; c1 = C('add_text', track_id=t2, text='KIMO', start=0, duration=1, size=80, x=150)['clip_id']
 def cx(path):
     im = np.array(Image.open(path).convert('L')).astype(int); ys, xs = np.where(im > 128); return (xs.min() + xs.max()) / 2
 C('remove_clip', clip_id=c1) if False else None

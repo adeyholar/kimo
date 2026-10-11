@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Shared light/material proof over MCP stdio. Writes only to /tmp."""
 import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'examples'))
-from mcp_client import Kino
+from mcp_client import Kimo
 from PIL import Image, ImageChops
 import numpy as np
-k = Kino(); C = k.call; C('project_set', width=640, height=360, fps=25)
+k = Kimo(); C = k.call; C('project_set', width=640, height=360, fps=25)
 b = C('add_track')['track_id']; C('add_clip', track_id=b, source_type='solid', color=[0.05, 0.05, 0.07], start=0, duration=2)
-t2 = C('add_track')['track_id']; cid = C('add_text', track_id=t2, text='KINO', start=0, duration=2, size=150, color=[0.85, 0.85, 0.9])['clip_id']
+t2 = C('add_track')['track_id']; cid = C('add_text', track_id=t2, text='KIMO', start=0, duration=2, size=150, color=[0.85, 0.85, 0.9])['clip_id']
 C('render_frame', time=1.0, path='/tmp/lp_plain.png')
 C('set_light', id='key', kind='point', pos=[0.2, 0.15, 0.5], intensity=1.4, falloff=3)
 C('set_relight', clip_id=cid, params={'bump': 2, 'blur': 8}, strings={'material': 'plastic'})

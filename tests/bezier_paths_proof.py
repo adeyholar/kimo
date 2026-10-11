@@ -1,7 +1,7 @@
 """Bezier path shapes proof, MCP only. Run from repo root after cargo build --release."""
 import sys, os, time; sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'examples'))
-from mcp_client import Kino
-k = Kino(); k.call("project_set", width=960, height=540, fps=25)
+from mcp_client import Kimo
+k = Kimo(); k.call("project_set", width=960, height=540, fps=25)
 for n in ["add_path_shape","set_path","path_info"]: assert n in {t["name"] for t in k.tools()}, n
 t0 = k.call("add_track")["track_id"]; k.call("add_clip", track_id=t0, source_type="solid", color=[0.1,0.1,0.14], start=0, duration=2)
 def tr(): return k.call("add_track")["track_id"]

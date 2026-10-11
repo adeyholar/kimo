@@ -6,7 +6,7 @@ from pathlib import Path
 from PIL import Image
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--binary', default='target/debug/kino-mcp')
+parser.add_argument('--binary', default='target/debug/kimo-mcp')
 parser.add_argument('--output', default='/tmp/gap4-proof')
 args = parser.parse_args()
 root = Path(args.output).resolve()
@@ -46,7 +46,7 @@ try:
         call('render_frame', time=time, path=str(root / f'{label}.png'))
     track = call('add_track')['track_id']
     srt = root / 'captions.srt'
-    srt.write_text('1\n00:00:00,000 --> 00:00:02,000\nEditable Kino captions\n')
+    srt.write_text('1\n00:00:00,000 --> 00:00:02,000\nEditable Kimo captions\n')
     cg = call('add_captions', track_id=track, source='srt', path=str(srt),
               style='boxed')['caption_id']
     call('render_frame', time=.5, path=str(root / 'caption-on.png'))

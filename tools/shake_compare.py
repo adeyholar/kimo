@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Sub-pixel global shift per frame at full res (phase correlation + parabolic peak) for two clips, so shake timing can be compared frame by frame.
-usage: shake_compare.py ref.mp4 ref_start dur kino.mp4 kino_start  -> prints table of frame, t, ref(sx,sy), kino(sx,sy) and best lag"""
+usage: shake_compare.py ref.mp4 ref_start dur kimo.mp4 kimo_start  -> prints table of frame, t, ref(sx,sy), kimo(sx,sy) and best lag"""
 import sys, subprocess, numpy as np
 def shifts(v, ss, d, W=640, H=360):
     p = subprocess.run(["ffmpeg","-v","error","-ss",str(ss),"-t",str(d),"-i",v,"-vf",f"scale={W}:{H},fps=25","-f","rawvideo","-pix_fmt","gray","-"], capture_output=True).stdout
@@ -19,7 +19,7 @@ if __name__ == "__main__":
     a, b = shifts(rv, rs, d), shifts(kv, ks, d); n = min(len(a), len(b)); a, b = a[:n], b[:n]
     ma, mb = np.hypot(*a.T), np.hypot(*b.T)
     best = max(range(-6, 7), key=lambda L: np.corrcoef(ma[max(0, L):n+min(0, L)], mb[max(0, -L):n-max(0, L)])[0, 1] if n > 12 else 0)
-    print("best lag (kino frames later than ref):", best)
+    print("best lag (kimo frames later than ref):", best)
     th = 6.0
     print("ref hits :", [round(rs + i/25, 2) for i in range(n) if ma[i] > th])
-    print("kino hits:", [round(ks + i/25, 2) for i in range(n) if mb[i] > th])
+    print("kimo hits:", [round(ks + i/25, 2) for i in range(n) if mb[i] > th])

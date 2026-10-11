@@ -1,7 +1,7 @@
 """SVG arcs + path morph keyframes proof, MCP only. Run from repo root after cargo build --release."""
 import sys, os, math; sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'examples'))
-from mcp_client import Kino
-k = Kino(); k.call("project_set", width=960, height=540, fps=25)
+from mcp_client import Kimo
+k = Kimo(); k.call("project_set", width=960, height=540, fps=25)
 t0 = k.call("add_track")["track_id"]; k.call("add_clip", track_id=t0, source_type="solid", color=[0.1,0.1,0.14], start=0, duration=2)
 def tr(): return k.call("add_track")["track_id"]
 def mk(**kw): return k.call("add_path_shape", track_id=tr(), start=0, duration=2, **kw)
