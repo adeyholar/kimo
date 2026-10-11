@@ -6,7 +6,7 @@ use crate::model::*;
 use crate::render;
 use serde_json::{json, Value};
 use std::io::Write;
-use std::process::{Command as Proc, Stdio};
+use std::process::Command as Proc;
 
 fn s(d: &str) -> Value { json!({"type":"string","description":d}) }
 fn n(d: &str) -> Value { json!({"type":"number","description":d}) }
@@ -39,9 +39,14 @@ fn add_fx(p: &mut Project, clip_id: &str, kind: &str, vals: &[(&str, f64)]) -> R
     let id = p.gen_id("fx"); let c = p.find_clip_mut(clip_id).ok_or("no such clip")?; let mut params = std::collections::BTreeMap::new(); for (k, v) in vals { params.insert(k.to_string(), Prop::new(*v)); }
     c.effects.push(Effect { id: id.clone(), kind: kind.into(), params, strings: Default::default() }); Ok(id) }
 
+fn scope_encoder_command(w:usize,h:usize,path:&str)->Proc{let mut cmd=Proc::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{w}x{h}"),"-i","-","-frames:v","1",path]);cmd}
+fn high_bit_encoder_command(w:usize,h:usize,path:&str)->Proc{let mut cmd=Proc::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba64le","-s",&format!("{w}x{h}"),"-i","-","-frames:v","1","-pix_fmt","rgba64be",path]);cmd}
+fn encode_still_bytes(cmd:&mut Proc,bytes:Vec<u8>,expected:usize,deadline:std::time::Duration)->Result<(),String>{if bytes.len()!=expected{return Err("still byte count mismatch".into())}let mut encoder=crate::color::process::EncodeStream::new(cmd,expected,deadline)?;encoder.write(bytes)?;encoder.finish()}
+
 /// Render a scope to a PNG: waveform | parade | vectorscope | histogram.
 pub fn scope_png(f: &Frame, kind: &str, path: &str) -> Result<(), String> {
-    let (ow, oh) = match kind { "vectorscope" => (320usize, 320usize), _ => (512, 288) }; let mut acc = vec![0f32; ow * oh * 3];
+    let pixels=f.w.checked_mul(f.h).filter(|n|*n>0).ok_or("invalid scope frame dimensions")?;if pixels.checked_mul(4)!=Some(f.d.len()){return Err("invalid scope frame shape".into())}
+    let (ow, oh) = match kind { "vectorscope" => (320usize, 320usize), _ => (512, 288) };let out_bytes=ow.checked_mul(oh).and_then(|n|n.checked_mul(4)).ok_or("scope byte count overflow")?;let acc_bytes=ow.checked_mul(oh).and_then(|n|n.checked_mul(3*std::mem::size_of::<f32>())).ok_or("scope allocation overflow")?;crate::guard::reserve(acc_bytes.checked_add(out_bytes).and_then(|n|n.checked_add(if kind=="histogram"{ow*3*std::mem::size_of::<f32>()}else{0})).ok_or("scope allocation overflow")?);let mut acc = vec![0f32; ow * oh * 3];
     let lum = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
     let step = ((f.w * f.h) / 200_000).max(1);
     match kind {
@@ -54,7 +59,7 @@ pub fn scope_png(f: &Frame, kind: &str, path: &str) -> Result<(), String> {
             let mx = hist.iter().flat_map(|h| h.iter()).cloned().fold(1.0, f32::max).sqrt(); for x in 0..ow { for j in 0..3 { let hh = ((hist[x][j].sqrt() / mx) * oh as f32) as usize; for y in oh.saturating_sub(hh)..oh { acc[(y * ow + x) * 3 + j] += 1.0; } } } }
         o => return Err(format!("unknown scope '{o}' (waveform|parade|vectorscope|histogram)")) }
     let mx = acc.iter().cloned().fold(1.0, f32::max); let gain = if kind == "histogram" { 0.55 } else { 14.0 / (mx.sqrt().max(1.0)) };
-    let mut out = vec![0u8; ow * oh * 4];
+    let mut out = vec![0u8; out_bytes];
     for y in 0..oh { for x in 0..ow { let k = (y * ow + x) * 3; let o = (y * ow + x) * 4; let a = [acc[k], acc[k + 1], acc[k + 2]]; let mut c = if kind == "waveform" || kind == "vectorscope" { let m = (a[0] + a[1] + a[2]) / 3.0; let t = (m.max(0.0).sqrt() * gain / 4.0).min(1.0); if kind == "waveform" { [0.2 * t + 0.0, 1.0 * t, 0.35 * t] } else { let (mr, mgg, mb) = if m > 0.0 { (a[0] / m, a[1] / m, a[2] / m) } else { (0.0, 0.0, 0.0) }; [(mr * t).min(1.0) * 1.0, (mgg * t).min(1.0), (mb * t).min(1.0)] } } else { [(a[0].sqrt() * gain).min(1.0), (a[1].sqrt() * gain).min(1.0), (a[2].sqrt() * gain).min(1.0)] };
         if kind == "parade" || kind == "histogram" { let _ = &mut c; }
         // graticule
@@ -62,8 +67,7 @@ pub fn scope_png(f: &Frame, kind: &str, path: &str) -> Result<(), String> {
         if kind == "waveform" || kind == "parade" { for lv in [0.0, 0.1, 0.5, 0.9, 1.0] { if ((1.0 - gy) - lv).abs() < 0.0018 { for j in 0..3 { c[j] = c[j].max(0.22); } } } }
         if kind == "vectorscope" { let (dx, dy) = (gx - 0.5, gy - 0.5); let r = (dx * dx + dy * dy).sqrt(); for rr in [0.25, 0.5] { if (r - rr * 0.5 * 1.0).abs() < 0.002 { for j in 0..3 { c[j] = c[j].max(0.25); } } } let ang = (-dy).atan2(dx).to_degrees(); if ((ang - 123.0).abs() < 0.6 && r < 0.5) { c[0] = c[0].max(0.9); c[1] = c[1].max(0.6); c[2] = c[2].max(0.4); } if dx.abs() < 0.002 || dy.abs() < 0.002 { for j in 0..3 { c[j] = c[j].max(0.15); } } }
         for j in 0..3 { out[o + j] = (c[j].clamp(0.0, 1.0) * 255.0) as u8; } out[o + 3] = 255; } }
-    let mut ch = Proc::new("ffmpeg").args(["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{ow}x{oh}"), "-i", "-", "-frames:v", "1", path]).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
-    ch.stdin.take().unwrap().write_all(&out).map_err(|e| e.to_string())?; ch.wait().map_err(|e| e.to_string())?; Ok(()) }
+    encode_still_bytes(&mut scope_encoder_command(ow,oh,path),out,out_bytes,crate::color::process::encode_deadline(1)) }
 
 pub fn commands() -> Vec<Command> { vec![
     Command{name:"inspect_color_frame_metadata",description:"Explicit first-video-packet decode for frame-level static HDR SEI/side data. Some codecs yield noframe; no wholefile certification or measuredmetadata inference.",mutates:false,schema:obj(vec![("path",s("local video file"))],&["path"]),run:|_,a|crate::color::delivery::first_frame_metadata(sa(a,"path")?)},
@@ -110,7 +114,7 @@ pub fn commands() -> Vec<Command> { vec![
     Command{name:"render_high_bit_still",description:"Render configured output encoding into 16-bit RGBA PNG. This stores encoded samples, not an SDR tone-mapped preview; PQ/HLG require a color-aware viewer. For float interchange use render_float_exr/render_float_tiff.",mutates:false,
         schema:obj(vec![("time",n("timeline seconds")),("path",s("output .png"))],&["time","path"]),
         run:|ss,a|{let path=sa(a,"path")?;if !path.to_lowercase().ends_with(".png"){return Err("high-bit still requires .png".into())}let t=na(a,"time")?;render::prepare_at(&ss.project,&mut ss.cache,Some(t))?;let mut f=render::render_frame(&ss.project,t,&ss.cache)?;crate::color::pipeline::output(&ss.project,&mut f)?;
-            let bytes=crate::color::pipeline::rgba16(&f)?;let mut ch=Proc::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba64le","-s",&format!("{}x{}",ss.project.width,ss.project.height),"-i","-","-frames:v","1","-pix_fmt","rgba64be",path]).stdin(Stdio::piped()).spawn().map_err(|e|e.to_string())?;ch.stdin.take().ok_or("no encoder input")?.write_all(&bytes).map_err(|e|e.to_string())?;if !ch.wait().map_err(|e|e.to_string())?.success(){return Err("16-bit still encoder failed".into())}Ok(json!({"path":path,"bits":16,"encoding":ss.project.color_pipeline,"note":"encoded samples, not a display-managed preview"}))}},
+            let expected=f.w.checked_mul(f.h).and_then(|n|n.checked_mul(8)).filter(|n|*n>0).ok_or("invalid high-bit still shape")?;let bytes=crate::color::pipeline::rgba16(&f)?;encode_still_bytes(&mut high_bit_encoder_command(ss.project.width as usize,ss.project.height as usize,path),bytes,expected,crate::color::process::encode_deadline(1))?;Ok(json!({"path":path,"bits":16,"encoding":ss.project.color_pipeline,"note":"encoded samples, not a display-managed preview"}))}},
     Command{name:"set_color_pipeline",description:"Opt-in project scene-linear float compositing + 16-bit media decode. Absent/disabled keeps legacy behavior. Sets working/input/output gamuts and transfer encodings. Procedural graphics are treated as sRGB Rec709. Legacy display-referred effects need explicit encoding transforms when working linear. No automatic ACES RRT/ODT.",mutates:true,
         schema:obj(vec![("settings",json!({"type":"object","properties":{"enabled":{"type":"boolean"},"linear_resample":{"type":"boolean","description":"opt-in integer-media native decode, working-linear area fit; higher CPU/memory"},"working_gamut":{"type":"integer"},"input_gamut":{"type":"integer"},"input_transfer":{"type":"integer"},"output_gamut":{"type":"integer"},"output_transfer":{"type":"integer"},"reference_white":{"type":"number"},"tone_map":{"type":"boolean"},"gamut_compress":{"type":"boolean"}}}))],&["settings"]),
         run:|ss,a|{let settings=a.get("settings").and_then(Value::as_object).ok_or("settings object required")?;for k in settings.keys(){if !["enabled","linear_resample","working_gamut","input_gamut","input_transfer","output_gamut","output_transfer","reference_white","tone_map","gamut_compress","mastering"].contains(&k.as_str()){return Err(format!("unknown color pipeline setting {k}"))}}let q:crate::color::pipeline::Pipeline=serde_json::from_value(a.get("settings").ok_or("missing settings")?.clone()).map_err(|e|e.to_string())?;q.validate()?;ss.project.color_pipeline=q;ss.cache=render::Cache::new();Ok(json!({"settings":ss.project.color_pipeline,"decode":if ss.project.color_pipeline.linear_resample{"native16-bit -> working-linear fit"}else{"16-bit RGBA project-sized when enabled"},"compositing":"float linear in working_gamut when enabled"}))}},
@@ -184,4 +188,10 @@ pub fn commands() -> Vec<Command> { vec![
         for (a,b) in f.d.iter().zip(z.d.iter()) { assert!((a-b).abs()<1e-7); }
         assert!(clip_frame(&ss.project,&a,2.).is_err());assert!(clip_frame(&ss.project,&a,5.).is_err());
     }
+}
+
+#[cfg(test)]mod bounded_still_tests{use super::*;
+#[test]fn unchanged_scope_and_high_bit_argv(){let scope=scope_encoder_command(512,288,"proof.png");let args:Vec<_>=scope.get_args().map(|a|a.to_str().unwrap()).collect();assert_eq!(args,["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s","512x288","-i","-","-frames:v","1","proof.png"]);let high=high_bit_encoder_command(320,180,"proof.png");let args:Vec<_>=high.get_args().map(|a|a.to_str().unwrap()).collect();assert_eq!(args,["-v","error","-y","-f","rawvideo","-pix_fmt","rgba64le","-s","320x180","-i","-","-frames:v","1","-pix_fmt","rgba64be","proof.png"]);}
+#[test]fn stuck_still_child_deadline_reaped(){for (tag,bytes) in [("scope",4),("highbit",8)]{let path=std::env::temp_dir().join(format!("kino-still-{tag}-pid-{}",std::process::id()));let script=format!("echo $$ > {}; exec sleep 30",path.display());let start=std::time::Instant::now();let error=encode_still_bytes(Proc::new("sh").args(["-c",&script]),vec![0;bytes],bytes,std::time::Duration::from_millis(100)).unwrap_err();assert!(error.contains("deadline"),"{error}");assert!(start.elapsed()<std::time::Duration::from_secs(2));let id=std::fs::read_to_string(&path).unwrap();assert!(!std::path::Path::new(&format!("/proc/{}",id.trim())).exists());std::fs::remove_file(path).unwrap();}}
+#[test]fn still_nonzero_exit_and_bad_counts_fail(){assert!(encode_still_bytes(Proc::new("sh").args(["-c","cat >/dev/null; printf STILL-FAIL >&2; exit 7"]),vec![0;4],4,std::time::Duration::from_secs(2)).unwrap_err().contains("STILL-FAIL"));assert!(encode_still_bytes(&mut Proc::new("true"),vec![0;3],4,std::time::Duration::from_secs(2)).unwrap_err().contains("byte count"));let invalid=Frame{w:0,h:1,d:vec![]};assert!(scope_png(&invalid,"waveform","unused.png").unwrap_err().contains("dimensions"));let invalid=Frame{w:1,h:1,d:vec![0.;3]};assert!(scope_png(&invalid,"waveform","unused.png").unwrap_err().contains("shape"));}
 }
