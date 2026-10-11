@@ -217,6 +217,7 @@ fn uv_affine(pts: &[(f64, f64); 6], uv: &[(f64, f64)]) -> Option<[f64; 6]> {
     let u = solve(uv[0].0, uv[1].0, uv[2].0); let v = solve(uv[0].1, uv[1].1, uv[2].1); Some([u[0], u[1], u[2], v[0], v[1], v[2]]) }
 
 thread_local! { static OCC: std::cell::RefCell<Option<(String, std::sync::Arc<Vec<f32>>)>> = std::cell::RefCell::new(None); }
+thread_local! { pub static TARGET_MATTE: std::cell::RefCell<std::collections::HashMap<String, (f64, std::sync::Arc<Vec<f32>>)>> = std::cell::RefCell::new(Default::default()); }
 thread_local! { pub static EXT_OCC: std::cell::RefCell<Option<std::sync::Arc<Vec<f32>>>> = std::cell::RefCell::new(None); }
 fn load_occ(pat: &str, frame: i64, w: usize, hh: usize) -> Option<std::sync::Arc<Vec<f32>>> {
     let path = if let Some(i) = pat.find('%') { let rest = &pat[i + 1..]; let digs: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect(); let wid: usize = digs.parse().unwrap_or(0); if rest[digs.len()..].starts_with('d') { format!("{}{:0wid$}{}", &pat[..i], frame.max(0), &rest[digs.len() + 1..], wid = wid) } else { pat.to_string() } } else { pat.to_string() };
