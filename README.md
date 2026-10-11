@@ -30,23 +30,35 @@ The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve
 - **Few entry points.** `tools/list` returns 16 grouped tools (15.7 KB) instead of 255 (176 KB), measured 11.2x smaller (compact JSON, v1.0.0). Every individual tool is still callable by its own name.
 - **Fuzzed.** 255 tools, 9359 calls, 0 failures, before anything is published.
 
-## Quick start
+## Install
+
+**Download a binary (Linux x86_64, static, no dependencies except ffmpeg):**
 
 ```
-cargo build --release
+curl -LO https://github.com/naman-sharma12345/kimo/releases/download/v1.0.0/kimo-v1.0.0-linux-x86_64.tar.gz
+tar xzf kimo-v1.0.0-linux-x86_64.tar.gz
+./kimo-v1.0.0-linux-x86_64/kimo-mcp        # speaks MCP over stdin/stdout
+```
+
+The binary is about 10 MB and answers its first MCP request in about 2 ms (measured: `initialize` 2 ms, first `tools/list` 6 ms). It is statically linked (musl), so it runs on any x86_64 Linux. It needs `ffmpeg` and `ffprobe` on PATH for decode and encode.
+
+macOS and Windows binaries are not shipped in v1.0.0; build from source there (below).
+
+**Use it from any MCP client:**
+
+```json
+{ "mcpServers": { "kimo": { "command": "/path/to/kimo-mcp" } } }
+```
+
+Start with `project_set`, `import_media`, `add_track`, `add_clip`, `add_effect`, `render_frame`, `export`. Or ask the server: `kimo_search` finds a tool by what you want to do, `kimo_describe` shows its arguments.
+
+**Build from source** (Rust stable):
+
+```
+cargo build --release                 # target/release/kimo-mcp
 python3 examples/demo_grade.py        # graded 2-clip sequence with a transition, built only with MCP calls
 python3 examples/effects_gallery.py   # renders every effect
 ```
-
-Needs `ffmpeg` and `ffprobe` on PATH for decode and encode.
-
-Use it from any MCP client:
-
-```json
-{ "mcpServers": { "kimo": { "command": "/path/to/kimo/target/release/kimo-mcp" } } }
-```
-
-Start with `project_set`, `import_media`, `add_track`, `add_clip`, `add_effect`, `render_frame`, `export`.
 
 ## Work made with kimo
 
