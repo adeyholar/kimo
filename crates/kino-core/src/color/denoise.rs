@@ -144,7 +144,10 @@ pub fn denoise_frame(
             ycc[i] = to_ycc(stage[o], stage[o + 1], stage[o + 2]);
         }
         let (w_i, h_i) = (width as isize, height as isize);
-        for y in 0..h_i {
+        let pout = crate::par::SyncPtr(out.as_mut_ptr());
+        let sp_tab: Vec<f32> = (-r..=r).flat_map(|dy| (-r..=r).map(move |dx| (dx, dy))).map(|(dx, dy)| (-((dx * dx + dy * dy) as f32) * inv_s).exp()).collect();
+        let (cur_r, ycc_r, stage_r, sp_r) = (cur, &ycc, &stage, &sp_tab);
+        crate::par::ranges(height, 4, |y0, y1| { let pout = pout; for y in (y0 as isize)..(y1 as isize) {
             for x in 0..w_i {
                 let i = (y * w_i + x) as usize;
                 let o = i * 4;
@@ -171,7 +174,7 @@ pub fn denoise_frame(
                         if !(na > 0.0) || !q[0].is_finite() || !q[1].is_finite() || !q[2].is_finite() {
                             continue;
                         }
-                        let ws = (-((dx * dx + dy * dy) as f32) * inv_s).exp() * na.min(1.0);
+                        let ws = sp_r[((dy + r) * (2 * r + 1) + (dx + r)) as usize] * na.min(1.0);
                         let dyl = q[0] - c[0];
                         let dcb = q[1] - c[1];
                         let dcr = q[2] - c[2];
@@ -191,11 +194,9 @@ pub fn denoise_frame(
                 let ncb = if wc > 0.0 { sb / wc } else { c[1] };
                 let ncr = if wc > 0.0 { sr / wc } else { c[2] };
                 let rgb = from_ycc(ny, ncb, ncr);
-                out[o] = finite_or(rgb[0], stage[o]);
-                out[o + 1] = finite_or(rgb[1], stage[o + 1]);
-                out[o + 2] = finite_or(rgb[2], stage[o + 2]);
+                unsafe { *pout.0.add(o) = finite_or(rgb[0], stage_r[o]); *pout.0.add(o + 1) = finite_or(rgb[1], stage_r[o + 1]); *pout.0.add(o + 2) = finite_or(rgb[2], stage_r[o + 2]); }
             }
-        }
+        } });
     }
 
     // ---- mix with original by amount; alpha untouched ----

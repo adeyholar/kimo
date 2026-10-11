@@ -301,3 +301,11 @@ Clip: Wikimedia Commons "Wzwz munich petuelpark 09d" (CC0, 540x720, 3.7 s, handh
 
 ### Explicit ordinary-video delivery (COLOR132)
 Ordinary H264 export now converts Rec709 RGB to BT709 limited-range YUV and writes matching primaries/matrix/range plus the exact linear/sRGB/BT709 transfer tag. Disabled projects retain display-sRGB rendering; managed ordinary export rejects other gamuts/transfers instead of leaving players to guess. BT601 delivery is unsupported. High-bit HLG, like PQ, requires Rec2020. Migration: legacy MP4 delivery pixels changed from implicit conversion; re-export older MP4s for the explicit contract. Project rendering/defaults are unchanged.
+
+## CPU parallelism (std threads, no new dependency) - BETA, measured
+`kino_core::par` splits work by disjoint rows/column strips across `available_parallelism()` threads (override: `KINO_THREADS`). Every output element is computed by one thread with the same arithmetic as before, so results are bit-identical (FNV hash of all output floats equal to the pre-change build).
+Measured on this 2-vCPU box (examples/bench_cpu.rs, examples/bench2.rs, old = build of e9c4762):
+- box blur x3 passes, 1080p: 0.53-0.60 s old, 0.12-0.13 s on 1 thread (4.1-4.6x: no per-pixel allocs, cache-friendly vertical pass), 0.06-0.07 s on 2 threads (8.5-9.1x).
+- flow_blur 720p: 0.334 s -> 0.201 s (1.7x); optical flow 720p q5: 0.098 -> 0.085 s (1.15x, solver dominated by serial resampling); blur_cov sigma 12: 0.017 -> 0.006 s (2.8x).
+- denoise 720p (spatial+1 temporal neighbour): 0.444 s -> 0.381 s on 1 thread (precomputed spatial weights), 0.216 s on 2 threads (2.1x). Temporal pass still serial.
+Limit: speedup is capped by core count (2 here). This is CPU only; no GPU code exists yet.

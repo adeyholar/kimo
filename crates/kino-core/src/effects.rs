@@ -229,24 +229,41 @@ pub(crate) fn lum(c: [f32; 3]) -> f32 { 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2] 
 pub(crate) fn px(f: &mut Frame, op: impl Fn([f32; 3]) -> [f32; 3]) {
     for i in 0..f.w*f.h { let o = op([f.d[i*4], f.d[i*4+1], f.d[i*4+2]]); f.d[i*4]=o[0]; f.d[i*4+1]=o[1]; f.d[i*4+2]=o[2]; }
 }
-pub(crate) fn box_blur3(f: &mut Frame, r: usize) {
-    if r == 0 { return; }
+pub fn box_blur3(f: &mut Frame, r: usize) {
+    if r == 0 || f.w == 0 || f.h == 0 { return; }
     let r = (r / 2).max(1);
-    for _ in 0..3 { blur_axis(f, r, true); blur_axis(f, r, false); }
+    let mut tmp = vec![0f32; f.d.len()];
+    for _ in 0..3 { blur_axis(&f.d, &mut tmp, f.w, f.h, r, true); blur_axis(&tmp, &mut f.d, f.w, f.h, r, false); }
 }
-fn blur_axis(f: &mut Frame, r: usize, horiz: bool) {
-    let (w, h) = (f.w, f.h); let src = f.d.clone();
-    let (len, lines) = if horiz { (w, h) } else { (h, w) };
-    for l in 0..lines {
-        let idx = |i: usize| if horiz { (l*w+i)*4 } else { (i*w+l)*4 };
-        let mut acc = [0f32; 4]; let win = (2*r+1) as f32;
-        for i in 0..=r.min(len-1) { for j in 0..4 { acc[j] += src[idx(i)+j]; } }
-        for j in 0..4 { acc[j] += src[idx(0)+j] * r as f32; }
-        for i in 0..len {
-            let o = idx(i); for j in 0..4 { f.d[o+j] = acc[j]/win; }
-            let add = src[idx((i+r+1).min(len-1))..][..4].to_vec(); let sub = src[idx(i.saturating_sub(r))..][..4].to_vec();
-            for j in 0..4 { acc[j] += add[j] - sub[j]; }
-        }
+/// One clamped box pass of 4 channels, src -> dst. Bit-identical to the old per-line
+/// running sum; the vertical pass walks column strips row by row (cache friendly).
+fn blur_axis(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize, horiz: bool) {
+    let win = (2*r+1) as f32;
+    if horiz {
+        crate::par::rows_mut(dst, w*4, |y, out| {
+            let row = &src[y*w*4..(y+1)*w*4];
+            let mut acc = [0f32; 4];
+            for i in 0..=r.min(w-1) { for j in 0..4 { acc[j] += row[i*4+j]; } }
+            for j in 0..4 { acc[j] += row[j] * r as f32; }
+            for i in 0..w {
+                for j in 0..4 { out[i*4+j] = acc[j]/win; }
+                let a = (i+r+1).min(w-1)*4; let s = i.saturating_sub(r)*4;
+                for j in 0..4 { acc[j] += row[a+j] - row[s+j]; }
+            }
+        });
+    } else {
+        const C: usize = 32;
+        let strips = (w + C - 1) / C; let p = crate::par::SyncPtr(dst.as_mut_ptr());
+        crate::par::ranges(strips, 1, |a, b| { let p = p; for st in a..b {
+            let c0 = st*C; let c1 = (c0+C).min(w); let n = c1-c0; let mut acc = [[0f32; 4]; C];
+            for i in 0..=r.min(h-1) { for c in 0..n { let o = (i*w+c0+c)*4; for j in 0..4 { acc[c][j] += src[o+j]; } } }
+            for c in 0..n { let o = (c0+c)*4; for j in 0..4 { acc[c][j] += src[o+j] * r as f32; } }
+            for i in 0..h {
+                let ra = (i+r+1).min(h-1); let rs = i.saturating_sub(r);
+                for c in 0..n { let o = (i*w+c0+c)*4; for j in 0..4 { unsafe { *p.0.add(o+j) = acc[c][j]/win; } }
+                    let (oa, os) = ((ra*w+c0+c)*4, (rs*w+c0+c)*4); for j in 0..4 { acc[c][j] += src[oa+j] - src[os+j]; } }
+            }
+        } });
     }
 }
 

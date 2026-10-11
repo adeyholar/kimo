@@ -210,10 +210,19 @@ fn raster_path_legacy(pts: &[PathPt], closed: bool, w: usize, h: usize) -> Vec<f
 }
 
 pub(crate) fn box_pass(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize, horiz: bool) {
-    let (len, lines) = if horiz { (w, h) } else { (h, w) }; let n = (2 * r + 1) as f32;
-    for l in 0..lines { let idx = |i: usize| if horiz { l * w + i } else { i * w + l };
-        let mut acc = 0f32; for i in 0..=r.min(len - 1) { acc += src[idx(i)]; } acc += src[idx(0)] * r as f32; // clamp-extend left
-        for i in 0..len { dst[idx(i)] = acc / n; let add = src[idx((i + r + 1).min(len - 1))]; let sub = src[idx(i.saturating_sub(r))]; acc += add - sub; } }
+    // Bit-identical to the old per-line running sum; threaded by rows / column strips.
+    if w == 0 || h == 0 { return; } let n = (2 * r + 1) as f32;
+    if horiz {
+        crate::par::rows_mut(&mut dst[..w * h], w, |y, out| { let row = &src[y * w..(y + 1) * w];
+            let mut acc = 0f32; for i in 0..=r.min(w - 1) { acc += row[i]; } acc += row[0] * r as f32;
+            for i in 0..w { out[i] = acc / n; let add = row[(i + r + 1).min(w - 1)]; let sub = row[i.saturating_sub(r)]; acc += add - sub; } });
+    } else {
+        const C: usize = 64; let strips = (w + C - 1) / C; let p = crate::par::SyncPtr(dst.as_mut_ptr());
+        crate::par::ranges(strips, 1, |a, b| { let p = p; for st in a..b { let c0 = st * C; let c1 = (c0 + C).min(w); let m = c1 - c0; let mut acc = [0f32; C];
+            for i in 0..=r.min(h - 1) { for c in 0..m { acc[c] += src[i * w + c0 + c]; } } for c in 0..m { acc[c] += src[c0 + c] * r as f32; }
+            for i in 0..h { let (ra, rs) = ((i + r + 1).min(h - 1), i.saturating_sub(r));
+                for c in 0..m { unsafe { *p.0.add(i * w + c0 + c) = acc[c] / n; } acc[c] += src[ra * w + c0 + c] - src[rs * w + c0 + c]; } } } });
+    }
 }
 pub fn blur_cov(c: &mut Vec<f32>, w: usize, h: usize, sigma: f32) {
     if sigma < 0.4 { return; } let r = ((sigma * 1.7).round() as usize).max(1).min(w.min(h) / 2 - 1); let mut t = vec![0f32; w * h];

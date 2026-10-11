@@ -36,3 +36,4 @@ pub mod subject_preview;
 
 pub mod guard;
 pub mod speedlines;
+pub mod par;
