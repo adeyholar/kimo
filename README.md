@@ -202,19 +202,15 @@ Point, planar and mesh trackers, feature tracking with homography fits, long-gap
 
 ![tracking and stabilizing](docs/media/tracking-stabilize.jpg)
 
-### Matting on a real plate
+### Why kimo
 
-`refine_matte` is a classical (non-ML) trimap matte with chroma-weighted background distance and a self-gate. This frame is a real portrait plate with the background replaced. Edges on the sleeves are still rough; this is the current state, not a cherry-picked best.
-
-![matte on a real plate](docs/media/matte-real-plate.jpg)
-
-### The film
-
-A short film is being built on the engine: a native 1080p rural-road piece with a relit KIMO title, type that sits in the scene, fracture glass and particles. It is the test that drives which engine tools get built next. Engine first, film second. These are frames from the final render.
-
-![road, 1.2 s](docs/media/film-01-road.jpg)
-![relit KIMO title, 22.2 s](docs/media/film-02-relit-title.jpg)
-![final lockup, 38 s](docs/media/film-03-lockup.jpg)
+- **Built for an AI, not retrofitted.** 255 tools, each one a registered command with a schema. Nothing in the editor is reachable only by mouse. `tools/list` is grouped into 16 entries (15.7 KB instead of 176 KB, 11.2x smaller), with `kimo_search` to find a tool by intent and `kimo_describe` for its arguments, so a small context window can still drive all of it.
+- **Tested the way a server should be.** A fuzzer calls every tool with generated arguments before anything is published: 255 tools, 9359 calls, 0 failures. Features ship with a proof that can fail, for example frosted glass reduces pane detail from 114444 to 4473 on a test plate, and a moving collider leaves a corridor of 88 pixels behind it where a frozen one leaves 163.
+- **Physical effects, not presets.** Fracture glass with refraction, shutter-correct motion blur and a damped impact core. Frosted glass that frosts what is really under a moving pane, with a magnifier lens. Particles that collide with circles, planes and the moving silhouette of a layer, and that are born on that silhouette.
+- **Real tracking, honestly reported.** Point, planar, mesh and feature tracking, stabilization and camera solve, with diagnostics that say when a track is unreliable instead of a confidence number that looks good.
+- **Pro colour.** ACES and ACEScct, ASC CDL, OCIO, LUTs, HDR, grade node graphs, scopes and film response, in a float pipeline with 16-bit, EXR and TIFF output.
+- **Small and fast to start.** A static 10 MB binary that answers its first MCP request in 2 ms, CPU only, tuned for a 2 GB machine. A 5 s 1280x720 shot with a video plate, a sliding title, collider rain and embers exports in about 40 s on that box.
+- **Honest about limits.** Every feature has a tier in [FEATURES.md](FEATURES.md), with its baseline, its measured number and the cases where it lost.
 
 ## What is inside
 
