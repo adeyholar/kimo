@@ -28,7 +28,7 @@ for tm in (0.5, 1.0, 1.8):
     s=time.time(); k.call("render_frame", time=tm, path=f"/tmp/bz_{tm}.png"); print("render", tm, round(time.time()-s,2), "s")
 print(k.call("path_info", clip_id=h["clip_id"])["length_px"])
 k.call("set_path", clip_id=h["clip_id"], d="M0 -80 L70 60 L-70 60 Z"); assert k.call("path_info", clip_id=h["clip_id"])["segments"] == 3
-for bad in [dict(d="M0 0 A10 10 0 0 1 20 20"), dict(d="L5 5"), dict(d="M0 0 L1"), dict(d="M0 0 L1e9 1"), dict(points=[[0,0]]), dict(d="M0 0 L1 1", points=[[0,0],[1,1]]), dict(d="M0 0 L9 9", fill_rule="x"), dict(d="M0 0 C1 1 2 2 3 3 Z M x")]:
+for bad in [dict(d="M0 0 A10 10 0 0 1"), dict(d="L5 5"), dict(d="M0 0 L1"), dict(d="M0 0 L1e9 1"), dict(points=[[0,0]]), dict(d="M0 0 L1 1", points=[[0,0],[1,1]]), dict(d="M0 0 L9 9", fill_rule="x"), dict(d="M0 0 C1 1 2 2 3 3 Z M x")]:
     try: k.call("add_path_shape", track_id=tr(), start=0, duration=1, **bad); raise SystemExit(f"accepted {bad}")
     except RuntimeError as ex: print("ok err:", str(ex)[:100])
 try: k.call("set_path", clip_id=t0 and mg["clip_id"].replace("clip","zz"), d="M0 0 L1 1"); raise SystemExit("bad clip")

@@ -18,6 +18,8 @@ MCP-first. Every feature is a tool call. Written in Rust, runs on a 2 GB box.</p
 
 ## What it is
 
+**v1.0.0.** 255 tools, fuzzed (9359 calls, 0 failures). `main` is the stable v1; new work lands on feature branches.
+
 kimo is a video editor with no GUI. You talk to it over the [Model Context Protocol](https://modelcontextprotocol.io). Cut, keyframe, grade, track, key, relight, simulate, caption, mix and export are all registered commands, and the MCP server's tool list is generated from that same registry. There is no feature a human can reach that an AI cannot.
 
 The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve in one engine: editing, motion graphics, VFX, tracking and pro color. It is an early engine with honest tiers. Read [FEATURES.md](FEATURES.md) for what is solid, what is beta and what is not built.
@@ -25,7 +27,7 @@ The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve
 - **MCP first.** Add a tool in the registry and it is in the MCP server, the fuzz test and the schema automatically.
 - **CPU, small memory.** The renderer is CPU only and tuned for a 2 GB machine. GPU code is off by default with a CPU fallback.
 - **Measured, not claimed.** Every "better than X" line in FEATURES.md has a stated baseline and a measured number, including the cases where we lost.
-- **Few entry points.** `tools/list` returns 16 grouped tools (16.3 KB) instead of 255 (185 KB), measured 11.4x smaller. Every individual tool is still callable by its own name.
+- **Few entry points.** `tools/list` returns 16 grouped tools (15.7 KB) instead of 255 (176 KB), measured 11.2x smaller (compact JSON, v1.0.0). Every individual tool is still callable by its own name.
 - **Fuzzed.** 255 tools, 9359 calls, 0 failures, before anything is published.
 
 ## Quick start
