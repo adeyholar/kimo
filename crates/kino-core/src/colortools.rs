@@ -45,22 +45,23 @@ fn encode_still_bytes(cmd:&mut Proc,bytes:Vec<u8>,expected:usize,deadline:std::t
 
 /// Render a scope to a PNG: waveform | parade | vectorscope | histogram.
 pub fn scope_png(f: &Frame, kind: &str, path: &str) -> Result<(), String> {
+    crate::guard::check();
     let pixels=f.w.checked_mul(f.h).filter(|n|*n>0).ok_or("invalid scope frame dimensions")?;if pixels.checked_mul(4)!=Some(f.d.len()){return Err("invalid scope frame shape".into())}
     let (ow, oh) = match kind { "vectorscope" => (320usize, 320usize), _ => (512, 288) };let out_bytes=ow.checked_mul(oh).and_then(|n|n.checked_mul(4)).ok_or("scope byte count overflow")?;let acc_bytes=ow.checked_mul(oh).and_then(|n|n.checked_mul(3*std::mem::size_of::<f32>())).ok_or("scope allocation overflow")?;crate::guard::reserve(acc_bytes.checked_add(out_bytes).and_then(|n|n.checked_add(if kind=="histogram"{ow*3*std::mem::size_of::<f32>()}else{0})).ok_or("scope allocation overflow")?);let mut acc = vec![0f32; ow * oh * 3];
     let lum = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
     let step = ((f.w * f.h) / 200_000).max(1);
     match kind {
-        "waveform" | "parade" => { let parade = kind == "parade"; for y in (0..f.h).step_by(1) { for x in (0..f.w).step_by(step.min(f.w)) { let i = (y * f.w + x) * 4; let c = [f.d[i], f.d[i + 1], f.d[i + 2]];
+        "waveform" | "parade" => { let parade = kind == "parade"; for y in (0..f.h).step_by(1) { if y%32==0{crate::guard::check()} for x in (0..f.w).step_by(step.min(f.w)) { let i = (y * f.w + x) * 4; let c = [f.d[i], f.d[i + 1], f.d[i + 2]];
             if parade { let third = ow / 3; for j in 0..3 { let ox = j * third + x * third / f.w; let oy = ((1.0 - c[j].clamp(0.0, 1.0)) * (oh - 1) as f32) as usize; acc[(oy * ow + ox) * 3 + j] += 1.0; } }
             else { let ox = x * ow / f.w; let l = lum(c).clamp(0.0, 1.0); let oy = ((1.0 - l) * (oh - 1) as f32) as usize; for j in 0..3 { acc[(oy * ow + ox) * 3 + j] += 1.0; } } } } }
-        "vectorscope" => { for y in (0..f.h).step_by(1) { for x in (0..f.w).step_by(step.min(f.w)) { let i = (y * f.w + x) * 4; let (r, g, b) = (f.d[i].clamp(0.0, 1.0), f.d[i + 1].clamp(0.0, 1.0), f.d[i + 2].clamp(0.0, 1.0)); let yy = 0.2126 * r + 0.7152 * g + 0.0722 * b; let cb = (b - yy) / 1.8556; let cr = (r - yy) / 1.5748;
+        "vectorscope" => { for y in (0..f.h).step_by(1) { if y%32==0{crate::guard::check()} for x in (0..f.w).step_by(step.min(f.w)) { let i = (y * f.w + x) * 4; let (r, g, b) = (f.d[i].clamp(0.0, 1.0), f.d[i + 1].clamp(0.0, 1.0), f.d[i + 2].clamp(0.0, 1.0)); let yy = 0.2126 * r + 0.7152 * g + 0.0722 * b; let cb = (b - yy) / 1.8556; let cr = (r - yy) / 1.5748;
             let ox = ((cb * 1.0 + 0.5) * (ow - 1) as f32) as usize; let oy = ((0.5 - cr * 1.0) * (oh - 1) as f32) as usize; let k = (oy.min(oh - 1) * ow + ox.min(ow - 1)) * 3; acc[k] += r; acc[k + 1] += g; acc[k + 2] += b; } } }
-        "histogram" => { let mut hist = vec![[0f32; 3]; ow]; for i in (0..f.w * f.h).step_by(step) { for j in 0..3 { let v = f.d[i * 4 + j].clamp(0.0, 1.0); hist[((v * (ow - 1) as f32) as usize).min(ow - 1)][j] += 1.0; } }
-            let mx = hist.iter().flat_map(|h| h.iter()).cloned().fold(1.0, f32::max).sqrt(); for x in 0..ow { for j in 0..3 { let hh = ((hist[x][j].sqrt() / mx) * oh as f32) as usize; for y in oh.saturating_sub(hh)..oh { acc[(y * ow + x) * 3 + j] += 1.0; } } } }
+        "histogram" => { let mut hist = vec![[0f32; 3]; ow]; for (sample,i) in (0..f.w * f.h).step_by(step).enumerate() { if sample%65536==0{crate::guard::check()} for j in 0..3 { let v = f.d[i * 4 + j].clamp(0.0, 1.0); hist[((v * (ow - 1) as f32) as usize).min(ow - 1)][j] += 1.0; } }
+            let mx = hist.iter().flat_map(|h| h.iter()).cloned().fold(1.0, f32::max).sqrt(); for x in 0..ow { if x%32==0{crate::guard::check()} for j in 0..3 { let hh = ((hist[x][j].sqrt() / mx) * oh as f32) as usize; for y in oh.saturating_sub(hh)..oh { acc[(y * ow + x) * 3 + j] += 1.0; } } } }
         o => return Err(format!("unknown scope '{o}' (waveform|parade|vectorscope|histogram)")) }
     let mx = acc.iter().cloned().fold(1.0, f32::max); let gain = if kind == "histogram" { 0.55 } else { 14.0 / (mx.sqrt().max(1.0)) };
     let mut out = vec![0u8; out_bytes];
-    for y in 0..oh { for x in 0..ow { let k = (y * ow + x) * 3; let o = (y * ow + x) * 4; let a = [acc[k], acc[k + 1], acc[k + 2]]; let mut c = if kind == "waveform" || kind == "vectorscope" { let m = (a[0] + a[1] + a[2]) / 3.0; let t = (m.max(0.0).sqrt() * gain / 4.0).min(1.0); if kind == "waveform" { [0.2 * t + 0.0, 1.0 * t, 0.35 * t] } else { let (mr, mgg, mb) = if m > 0.0 { (a[0] / m, a[1] / m, a[2] / m) } else { (0.0, 0.0, 0.0) }; [(mr * t).min(1.0) * 1.0, (mgg * t).min(1.0), (mb * t).min(1.0)] } } else { [(a[0].sqrt() * gain).min(1.0), (a[1].sqrt() * gain).min(1.0), (a[2].sqrt() * gain).min(1.0)] };
+    for y in 0..oh { if y%32==0{crate::guard::check()} for x in 0..ow { let k = (y * ow + x) * 3; let o = (y * ow + x) * 4; let a = [acc[k], acc[k + 1], acc[k + 2]]; let mut c = if kind == "waveform" || kind == "vectorscope" { let m = (a[0] + a[1] + a[2]) / 3.0; let t = (m.max(0.0).sqrt() * gain / 4.0).min(1.0); if kind == "waveform" { [0.2 * t + 0.0, 1.0 * t, 0.35 * t] } else { let (mr, mgg, mb) = if m > 0.0 { (a[0] / m, a[1] / m, a[2] / m) } else { (0.0, 0.0, 0.0) }; [(mr * t).min(1.0) * 1.0, (mgg * t).min(1.0), (mb * t).min(1.0)] } } else { [(a[0].sqrt() * gain).min(1.0), (a[1].sqrt() * gain).min(1.0), (a[2].sqrt() * gain).min(1.0)] };
         if kind == "parade" || kind == "histogram" { let _ = &mut c; }
         // graticule
         let (gx, gy) = (x as f32 / ow as f32, y as f32 / oh as f32);
