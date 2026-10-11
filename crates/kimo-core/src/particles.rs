@@ -35,26 +35,36 @@ fn d_fric() -> f64 { 0.15 }
 pub struct Collider { #[serde(default)] pub kind: String, #[serde(default)] pub x: f64, #[serde(default)] pub y: f64, #[serde(default)] pub r: f64, #[serde(default)] pub w: f64, #[serde(default)] pub h: f64, #[serde(default)] pub angle: f64,
     /// kind "layer": the alpha silhouette of this clip (rendered once at the current frame and held static); alpha >= `threshold` (default 0.5) is solid.
     #[serde(default)] pub clip_id: String, #[serde(default)] pub follow: bool, #[serde(default = "d_half")] pub threshold: f64 }
-thread_local! { static EMIT_PTS: std::cell::RefCell<Vec<(f32, f32)>> = Default::default(); static EMIT_BINS: std::cell::RefCell<std::collections::HashMap<i64, Vec<(f32, f32)>>> = Default::default(); }
+thread_local! { static EMIT_PTS: std::cell::RefCell<Vec<(f32, f32)>> = Default::default(); static EMIT_BINS: std::cell::RefCell<std::collections::HashMap<i64, std::rc::Rc<Vec<(f32, f32)>>>> = Default::default(); }
 /// Width in seconds of one silhouette time bin for `emit_follow`.
 pub const EMIT_BIN: f64 = 0.1;
 /// Spawn points for shape "layer": every pixel with alpha >= 0.5 (or only outline pixels when `edge`), subsampled to at most 60k points.
-fn mask_points(m: Option<(usize, usize, Vec<f32>)>, edge: bool) -> Vec<(f32, f32)> {
+/// A silhouette alpha plane shared with the renderer's cache: (width, height, alpha).
+pub type Plane = (usize, usize, std::rc::Rc<Vec<f32>>);
+thread_local! { static PTS_CACHE: std::cell::RefCell<Vec<(std::rc::Rc<Vec<f32>>, bool, std::rc::Rc<Vec<(f32, f32)>>)>> = Default::default(); static U8_CACHE: std::cell::RefCell<Vec<(std::rc::Rc<Vec<f32>>, Mask)>> = Default::default(); }
+/// Derived forms are cached per source plane (the Rc is held, so its address cannot be reused); at most 96 of each.
+fn points_cached(pl: Plane, edge: bool) -> std::rc::Rc<Vec<(f32, f32)>> {
+    if let Some(h) = PTS_CACHE.with(|c| c.borrow().iter().find(|(r, e, _)| std::rc::Rc::ptr_eq(r, &pl.2) && *e == edge).map(|(_, _, v)| v.clone())) { return h; }
+    let v = std::rc::Rc::new(mask_points(Some((pl.0, pl.1, &pl.2[..])), edge)); PTS_CACHE.with(|c| { let mut c = c.borrow_mut(); if c.len() >= 96 { c.remove(0); } c.push((pl.2.clone(), edge, v.clone())); }); v }
+fn u8_cached(pl: Plane) -> Mask {
+    if let Some(h) = U8_CACHE.with(|c| c.borrow().iter().find(|(r, _)| std::rc::Rc::ptr_eq(r, &pl.2)).map(|(_, v)| v.clone())) { return h; }
+    let v = to_u8((pl.0, pl.1, &pl.2[..])); U8_CACHE.with(|c| { let mut c = c.borrow_mut(); if c.len() >= 96 { c.remove(0); } c.push((pl.2.clone(), v.clone())); }); v }
+fn mask_points(m: Option<(usize, usize, &[f32])>, edge: bool) -> Vec<(f32, f32)> {
     let mut pts = Vec::new(); if let Some((w, h, d)) = m { let a = |x: usize, y: usize| d[y * w + x] >= 0.5;
         for y in 0..h { for x in 0..w { if !a(x, y) { continue; } if edge { let b = x == 0 || y == 0 || x + 1 >= w || y + 1 >= h || !a(x - 1, y) || !a(x + 1, y) || !a(x, y - 1) || !a(x, y + 1); if !b { continue; } } pts.push((x as f32 + 0.5, y as f32 + 0.5)); } }
         if pts.len() > 60000 { let st = pts.len() / 60000 + 1; pts = pts.into_iter().step_by(st).collect(); } }
     pts }
-pub fn set_emit_mask(m: Option<(usize, usize, Vec<f32>)>, edge: bool) { let pts = mask_points(m, edge); EMIT_PTS.with(|e| *e.borrow_mut() = pts); }
+pub fn set_emit_mask(m: Option<Plane>, edge: bool) { let pts = match m { Some(pl) => (*points_cached(pl, edge)).clone(), None => Vec::new() }; EMIT_PTS.with(|e| *e.borrow_mut() = pts); }
 /// emit_follow: one silhouette per time bin (bin index = floor(birth time / EMIT_BIN)); a particle spawns on the silhouette of its own birth bin.
-pub fn set_emit_bins(bins: Vec<(i64, Option<(usize, usize, Vec<f32>)>)>, edge: bool) { let map = bins.into_iter().map(|(b, m)| (b, mask_points(m, edge))).collect(); EMIT_BINS.with(|e| *e.borrow_mut() = map); }
+pub fn set_emit_bins(bins: Vec<(i64, Option<Plane>)>, edge: bool) { let map = bins.into_iter().map(|(b, m)| (b, match m { Some(pl) => points_cached(pl, edge), None => std::rc::Rc::new(Vec::new()) })).collect(); EMIT_BINS.with(|e| *e.borrow_mut() = map); }
 pub fn clear_emit_bins() { EMIT_BINS.with(|e| e.borrow_mut().clear()); }
 type Mask = std::rc::Rc<(usize, usize, Vec<u8>)>;
 thread_local! { static LAYER_MASKS: std::cell::RefCell<Vec<Option<Mask>>> = Default::default(); static LAYER_BINS: std::cell::RefCell<std::collections::HashMap<(usize, i64), Mask>> = Default::default(); }
-fn to_u8(m: (usize, usize, Vec<f32>)) -> Mask { std::rc::Rc::new((m.0, m.1, m.2.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect())) }
+fn to_u8(m: (usize, usize, &[f32])) -> Mask { std::rc::Rc::new((m.0, m.1, m.2.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect())) }
 /// Silhouette masks for the emitter's `layer` colliders, indexed like `colliders`; set by the renderer around the emitter render.
-pub fn set_layer_masks(m: Vec<Option<(usize, usize, Vec<f32>)>>) { LAYER_MASKS.with(|l| *l.borrow_mut() = m.into_iter().map(|o| o.map(to_u8)).collect()); }
+pub fn set_layer_masks(m: Vec<Option<Plane>>) { LAYER_MASKS.with(|l| *l.borrow_mut() = m.into_iter().map(|o| o.map(u8_cached)).collect()); }
 /// collide_follow: one silhouette per (collider index, time bin) so a moving obstacle is solid where it was at the particle's own time.
-pub fn set_layer_bins(b: Vec<(usize, i64, Option<(usize, usize, Vec<f32>)>)>) { LAYER_BINS.with(|l| *l.borrow_mut() = b.into_iter().filter_map(|(i, k, m)| m.map(|m| ((i, k), to_u8(m)))).collect()); }
+pub fn set_layer_bins(b: Vec<(usize, i64, Option<Plane>)>) { LAYER_BINS.with(|l| *l.borrow_mut() = b.into_iter().filter_map(|(i, k, m)| m.map(|m| ((i, k), u8_cached(m)))).collect()); }
 pub fn clear_layer_bins() { LAYER_BINS.with(|l| l.borrow_mut().clear()); }
 fn layer_hit(idx: usize, follow: bool, tt: f64, thr: f64, px: f64, py: f64, v: (f64, f64)) -> Option<((f64, f64), f64)> {
     let m: Mask = if follow { let bin = (tt / EMIT_BIN).floor() as i64; LAYER_BINS.with(|l| l.borrow().get(&(idx, bin)).cloned()).or_else(|| LAYER_MASKS.with(|l| l.borrow().get(idx).cloned().flatten()))? } else { LAYER_MASKS.with(|l| l.borrow().get(idx).cloned().flatten())? };
