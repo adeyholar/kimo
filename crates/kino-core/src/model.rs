@@ -114,7 +114,7 @@ pub struct Asset { pub id: String, pub path: String, pub width: u32, pub height:
 
 /// Persisted auto-occluder anchor recipe: lets a reloaded project rebuild the surface reference frame from the source media.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OccSpec { pub src: String, pub src_start: f64, pub path: String, pub src_time: f64, pub q0: [[f64; 2]; 4], pub soft: f32, pub chroma: f32, pub w: usize, pub h: usize, #[serde(default)] pub adaptive: bool, #[serde(default)] pub f0: usize, #[serde(default = "one_speed")] pub speed: f64, #[serde(default = "one_tol")] pub tol: f32, #[serde(default = "def_min_area")] pub min_area: f32, #[serde(default)] pub temporal: usize, #[serde(default)] pub thin: f32, #[serde(default)] pub close: f32, #[serde(default)] pub ramp: Vec<f64>, #[serde(default)] pub lgate: f32 }
+pub struct OccSpec { pub src: String, pub src_start: f64, pub path: String, pub src_time: f64, pub q0: [[f64; 2]; 4], pub soft: f32, pub chroma: f32, pub w: usize, pub h: usize, #[serde(default)] pub adaptive: bool, #[serde(default)] pub f0: usize, #[serde(default = "one_speed")] pub speed: f64, #[serde(default = "one_tol")] pub tol: f32, #[serde(default = "def_min_area")] pub min_area: f32, #[serde(default)] pub temporal: usize, #[serde(default)] pub thin: f32, #[serde(default)] pub close: f32, #[serde(default)] pub ramp: Vec<f64>, #[serde(default)] pub lgate: f32, #[serde(default)] pub expand: f32 }
 fn def_min_area() -> f32 { 0.0 }
 fn one_tol() -> f32 { 1.0 }
 fn one_speed() -> f64 { 1.0 }

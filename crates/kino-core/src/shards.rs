@@ -33,7 +33,8 @@ pub struct Plane {
     /// Foreground occluder matte (white = in front of the plane, cells hidden there). A path; `%d`/`%04d` style is replaced by the frame index round(t*fps). Any ffmpeg-readable image, sized to the canvas.
     /// Preload dimple: before a cell is released the plane sinks away from the camera by `preload_depth` (720p px, strongest at the impact, falling off with distance) over `preload_time` s, so the pressure builds before the break.
     #[serde(default)] pub preload_depth: f64, #[serde(default)] pub preload_time: f64,
-    #[serde(default)] pub occlusion: Option<String>, #[serde(default)] pub texture: Option<String>, #[serde(default = "d_one")] pub opaque: f64,
+    #[serde(default)] pub occlusion: Option<String>, /// Id of a pinned clip that carries an adaptive occluder recipe (track_planar occluder_mode=adaptive, ideally occluder_expand > 0); its live matte replaces the static `occlusion` pattern, with the same source timing and pin transform as the pinned graphic.
+    #[serde(default)] pub occlusion_target: Option<String>, #[serde(default)] pub texture: Option<String>, #[serde(default = "d_one")] pub opaque: f64,
 }
 fn d_region() -> [f64; 2] { [1280.0, 720.0] } fn d_cells() -> u32 { 120 } fn d_pr() -> f64 { 140.0 } fn d_wave() -> f64 { 2400.0 } fn d_imp() -> f64 { 1100.0 } fn d_lift() -> f64 { 0.9 } fn d_grade() -> f64 { 3.0 } fn d_maxd() -> f64 { 0.25 }
 pub struct Cell { pub poly: Vec<(f64, f64)>, pub c: (f64, f64), pub area: f64, pub lc: (f64, f64), pub uv: Vec<(f64, f64)> }
@@ -81,7 +82,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
     let focus = if e.focus > 0.0 { e.focus } else { fl };
     let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));
     let tex = e.plane.as_ref().and_then(|p| p.texture.as_ref().and_then(|t| load_tex(t, p.region)));
-    let occ = e.plane.as_ref().and_then(|p| p.occlusion.as_ref().and_then(|o| load_occ(o, (t * fps).round() as i64, w, hh)));
+    let occ = if let Some(m) = EXT_OCC.with(|c| c.borrow_mut().take()) { if m.len() == w * hh { Some(m) } else { None } } else { e.plane.as_ref().and_then(|p| p.occlusion.as_ref().and_then(|o| load_occ(o, (t * fps).round() as i64, w, hh))) };
     let traj = if e.physics { Some((bake_cached(e, k, total, hh), 0)) } else { None };
     for sub in 0..nsub { let ts = (t + ((sub as f64 + 0.5) / nsub as f64 - 0.5) * shutter).max(0.0);
         let mut prims: Vec<Prim> = Vec::with_capacity(e.count as usize * 2);
@@ -216,6 +217,7 @@ fn uv_affine(pts: &[(f64, f64); 6], uv: &[(f64, f64)]) -> Option<[f64; 6]> {
     let u = solve(uv[0].0, uv[1].0, uv[2].0); let v = solve(uv[0].1, uv[1].1, uv[2].1); Some([u[0], u[1], u[2], v[0], v[1], v[2]]) }
 
 thread_local! { static OCC: std::cell::RefCell<Option<(String, std::sync::Arc<Vec<f32>>)>> = std::cell::RefCell::new(None); }
+thread_local! { pub static EXT_OCC: std::cell::RefCell<Option<std::sync::Arc<Vec<f32>>>> = std::cell::RefCell::new(None); }
 fn load_occ(pat: &str, frame: i64, w: usize, hh: usize) -> Option<std::sync::Arc<Vec<f32>>> {
     let path = if let Some(i) = pat.find('%') { let rest = &pat[i + 1..]; let digs: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect(); let wid: usize = digs.parse().unwrap_or(0); if rest[digs.len()..].starts_with('d') { format!("{}{:0wid$}{}", &pat[..i], frame.max(0), &rest[digs.len() + 1..], wid = wid) } else { pat.to_string() } } else { pat.to_string() };
     let key = format!("{}|{}|{}", path, w, hh); if let Some((k, m)) = OCC.with(|c| c.borrow().clone()) { if k == key { return Some(m); } }
