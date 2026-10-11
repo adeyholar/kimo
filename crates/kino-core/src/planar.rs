@@ -309,8 +309,8 @@ fn build_seq(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f64) -> Op
         for j in 0..nch { let (mut mn, mut mx) = (mc_[j].clone(), mc_[j].clone());
             if rad > 0 { let mut tmn = mn.clone(); let mut tmx = mx.clone(); for y in 0..ph { for x in 0..pw { let (mut a0, mut a1) = (f32::MAX, f32::MIN); for dx in x.saturating_sub(rad)..=(x + rad).min(pw - 1) { let v = mc_[j][y * pw + dx]; a0 = a0.min(v); a1 = a1.max(v); } tmn[y * pw + x] = a0; tmx[y * pw + x] = a1; } }
                 for y in 0..ph { for x in 0..pw { let (mut a0, mut a1) = (f32::MAX, f32::MIN); for dy in y.saturating_sub(rad)..=(y + rad).min(ph - 1) { a0 = a0.min(tmn[dy * pw + x]); a1 = a1.max(tmx[dy * pw + x]); } mn[y * pw + x] = a0; mx[y * pw + x] = a1; } } }
-            let wgt = if j < 3 { (1.0 - sp.chroma).max(sp.lgate) } else { sp.chroma };
-            if wgt > 0.0 { for k in 0..pw * ph { let d = ((rc[j][k] - mx[k]).max(mn[k] - rc[j][k]) - if j < 3 && sp.lgate > 0.0 && sp.chroma > 0.0 { 0.12 } else { 0.0 }).max(0.0).min(1.0) * wgt; if j == 0 || j == 3 { diff[k] += 0.0; } diff[k] = diff[k].max(d); } } }
+            let wgt = if j < 3 { (1.0 - sp.chroma).max(sp.lgate.min(1.0)) } else { sp.chroma };
+            if wgt > 0.0 { for k in 0..pw * ph { let d = ((if j < 3 && sp.lgate > 0.0 && sp.chroma > 0.0 && sp.lgate > 1.5 { rc[j][k] - mx[k] } else { (rc[j][k] - mx[k]).max(mn[k] - rc[j][k]) }) - if j < 3 && sp.lgate > 0.0 && sp.chroma > 0.0 { 0.12 } else { 0.0 }).max(0.0).min(1.0) * wgt; if j == 0 || j == 3 { diff[k] += 0.0; } diff[k] = diff[k].max(d); } } }
         let mut t1 = vec![0f32; pw * ph]; let mut t2 = vec![0f32; pw * ph]; crate::masks::box_pass(&diff, &mut t1, pw, ph, 2, true); crate::masks::box_pass(&t1, &mut t2, pw, ph, 2, false);
         let occ: Vec<f32> = t2.iter().map(|&d| { let x = ((d - lo) / (hi - lo)).clamp(0.0, 1.0); x * x * (3.0 - 2.0 * x) }).collect();
         let mut occ = occ; if sp.min_area > 0.0 { let lim = (sp.min_area * (pw * ph) as f32).max(1.0) as usize;
