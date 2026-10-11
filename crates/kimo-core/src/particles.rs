@@ -18,6 +18,8 @@ pub struct Emitter {
     #[serde(default)] pub attractor_x: f64, #[serde(default)] pub attractor_y: f64, #[serde(default)] pub attractor: f64, // strength px/s^2 (0 = off), pos normalized
     #[serde(default)] pub floor: bool, #[serde(default = "d_half")] pub bounce: f64,
     /// Solid obstacles particles bounce off (analytic, deterministic). Empty = off.
+    /// shape "layer": spawn on the alpha silhouette of `emit_clip` (read at the current frame); emit_edge spawns only on its outline.
+    #[serde(default)] pub emit_clip: String, #[serde(default)] pub emit_edge: bool,
     #[serde(default)] pub colliders: Vec<Collider>, #[serde(default = "d_fric")] pub friction: f64,
     /// Swirl force around (vortex_x, vortex_y) in px/s^2 (0 = off); positive = clockwise on screen.
     #[serde(default)] pub vortex: f64, #[serde(default)] pub vortex_x: f64, #[serde(default)] pub vortex_y: f64,
@@ -33,6 +35,13 @@ fn d_fric() -> f64 { 0.15 }
 pub struct Collider { #[serde(default)] pub kind: String, #[serde(default)] pub x: f64, #[serde(default)] pub y: f64, #[serde(default)] pub r: f64, #[serde(default)] pub w: f64, #[serde(default)] pub h: f64, #[serde(default)] pub angle: f64,
     /// kind "layer": the alpha silhouette of this clip (rendered once at the current frame and held static); alpha >= `threshold` (default 0.5) is solid.
     #[serde(default)] pub clip_id: String, #[serde(default = "d_half")] pub threshold: f64 }
+thread_local! { static EMIT_PTS: std::cell::RefCell<Vec<(f32, f32)>> = Default::default(); }
+/// Spawn points for shape "layer": every pixel with alpha >= 0.5 (or only outline pixels when `edge`), subsampled to at most 60k points.
+pub fn set_emit_mask(m: Option<(usize, usize, Vec<f32>)>, edge: bool) {
+    let mut pts = Vec::new(); if let Some((w, h, d)) = m { let a = |x: usize, y: usize| d[y * w + x] >= 0.5;
+        for y in 0..h { for x in 0..w { if !a(x, y) { continue; } if edge { let b = x == 0 || y == 0 || x + 1 >= w || y + 1 >= h || !a(x - 1, y) || !a(x + 1, y) || !a(x, y - 1) || !a(x, y + 1); if !b { continue; } } pts.push((x as f32 + 0.5, y as f32 + 0.5)); } }
+        if pts.len() > 60000 { let st = pts.len() / 60000 + 1; pts = pts.into_iter().step_by(st).collect(); } }
+    EMIT_PTS.with(|e| *e.borrow_mut() = pts); }
 thread_local! { static LAYER_MASKS: std::cell::RefCell<Vec<Option<std::rc::Rc<(usize, usize, Vec<f32>)>>>> = Default::default(); }
 /// Silhouette masks for the emitter's `layer` colliders, indexed like `colliders`; set by the renderer around the emitter render.
 pub fn set_layer_masks(m: Vec<Option<(usize, usize, Vec<f32>)>>) { LAYER_MASKS.with(|l| *l.borrow_mut() = m.into_iter().map(|o| o.map(std::rc::Rc::new)).collect()); }
@@ -78,7 +87,8 @@ fn accumulate(e: &Emitter, fw: usize, fh: usize, t: f64) -> Vec<f32> {
         let (ew, eh) = (e.width * w, e.height * hh); let (cx, cy) = (e.x * w, e.y * hh);
         let (mut px, mut py) = match e.shape.as_str() { "line" => (cx + (rx - 0.5) * ew, cy + (ry - 0.5) * eh), "rect" => (cx + (rx - 0.5) * ew, cy + (ry - 0.5) * eh),
             "circle" => { let a = rx * std::f64::consts::TAU; let r = ry.sqrt(); (cx + a.cos() * r * ew * 0.5, cy + a.sin() * r * ew * 0.5) }
-            "ring" => { let a = rx * std::f64::consts::TAU; (cx + a.cos() * ew * 0.5, cy + a.sin() * ew * 0.5) } _ => (cx, cy) };
+            "ring" => { let a = rx * std::f64::consts::TAU; (cx + a.cos() * ew * 0.5, cy + a.sin() * ew * 0.5) }
+            "layer" => EMIT_PTS.with(|pp| { let pp = pp.borrow(); if pp.is_empty() { (cx, cy) } else { let q = pp[((rx * pp.len() as f64) as usize + (ry * 977.0) as usize * 31) % pp.len()]; (q.0 as f64, q.1 as f64) } }), _ => (cx, cy) };
         let ang = (e.angle + (ra - 0.5) * 2.0 * e.spread).to_radians(); let spd = (e.speed + (rs - 0.5) * 2.0 * e.speed_var) * sc;
         let (mut vx, mut vy) = (ang.cos() * spd, ang.sin() * spd); if e.shape == "ring" && e.spread >= 179.0 { let d = (px - cx).atan2(py - cy); let _ = d; let a = (py - cy).atan2(px - cx); vx = a.cos() * spd; vy = a.sin() * spd; }
         // integrate
