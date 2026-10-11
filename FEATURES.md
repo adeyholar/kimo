@@ -346,9 +346,11 @@ Static text-layer cache (export only, BETA): text clips with constant text (no `
 - Text fixes (from external review): add_prompt_box text now sits inside its plate (measured: text left edge 273 px = plate left 244 + padding; was 174, outside the plate). add_text gains `x` and `anchor` (center|left|right) so x refers to the block center, left or right edge (measured left edge 145 px vs target 140, glyph side bearing). New `text::measure`. `font` accepts a family name or a file path everywhere (it already did; descriptions now say so). Not yet done: non-snake-case warnings, gentler speed-line/detection-box defaults.
 High-bit delivery contract (COLOR): disabled-project exports now explicitly use
 Rec709/sRGB, BT709 limited-range YUV for HEVC10 or full-range identity RGB for
-FFV116. This fixes the formerly untagged/default-matrix disabled HEVC path.
+FFV1 16. This fixes the formerly untagged/default-matrix disabled HEVC path.
 Managed high-bit exports accept Rec709/Rec2020 with exact linear/sRGB/BT709
-transfer tags, plus Rec2020PQ/HLG. Other gamuts and gamma2.4/log/ACEScct output
-that previously exported untagged/partiallytagged now ERROR before encoding.
-Fix: select supported delivery gamut/transfer, or use floatEXR/TIFF for working
-or log interchange. This is signal labeling/precision, not HDRdisplaycalibration.
+transfer tags, plus Rec2020 PQ/HLG. Other gamuts and gamma2.4/log/ACEScct output
+that previously exported untagged or partly tagged now ERROR before encoding.
+Fix: select a supported delivery gamut/transfer, or use float EXR/TIFF for working
+or log interchange. This is signal labeling/precision, not HDR display calibration.
+
+- Layer transform parallelism (export/render speed, bit-identical): the scale/rotate/translate resampler splits rows over the `par` threads. Measured on 2 vCPU, 8 scaled+rotated 1280x720 layers: 0.942 s to 0.558 s per frame (1.69x), output PNG md5 identical for KINO_THREADS=1 and 2. Real film profile showed transform as the dominant stage.

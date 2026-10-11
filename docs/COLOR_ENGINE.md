@@ -617,13 +617,17 @@ https://cdl-convert.readthedocs.io/en/latest/usage_cc.html
 ## Strict high-bit delivery contract
 
 Disabled high-bit exports previously omitted conversion/tags and could use
-FFmpeg's default RGB->YUV matrix. Now explicitRec709/sRGB BT709limitedYUV HEVC10;
-FFV116 explicitfull RGB identity. Managed Rec709/Rec2020 supports exact
-linear/sRGB/BT709, plus Rec2020PQ/HLG. Other gamut/transfer pairs fail BEFORE
-encoder spawn rather than exporting untagged. Gamma2.4 is not mislabeledBT709.
-Use supportedoutputpair or floatEXR/TIFF for untaggedworking/log interchange.
-inspect_high_bit_delivery_contract(format) exposes pipe/outputbitdepth+tags.
-RGBA64LE pipe uses8bytes/pixel, retains16bitquantization; HEVC converts to10bit
-limitedrangeYUV420, FFV1 preserves16bitRGB. Neither path calls to_rgba8. All
-integerdelivery clamps0..1; losslesscodec doesn't restore out-of-domainradiance.
-NativeOCIOdisplay/view is not storedprojectoutput: no automaticviewnametagguess.
+FFmpeg's default RGB-to-YUV matrix. They now declare Rec709/sRGB with BT709
+limited-range YUV for HEVC10, or full-range identity RGB for FFV1 16. Managed
+Rec709/Rec2020 supports exact linear/sRGB/BT709, plus Rec2020 PQ/HLG. Other
+gamut/transfer pairs fail BEFORE encoder spawn rather than exporting untagged.
+Gamma2.4 is not mislabeled BT709. Select a supported output pair or use float
+EXR/TIFF for working/log interchange.
+
+`inspect_high_bit_delivery_contract(format)` exposes pipe/output bit depth and
+tags. The RGBA64LE pipe uses 8 bytes/pixel and retains 16-bit quantization.
+HEVC converts to 10-bit limited-range YUV420; FFV1 preserves 16-bit RGB. Neither
+path calls to_rgba8. Integer delivery clamps 0..1, so a lossless codec does not
+restore out-of-domain radiance. Chroma subsampling and HEVC quantization are not
+lossless. Native OCIO display/view is not a stored project output declaration:
+there is no automatic view-name-to-tag guess and no native view video tool here.

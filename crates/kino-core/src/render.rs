@@ -322,7 +322,8 @@ fn transform_bb(src: &Frame, bb: Option<(usize, usize, usize, usize)>, scale: f6
     let (rx0, ry0) = ((ox0.floor() - 2.0).max(0.0) as usize, (oy0.floor() - 2.0).max(0.0) as usize); let (rx1, ry1) = (((ox1.ceil() + 2.0).min(w as f64 - 1.0)).max(0.0) as usize, ((oy1.ceil() + 2.0).min(h as f64 - 1.0)).max(0.0) as usize);
     if ox1 < 0.0 || oy1 < 0.0 || ox0 > w as f64 || oy0 > h as f64 { return o; }
     LAST_RECT.with(|l| l.set(Some((rx0, ry0, rx1, ry1))));
-    for y in ry0..=ry1 { for x in rx0..=rx1 {
+    let (sd, ow) = (&src.d, w);
+    crate::par::rows_mut(&mut o.d[ry0 * w * 4..(ry1 + 1) * w * 4], w * 4, |yy, orow| { let y = ry0 + yy; for x in rx0..=rx1 {
         let mut acc = [0f32; 4];
         for sy_ in 0..ns { for sx_ in 0..ns {
             let px = x as f64 + (sx_ as f64 + 0.5) / nsf - 0.5 - cx - dx; let py = y as f64 + (sy_ as f64 + 0.5) / nsf - 0.5 - cy - dy;
@@ -334,9 +335,9 @@ fn transform_bb(src: &Frame, bb: Option<(usize, usize, usize, usize)>, scale: f6
             let wts = [(x0, y0, (1.0-fx)*(1.0-fy)), (x1, y0, fx*(1.0-fy)), (x0, y1, (1.0-fx)*fy), (x1, y1, fx*fy)];
             for (qx, qy, k) in wts { let i = (qy*w+qx)*4; let a = src.d[i+3]; let ka = k * a; acc[0] += src.d[i]*ka; acc[1] += src.d[i+1]*ka; acc[2] += src.d[i+2]*ka; acc[3] += ka; }
         }}
-        let a = acc[3]; let oi = (y*w+x)*4; if a > 1e-6 { o.d[oi] = acc[0]/a; o.d[oi+1] = acc[1]/a; o.d[oi+2] = acc[2]/a; o.d[oi+3] = a * wgt; }
-    }}
-    o
+        let a = acc[3]; let oi = x*4; if a > 1e-6 { orow[oi] = acc[0]/a; orow[oi+1] = acc[1]/a; orow[oi+2] = acc[2]/a; orow[oi+3] = a * wgt; }
+    } });
+    let _ = ow; o
 }
 
 fn blend(dst: &mut Frame, src: &Frame, opacity: f32, mode: &str, mask: Option<&dyn Fn(usize, usize) -> f32>) {
