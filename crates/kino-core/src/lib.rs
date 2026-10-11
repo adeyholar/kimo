@@ -3,6 +3,7 @@
 //! is generated from the registry, so nothing can exist without a tool.
 pub mod ext;
 pub mod shapemods;
+pub mod paths;
 pub mod layerstyles;
 pub mod lighting;
 pub mod sfm;

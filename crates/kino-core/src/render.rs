@@ -241,7 +241,9 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         Source::Shape { shape, width, height, fill, stroke_width, stroke_color, sides, corner_radius } => {
             let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0); let (hw, hh) = (width / 2.0, height / 2.0);
             // signed distance (negative inside), then shape modifiers (offset/repeater/merge) from shapemods.rs
+            let pth = if shape == "path" { crate::shapemods::path_of(&c.effects) } else { None };
             let base = |x: f64, y: f64| -> f64 { let (px, py) = (x - cx, y - cy); match shape.as_str() {
+                "path" => match &pth { Some(p) => p.sd(px, py), None => 1e9 },
                 "ellipse" | "polygon" | "line" => crate::shapemods::sd(shape, *sides, hw, hh, *corner_radius, px, py),
                 _ => { let (qx, qy) = (px.abs() - hw + corner_radius, py.abs() - hh + corner_radius); (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - corner_radius } } };
             let stack = crate::shapemods::build(&c.effects, base, cx, cy, lt); let sd = |x: f64, y: f64| (stack.dist)(x, y);

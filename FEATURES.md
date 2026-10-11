@@ -758,3 +758,7 @@ projection optimization already landed. No GPU/threading/default/output change.
 Camera solve: KLT feature tracks, 2-view init, PnP, bundle adjustment (src sfm.rs, ext camera_solve.rs), with optional radial distortion k1/k2 and a rotation-only pan mode. refine_matte: classical (non-ML) trimap alpha matting.
 Measured (author): synthetic solves 0.03-0.11 deg rotation error; real H.264 end-to-end 48/48 frames, 0.70 px RMS; distortion model takes rotation error 2.5 to 0.77 deg on a k1=-0.15 scene; pan mode on real video 48/48 frames, 0.012 deg mean error, focal 560.2 vs true 560 (examples/camera_solve_proof.py PAN=1); matting MAE x1000 14.04 to 6.67 on a synthetic hair test, 10.40 to 6.70 on real H.264 (compression noise limits it; examples/refine_matte_proof.py).
 Honest limits: distortion is off by default when focal is unknown (k1 and focal are coupled); 0.77 deg is typical, not guaranteed (RANSAC sensitivity); no undistort tool, k1/k2 are reported only; matting needs a local fg/bg colour difference and is not ML; solves live in session memory only. I ran sfm_synthetic (1) and matting_synthetic (6) tests, film md5s unchanged and fuzz 229 tools / 8253 calls / 0 failures; I did not rerun the real-video proofs.
+
+## Bezier paths (MCP)
+- `add_path_shape` (SVG `d` or points+smooth), `set_path`, `path_info`. Trim uses exact arc length; offset, merge (path with path), repeater, gradient stroke, even-odd fill all work on paths.
+- Proof: `python3 tests/bezier_paths_proof.py`.
