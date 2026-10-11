@@ -5,7 +5,8 @@
 <h1 align="center">kimo</h1>
 
 <p align="center"><b>A video editor an AI can drive.</b><br>
-MCP-first. Every feature is a tool call. Written in Rust, runs on a 2 GB box.</p>
+MCP-first. Every feature is a tool call. Written in Rust, runs on a 2 GB box.<br>
+<a href="https://getkimo.tech"><b>getkimo.tech</b></a></p>
 
 <p align="center">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-F4F0E8?labelColor=0E0E12">
@@ -51,7 +52,9 @@ tar xzf kimo-v1.0.0-linux-x86_64.tar.gz
 
 The binary is about 10 MB and answers its first MCP request in about 2 ms (measured: `initialize` 2 ms, first `tools/list` 6 ms). It is statically linked (musl), so it runs on any x86_64 Linux. It needs `ffmpeg` and `ffprobe` on PATH for decode and encode.
 
-macOS and Windows binaries are not shipped in v1.0.0; build from source there (below).
+**Windows x64:** download the installer (`kimo-1.0.0-windows-x86_64-setup.exe`) or the portable ZIP from the [Windows release](https://github.com/naman-sharma12345/kimo/releases/tag/v1.0.0-windows.1). The installer is unsigned, so Windows may show a SmartScreen warning; check the `.sha256` file next to it. See the [Windows setup guide](packaging/windows/WINDOWS.md).
+
+macOS binaries are not shipped yet; build from source there (below).
 
 **Build from source** (Rust stable):
 
@@ -131,7 +134,7 @@ Put this in `opencode.json` in your project, or in `~/.config/opencode/opencode.
 ### Any other MCP client
 kimo is a standard MCP stdio server (protocol 2024-11-05, `initialize`, `tools/list`, `tools/call`). Any client that can register a stdio server by command works: give it the absolute path to `kimo-mcp` and no arguments. Many clients use the `mcpServers` JSON shape shown for Cursor; some (for example Zed) use a different key, so check your client's MCP docs for the exact file and format. Only the four clients above were checked against their docs.
 
-Windows and macOS: there are no prebuilt binaries in v1.0.0; build from source (below) and use the path to `target/release/kimo-mcp`.
+Windows: use the path to `kimo-mcp.exe` (the installer puts it in `%LOCALAPPDATA%\\Programs\\kimo\\bin`; in JSON write backslashes doubled, see the [Windows guide](packaging/windows/WINDOWS.md)). The configs above are the same except for the path; the Claude Code, Codex, Cursor and OpenCode formats were checked on their docs, not tested on Windows here. macOS: build from source (below) and use the path to `target/release/kimo-mcp`.
 
 **3. Try it.** Ask your assistant: "Use kimo to import /path/to/clip.mp4, add a title, and render a frame." Or drive it yourself with the Python client in `examples/mcp_client.py`.
 
