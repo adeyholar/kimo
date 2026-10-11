@@ -17,7 +17,7 @@ for i in range(N):
     bg=Image.new('RGB',(W,H),(60,52,50));bg.paste(plate,(0,0),m)
     d=np.clip((i-12)/16,0,1)*(1-np.clip((i-48)/10,0,1))  # finger slides in 12..28, out 48..58
     if d>0:
-        f=Image.new('RGBA',(W,H),(0,0,0,0));dr=ImageDraw.Draw(f);y=-200+d*480;dr.ellipse([480,y-420,880,y+40],fill=(225,160,130,255));f=f.filter(ImageFilter.GaussianBlur(3));bg.paste(f,(0,0),f)
+        f=Image.new('RGBA',(W,H),(0,0,0,0));dr=ImageDraw.Draw(f);y=-200+d*480;dr.ellipse([480,y-420,880,y+40],fill=tuple(int(v) for v in os.environ.get('FC','225,160,130').split(','))+(255,));f=f.filter(ImageFilter.GaussianBlur(3));bg.paste(f,(0,0),f)
     bg.save('/tmp/pof/f%03d.png'%i)
 subprocess.run(['ffmpeg','-v','error','-y','-framerate','30','-i','/tmp/pof/f%03d.png','-c:v','libx264','-crf','10','-pix_fmt','yuv420p','/tmp/po.mp4'],check=True)
 k=Kino();C=k.call;C('project_set',width=W,height=H,fps=30)
