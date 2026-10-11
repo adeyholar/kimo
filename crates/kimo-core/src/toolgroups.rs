@@ -157,6 +157,11 @@ fn enrich(tool: &str, mut schema: Value) -> Value {
                 ("group_clips", "clip_ids") => Some("array of clip id strings; must not be empty"),
                 ("add_mask" | "update_mask", "ngon") => Some("polygon or star for kind=path: {sides, inner, r, cx, cy, rot, aspect}; all optional (defaults sides 5, inner 0, r 0.3, cx 0.5, cy 0.5, rot 0, aspect 16/9)"),
                 ("track_mesh", "corners") => Some("exactly 8 numbers: x0,y0,x1,y1,x2,y2,x3,y3 (an error is returned for any other length)"),
+                ("match_grade", "source_region" | "ref_region") => Some("normalized sample rectangle [x, y, w, h], each 0..1 with x+w<=1 and y+h<=1; w,h > 0; default whole frame"),
+                ("export_color_pipeline_lut" | "generate_lut_node", "domain_min" | "domain_max") => Some("3 numbers [r,g,b], the .cube DOMAIN_MIN / DOMAIN_MAX written to the LUT"),
+                ("export_color_pipeline_lut" | "generate_lut_node", "steps") => Some("ordered step objects {kind, params:{name:number}, strings:{name:string}}; kind is one of the color effect names (e.g. cdl, lut, color_space, tonemap, exposure, saturation); unknown keys or kinds are rejected"),
+                ("evaluate_hlg_reference_display", "scene_rgb") => Some("exactly 3 numbers [r,g,b], scene-linear"),
+                ("add_multicam" | "sync_clips", "angles" | "clip_ids") => Some("array of clip id strings"),
                 _ => None };
             if let Some(n) = note { if v.get("description").is_none() { v["description"] = json!(n); } }
             if is_color && v.get("type").and_then(|t| t.as_str()) == Some("array") && v.get("description").is_none() { v["description"] = json!("color [r,g,b] or [r,g,b,a], floats 0..1"); }
