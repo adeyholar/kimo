@@ -56,6 +56,12 @@ Glass shards with physical motion, refraction, a shutter-correct motion blur and
 
 ![fracture glass](docs/media/fracture-glass.jpg)
 
+### Frosted glass (backdrop effect)
+
+`frosted_glass` turns any layer's alpha into a glass pane: inside it shows the composite below, blurred, tinted and refracted at a bevel, with a rim light. It runs after the layer's own position and scale, so a sliding panel frosts what is really under it. Frame from a 5 s 1280x720 clip (export took 15.0 s on the 2 GB box); the title sits on the pane. Limits: not for 3D-tilted layers; the refraction is a bevel offset, not a ray-traced lens; frosting is a 3-pass box blur, not a Gaussian.
+
+![frosted glass](docs/media/frosted-glass.jpg)
+
 ### Motion blur on particles and on 3D scenes
 
 Both take `shutter_deg` and `blur_samples`, default off. The scene is sampled at several instants across the shutter and averaged in premultiplied space. 3D scene blur re-poses the whole scene per sample, so object animation, parenting and camera moves all blur. Measured on a 1280x720 scene: 0.19 s per frame off, 0.87 s at 8 samples. At 8 samples a very fast move shows stepped copies, so raise `blur_samples`.
