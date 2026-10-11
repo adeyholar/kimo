@@ -11,6 +11,7 @@ unsafe extern "C" {
     fn kino_ocio_name(p:*const c_void,catalog:i32,index:usize)->*const c_char;
     fn kino_ocio_processor(p:*const c_void,src:*const c_char,dst:*const c_char,err:*mut c_char,cap:usize)->*mut c_void;
     fn kino_ocio_display_processor(p:*const c_void,src:*const c_char,display:*const c_char,view:*const c_char,err:*mut c_char,cap:usize)->*mut c_void;
+    fn kino_ocio_cdl(slope:*const f64,offset:*const f64,power:*const f64,sat:f64,err:*mut c_char,cap:usize)->*mut c_void;
     fn kino_ocio_processor_free(p:*mut c_void);
     fn kino_ocio_noop(p:*const c_void)->i32;
     fn kino_ocio_apply(p:*const c_void,rgba:*mut f32,pixels:usize,err:*mut c_char,cap:usize)->i32;
@@ -63,6 +64,7 @@ impl Config {
 pub struct Processor { handle:NonNull<c_void> }
 impl Drop for Processor {fn drop(&mut self){unsafe{kino_ocio_processor_free(self.handle.as_ptr())}}}
 impl Processor {
+    pub fn cdl(c:&super::cdl_xml::Correction)->Result<Self,String>{c.validate()?;let mut err=[0;4096];let handle=NonNull::new(unsafe{kino_ocio_cdl(c.slope.as_ptr(),c.offset.as_ptr(),c.power.as_ptr(),c.saturation,err.as_mut_ptr(),err.len())}).ok_or_else(||diagnostic(&err))?;Ok(Self{handle})}
     pub fn is_noop(&self)->bool{unsafe{kino_ocio_noop(self.handle.as_ptr())!=0}}
     /// Transactional: no partial frame writes on transform failure or nonfinite output.
     pub fn apply(&self,f:&mut Frame)->Result<(),String>{

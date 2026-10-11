@@ -118,6 +118,10 @@ void *kino_ocio_display_processor(const void *p, const char *src, const char *di
       catch(...) { error(err,cap,"unknown OCIO display processor error"); }
     return nullptr;
 }
+void *kino_ocio_cdl(const double *slope,const double *offset,const double *power,double sat,char *err,size_t cap) noexcept {
+ try{auto t=OCIO::CDLTransform::Create();t->setSlope(slope);t->setOffset(offset);t->setPower(power);t->setSat(sat);t->setStyle(OCIO::CDL_ASC);auto r=std::make_unique<KinoProcessor>();r->cpu=OCIO::Config::CreateRaw()->getProcessor(t)->getOptimizedCPUProcessor(OCIO::OPTIMIZATION_NONE);return r.release();}
+ catch(const std::exception &e){error(err,cap,e.what());}catch(...){error(err,cap,"unknown nativeCDLerror");}return nullptr;
+}
 void kino_ocio_processor_free(void *p) noexcept { delete static_cast<KinoProcessor*>(p); }
 int kino_ocio_noop(const void *p) noexcept { return static_cast<const KinoProcessor*>(p)->cpu->isNoOp(); }
 int kino_ocio_apply(const void *p, float *rgba, size_t pixels, char *err, size_t cap) noexcept {

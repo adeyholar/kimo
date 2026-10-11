@@ -576,3 +576,40 @@ Knowninputs include signed/toe/HDRsamples; independentLGG math verified to2e-6,
 forward/inverse to2e-5 float tolerances, repeatedoutputstable. ActualSDRfootage
 explicitlydecoded sRGB->AP1, graded, viewed through officialnativeACES2sRGBview;
 before/afterpixels visually inspected. No camera/HDR/displaycertification.
+
+## ASC CDL .cc/.cdl interop
+
+inspect_asc_cdl(path) parses bounded1MiBXML; apply_asc_cdl(clip_id,path,id?,encoding)
+imports a selected correction as immutablepayload asc_cdl effect;
+export_asc_cdl(path,source_path or clip_id+effect_id,id?) canonicalexports it.
+Multiplecorrections require selectionID toapply/.ccsingleexport. Slope/offset/
+power/saturation doubles,IDs andsupporteddescriptions survive semanticroundtrip;
+XML whitespace/order/comments/namespaceversion are not preserved byteforbyte.
+
+Strictprofile: .cc ColorCorrection or .cdl ColorDecisionList with inline
+ColorDecision/ColorCorrection, SOPNode/Slope/Offset/Power, SatNode/Saturation,
+Description plus InputDescription/ViewingDescription. Empty/duplicate IDs,
+numericcount/nonfinite/rangeerrors, duplicatefields, unknownchildren/attributes,
+externalreferences, DTD/entitydefinitions, mixednamespaces rejected. Namespace
+none, urn:ASC:CDL:v1.01 orv1.2 accepted; canonicalexportv1.2. Metadata outside
+thisprofile rejected rather than lost. Slope/sat>=0,power>0, valuesbounded100.
+
+NativeOCIO2.5.1 CDLTransform uses explicit CDL_ASC clamping (librarydefault
+NO_CLAMP is NOTused): clamp(input*slope+offset,0,1)^power, BT709weighted
+luma/saturation, finalclamp0..1. Alpha unchanged. Existinglegacycdl effect is
+unchanged. NoFileTransform assetpermissionbypass; nativeCDL processorbuilt from
+strictparsedvalues. Applyrequiresnativefeature. Encodingcurrent applies directly
+to callerdeclared currentencoding; encodingACEScct requiresmanagedAP1 and explicit
+config_path/linear_space/cct_space, convertingAP1->ACEScct->AP1 throughnativeOCIO.
+Domainnames callerdeclared, notinferred. Boundgamut guard+wrapperconflicts fail.
+ImportedXMLfile notneededafterapply; ACEScctsandwich stillrequires itsconfigfile.
+
+Knownsigned/clippedinputs match independentASC formula to2e-6; repeatednative
+outputexact, semantic.cc/.cdl roundtrip tested, sourcefiledeletedthen effectexport
+retainsvalues. RealSDRfootage decodedsRGB->AP1, importedCDL inACEScct, official
+ACES2sRGBview before/afterpixels inspected. NoCDLofficialconformancecertificate,
+Resolveparity, HDRcamera/displaycalibration orallXMLdialects claim.
+Reference nativeclampsemantics:
+https://opencolorio.readthedocs.io/en/latest/api/transforms.html
+XMLinteropexamples (secondaryimplementation):
+https://cdl-convert.readthedocs.io/en/latest/usage_cc.html

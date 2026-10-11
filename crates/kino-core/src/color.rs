@@ -14,6 +14,8 @@ pub mod scope_command;
 pub mod matching;
 pub mod idt;
 pub mod cdl;
+pub mod cdl_xml;
+pub mod cdl_file;
 pub mod blur;
 pub mod linear;
 pub mod pipeline;

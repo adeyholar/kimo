@@ -59,6 +59,7 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
 ];
 
 pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f: &mut Frame, t: f64, seed: u64) -> Result<(), String> {
+    if kind=="asc_cdl"{if strings.contains_key("wrapper_working_gamut")||strings.contains_key("ocio_domain"){return Err("ASC CDL owns declareddomain; noextra wrapper".into())}return crate::color::cdl_file::apply(strings,f)}
     if kind=="acescct_primaries" {if strings.contains_key("wrapper_working_gamut")||strings.contains_key("ocio_domain"){return Err("ACEScctprimaries owns its native domain sandwich; no extra wrapper".into())}return crate::color::cct_grade::apply(params,strings,f,t)}
     if strings.contains_key("ocio_domain") {return crate::color::effect_domain::apply(kind,params,strings,f,t,seed)}
     if strings.contains_key("wrapper_working_gamut") {return crate::color::wrapper::apply(kind,params,strings,f,t,seed)}
