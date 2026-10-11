@@ -72,6 +72,12 @@ Emitters take `colliders` (circle, rect or plane, analytic and deterministic) th
 
 ![particle physics](docs/media/particle-physics.jpg)
 
+### Particles from a layer
+
+An emitter with `shape: layer` and `emit_clip` spawns on that clip's alpha silhouette (`emit_edge` for the outline only), so embers can rise off a title's letters; sparks can also bounce off it (`colliders` kind `layer`). Shown: a 5 s 1280x720 title clip, export 18.8 s. Limit: the silhouette is read at the current frame and held for the particle's history, so a moving title emits from where it is now, not from its past positions.
+
+![embers from title outline](docs/media/title-embers.jpg)
+
 ### Motion blur on particles and on 3D scenes
 
 Both take `shutter_deg` and `blur_samples`, default off. The scene is sampled at several instants across the shutter and averaged in premultiplied space. 3D scene blur re-poses the whole scene per sample, so object animation, parenting and camera moves all blur. Measured on a 1280x720 scene: 0.19 s per frame off, 0.87 s at 8 samples. At 8 samples a very fast move shows stepped copies, so raise `blur_samples`.
