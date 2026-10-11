@@ -19,6 +19,7 @@ pub mod cdl_file;
 pub mod blur;
 pub mod linear;
 pub mod pipeline;
+pub mod view_video;
 pub mod encode_contract;
 pub mod wrapper;
 pub mod metadata;

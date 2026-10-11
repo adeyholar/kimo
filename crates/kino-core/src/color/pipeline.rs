@@ -22,25 +22,29 @@ pub fn rgba16(f:&Frame)->Result<Vec<u8>,String>{super::frame::validate(f)?;if f.
 /// High-bit streaming export. PQ: Rec2020/PQ 10-bit HEVC tagged HDR10-compatible,
 /// but no dynamic metadata and no implied HDR mastering certification.
 pub fn export_high(p:&Project,path:&str,format:&str,crf:u32)->Result<f64,String>{
+    export_high_with(p,path,format,crf,&p.color_pipeline,|f|output(p,f))
+}
+/// Shared encoding mechanics; caller provides an explicit delivery declaration and transform.
+pub(crate) fn export_high_with(p:&Project,path:&str,format:&str,crf:u32,delivery_settings:&Pipeline,mut transform:impl FnMut(&mut Frame)->Result<(),String>)->Result<f64,String>{
     use std::process::Command;
     let (codec,pix)=match format{"hevc10"=>("libx265","yuv420p10le"),"ffv1_16"=>("ffv1","gbrp16le"),_=>return Err("format must be hevc10 or ffv1_16".into())};
     if crf>51{return Err("crf 0..51 required".into())}p.color_pipeline.validate()?;
     let duration=p.duration();if (duration*p.fps).round()<1.{return Err("timeline rounds to zero output frames".into())}if p.width==0||p.height==0||!p.fps.is_finite()||p.fps<=0.||!duration.is_finite()||duration<=0.{return Err("high-bit export requires nonzero dimensions, positive finite fps and duration".into())}
     if format=="hevc10"&&(p.width%2!=0||p.height%2!=0){return Err("HEVC420 requires even dimensions".into())}crate::guard::check_project(p,crate::guard::limits())?;
-    let hdr=p.color_pipeline.enabled&&p.color_pipeline.output_transfer==6;
-    if hdr&&p.color_pipeline.output_gamut!=1{return Err("PQ export requires Rec2020 output gamut=1".into())}
-    if p.color_pipeline.enabled&&p.color_pipeline.output_transfer==7&&p.color_pipeline.output_gamut!=1{return Err("HLG export requires Rec2020 output gamut=1".into())}
-    let delivery=super::encode_contract::high(&p.color_pipeline,format)?;
+    let hdr=delivery_settings.enabled&&delivery_settings.output_transfer==6;
+    if hdr&&delivery_settings.output_gamut!=1{return Err("PQ export requires Rec2020 output gamut=1".into())}
+    if delivery_settings.enabled&&delivery_settings.output_transfer==7&&delivery_settings.output_gamut!=1{return Err("HLG export requires Rec2020 output gamut=1".into())}
+    let delivery=super::encode_contract::high(delivery_settings,format)?;
     if format=="ffv1_16"&&!path.to_lowercase().ends_with(".mkv"){return Err("ffv1_16 requires .mkv".into())}
     let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba64le","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v",codec,"-pix_fmt",pix]);
-    if p.color_pipeline.mastering.is_some()&&format!="hevc10"{return Err("static mastering metadata supported by HEVC10 only".into())}
-    let mut encoder_params="pools=2:frame-threads=2:log-level=error".to_string();if let Some(m)=&p.color_pipeline.mastering{encoder_params.push(':');encoder_params.push_str(&m.x265()?);}
+    if delivery_settings.mastering.is_some()&&format!="hevc10"{return Err("static mastering metadata supported by HEVC10 only".into())}
+    let mut encoder_params="pools=2:frame-threads=2:log-level=error".to_string();if let Some(m)=&delivery_settings.mastering{encoder_params.push(':');encoder_params.push_str(&m.x265()?);}
     if format=="hevc10"{cmd.args(["-crf",&crf.to_string(),"-x265-params",&encoder_params,"-tag:v","hvc1"]);}
     if let Some(matrix)=delivery.matrix_scale{cmd.args(["-vf",&format!("scale=in_range=pc:out_color_matrix={matrix}:out_range=tv")]);}
     cmd.args(["-color_range",delivery.range,"-color_primaries",delivery.primaries,"-color_trc",delivery.transfer_tag,"-colorspace",delivery.matrix]);
     let count=(p.duration()*p.fps).round() as usize;let frame_bytes=(p.width as usize).checked_mul(p.height as usize).and_then(|v|v.checked_mul(8)).ok_or("encoder frame overflow")?;
     let mut encoder=super::process::EncodeStream::new(cmd.arg(path),frame_bytes,super::process::encode_deadline(count))?;let mut cache=crate::render::Cache::new();
-    for i in 0..count{crate::guard::check();let t=i as f64/p.fps;crate::render::prepare_export_range(p,&mut cache,t,t)?;let mut f=crate::render::render_frame(p,t,&cache)?;output(p,&mut f)?;encoder.write(rgba16(&f)?)?}encoder.finish()?;
+    for i in 0..count{crate::guard::check();let t=i as f64/p.fps;crate::render::prepare_export_range(p,&mut cache,t,t)?;let mut f=crate::render::render_frame(p,t,&cache)?;transform(&mut f)?;encoder.write(rgba16(&f)?)?}encoder.finish()?;
     // Keep PCM audio intact in FFV1/MKV; AAC for MP4 HEVC.
     let pcm=crate::audio::mix_strict(p).map_err(|e|e.to_string())?;if pcm.iter().any(|v|v.abs()>1e-6){super::mux::audio(path,&pcm,format,count)?}
     Ok(count as f64/p.fps)

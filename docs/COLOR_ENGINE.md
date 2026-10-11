@@ -631,3 +631,26 @@ path calls to_rgba8. Integer delivery clamps 0..1, so a lossless codec does not
 restore out-of-domain radiance. Chroma subsampling and HEVC quantization are not
 lossless. Native OCIO display/view is not a stored project output declaration:
 there is no automatic view-name-to-tag guess and no native view video tool here.
+
+## Explicit native OCIO view video
+
+`set_ocio_view_delivery(selection)` persists config_path/source/display/view,
+input_gamut, output_gamut, output_transfer as a separate optional selection.
+It requires managed scene-linear pixels and a matching working/input gamut;
+the named OCIO source must represent that gamut and white point. Caller declares
+the actual view output gamut/transfer. Neither display nor view names select tags.
+Config must be self-contained and a real OCIO 2.5.1 display/view pair. Validation
+is transactional. Export revalidates current working gamut/config, so changing
+working gamut makes the old selection stale instead of silently converting it.
+
+`export_ocio_view_video(path,format,crf)` streams rendered working pixels through
+that native display processor including looks, WITHOUT the project output
+transform, to the existing RGBA64LE delivery pipe. Formats: hevc10/ffv1_16.
+Tags/conversion obey the strict delivery contract. Ordinary exports deliberately
+ignore the optional view selection. Audio follows the shared high-bit path.
+Existing project mastering metadata is not inherited: the new view may differ.
+Configs are loaded fresh at export; replacing a config file changes the result.
+Integer outputs clamp 0..1; the result reports excursion pixel count across
+frames. No alpha channel is retained in the video codecs. Source gamut/white
+and output encoding are declarations, not validated measurements of a custom
+OCIO config. Math/reference agreement does not certify a display or HDR mastering.

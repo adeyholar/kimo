@@ -237,7 +237,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         Source::Solid { color } => for i in 0..w*h { f.d[i*4]=color[0] as f32; f.d[i*4+1]=color[1] as f32; f.d[i*4+2]=color[2] as f32; f.d[i*4+3]=1.0; },
         Source::Gradient { c1, c2 } => for y in 0..h { let k = y as f64 / h as f64; for x in 0..w { let i=(y*w+x)*4; for j in 0..3 { f.d[i+j] = (c1[j]*(1.0-k)+c2[j]*k) as f32; } f.d[i+3]=1.0; } },
         Source::Adjustment => {}
-        Source::Precomp { tracks } => { let mut sub = Project { occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: tracks.clone(), assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 }; sub.name = c.id.clone(); match render_frame_opts(&sub, lt, cache, true) {Ok(fr)=>f=fr,Err(_)=>f.d.fill(f32::NAN)} }
+        Source::Precomp { tracks } => { let mut sub = Project { ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: tracks.clone(), assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 }; sub.name = c.id.clone(); match render_frame_opts(&sub, lt, cache, true) {Ok(fr)=>f=fr,Err(_)=>f.d.fill(f32::NAN)} }
         Source::Shape { shape, width, height, fill, stroke_width, stroke_color, sides, corner_radius } => {
             let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0); let (hw, hh) = (width / 2.0, height / 2.0);
             // signed distance (negative inside)
@@ -309,7 +309,7 @@ thread_local! { static FAST_NS: std::cell::Cell<bool> = Default::default(); }
 thread_local! { static LAST_RECT: std::cell::Cell<Option<(usize, usize, usize, usize)>> = Default::default(); }
 fn transform_bb(src: &Frame, bb: Option<(usize, usize, usize, usize)>, scale: f64, rot_deg: f64, dx: f64, dy: f64) -> Frame {
     if (scale - 1.0).abs() < 1e-9 && rot_deg == 0.0 && dx == 0.0 && dy == 0.0 { return Frame { w: src.w, h: src.h, d: src.d.clone() }; }
-    let (w, h) = (src.w, src.h); let mut o = Frame::new(w, h);
+    let tp0 = std::time::Instant::now(); let (w, h) = (src.w, src.h); let mut o = Frame::new(w, h); prof("tb_alloc", tp0);
     let (cx, cy) = (w as f64/2.0, h as f64/2.0); let r = rot_deg.to_radians(); let (s, co) = (r.sin(), r.cos());
     let inv = 1.0 / scale.max(1e-6);
     let pure_shift = (scale - 1.0).abs() < 1e-9 && rot_deg == 0.0 && dx.fract() == 0.0 && dy.fract() == 0.0;
@@ -322,12 +322,18 @@ fn transform_bb(src: &Frame, bb: Option<(usize, usize, usize, usize)>, scale: f6
     let (rx0, ry0) = ((ox0.floor() - 2.0).max(0.0) as usize, (oy0.floor() - 2.0).max(0.0) as usize); let (rx1, ry1) = (((ox1.ceil() + 2.0).min(w as f64 - 1.0)).max(0.0) as usize, ((oy1.ceil() + 2.0).min(h as f64 - 1.0)).max(0.0) as usize);
     if ox1 < 0.0 || oy1 < 0.0 || ox0 > w as f64 || oy0 > h as f64 { return o; }
     LAST_RECT.with(|l| l.set(Some((rx0, ry0, rx1, ry1))));
-    let (sd, ow) = (&src.d, w);
+    // rot==0: sx depends only on (x, sub-x) and sy only on (y, sub-y); precompute (exactly the same f64 expressions, since px*1.0+py*0.0 == px)
+    let axis_aligned = rot_deg == 0.0;
+    let xt: Vec<f64> = if axis_aligned { (0..w * ns).map(|k| { let (x, sx_) = (k / ns, k % ns); let px = x as f64 + (sx_ as f64 + 0.5) / nsf - 0.5 - cx - dx; (px * co + 0.0 * s) * inv + cx }).collect() } else { vec![] };
+    let yt: Vec<f64> = if axis_aligned { (0..h * ns).map(|k| { let (y, sy_) = (k / ns, k % ns); let py = y as f64 + (sy_ as f64 + 0.5) / nsf - 0.5 - cy - dy; (-0.0 * s + py * co) * inv + cy }).collect() } else { vec![] };
+    let yy_row = |y: usize, _r0: usize| y;
+    let (sd, ow) = (&src.d, w); let tpl = std::time::Instant::now();
     crate::par::rows_mut(&mut o.d[ry0 * w * 4..(ry1 + 1) * w * 4], w * 4, |yy, orow| { let y = ry0 + yy; for x in rx0..=rx1 {
         let mut acc = [0f32; 4];
         for sy_ in 0..ns { for sx_ in 0..ns {
+            let (sx, sy) = if axis_aligned { (xt[x * ns + sx_], yt[yy_row(y, ry0) * ns + sy_]) } else {
             let px = x as f64 + (sx_ as f64 + 0.5) / nsf - 0.5 - cx - dx; let py = y as f64 + (sy_ as f64 + 0.5) / nsf - 0.5 - cy - dy;
-            let sx = (px*co + py*s)*inv + cx; let sy = (-px*s + py*co)*inv + cy;
+            ((px*co + py*s)*inv + cx, (-px*s + py*co)*inv + cy) };
             if sx < -0.5 || sy < -0.5 || sx > w as f64 - 0.5 || sy > h as f64 - 0.5 { continue; }
             let (sx, sy) = (sx.clamp(0.0, (w-1) as f64), sy.clamp(0.0, (h-1) as f64));
             let (x0, y0) = (sx.floor() as usize, sy.floor() as usize); let (x1, y1) = ((x0+1).min(w-1), (y0+1).min(h-1));
@@ -337,7 +343,7 @@ fn transform_bb(src: &Frame, bb: Option<(usize, usize, usize, usize)>, scale: f6
         }}
         let a = acc[3]; let oi = x*4; if a > 1e-6 { orow[oi] = acc[0]/a; orow[oi+1] = acc[1]/a; orow[oi+2] = acc[2]/a; orow[oi+3] = a * wgt; }
     } });
-    let _ = ow; o
+    prof("tb_loop", tpl); let _ = ow; o
 }
 
 fn blend(dst: &mut Frame, src: &Frame, opacity: f32, mode: &str, mask: Option<&dyn Fn(usize, usize) -> f32>) {
@@ -379,8 +385,9 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         for ek in (0..=ne).rev() {
         let lt = lt0 - ek as f64 * esp; if lt < 0.0 || lt >= c.duration { continue; }
         if let Source::Adjustment = c.source {
-            let mut adj = Frame { w, h, d: out.d.clone() };
-            for e in &c.effects { effects::apply(&e.kind, &e.params, &e.strings, &mut adj, lt, seed)?; }
+            let tpa = std::time::Instant::now(); let mut adj = Frame { w, h, d: out.d.clone() };
+            for e in &c.effects { let tq = std::time::Instant::now(); effects::apply(&e.kind, &e.params, &e.strings, &mut adj, lt, seed)?; if std::env::var("KINO_PROF").is_ok() { eprintln!("ADJ {} {:.3}", e.kind, tq.elapsed().as_secs_f64()); } }
+            prof("adjust", tpa);
             let op = prop(c, "opacity", lt) as f32; let mk: Option<Frame> = c.mask.as_ref().map(|m| { let mut mf = Frame::new(w, h); for i in 0..w*h { mf.d[i*4] = out.d[i*4]; mf.d[i*4+1] = out.d[i*4+1]; mf.d[i*4+2] = out.d[i*4+2]; mf.d[i*4+3] = 1.0; } apply_mask(&mut mf, m, lt); { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut mf, &m.layers, lt, &ctx); } mf });
             for i in 0..w*h { let k = op * mk.as_ref().map(|m| m.d[i*4+3]).unwrap_or(1.0); for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - k) + adj.d[i*4+j] * k; } }
             continue;
@@ -411,7 +418,7 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
             blend(&mut out, &f3, op, c_blend, mask.as_deref()); if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } } continue;
         }
         let moving = c.motion_blur > 0.0 && ek == 0 && { let sh0 = c.motion_blur / 360.0 / p.fps; ["x", "y", "scale", "rotation"].iter().any(|k| (prop(c, k, lt - sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9 || (prop(c, k, lt + sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9) };
-        let tp=std::time::Instant::now(); let bbf = alpha_bbox(&f); let f = if moving { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h]; let mut u: Option<(usize, usize, usize, usize)> = None;
+        let tp=std::time::Instant::now(); let bbf = alpha_bbox(&f); prof("bbox", tp); let tp=std::time::Instant::now(); let f = if moving { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h]; let mut u: Option<(usize, usize, usize, usize)> = None;
             for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (prop(c, "x", lt2), prop(c, "y", lt2)); dx2 += dx - prop(c, "x", lt) - mp0x; dy2 += dy - prop(c, "y", lt) - mp0y; let (mp2x, mp2y, mp2a) = mp_at(lt2); dx2 += mp2x; dy2 += mp2y;
                 let mut sc2 = prop(c, "scale", lt2); if sc != prop(c, "scale", lt) { sc2 *= sc / prop(c, "scale", lt).max(1e-9); } LAST_RECT.with(|l| l.set(None)); FAST_NS.with(|l| l.set(true)); let tf = transform_bb(&f, bbf, sc2, prop(c, "rotation", lt2) + rot_extra - mp0a + mp2a, dx2, dy2); FAST_NS.with(|l| l.set(false));
                 if let Some((rx0, ry0, rx1, ry1)) = LAST_RECT.with(|l| l.get()) { u = Some(match u { Some((a, b, c2, d)) => (a.min(rx0), b.min(ry0), c2.max(rx1), d.max(ry1)), None => (rx0, ry0, rx1, ry1) });
@@ -476,7 +483,7 @@ pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) ->
         // work queue: nt workers pull frame indices, so one slow frame (shards) no longer idles the other cores
         let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
         std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
-            let res = render_frame(p, (f0 + k) as f64 / p.fps, cache).and_then(|mut f| {crate::color::pipeline::output(p,&mut f)?;Ok(to_rgba8(&f))}); *slots[k - i].lock().unwrap() = Some(res); }); } });
+            let tf0 = std::time::Instant::now(); let res = render_frame(p, (f0 + k) as f64 / p.fps, cache).and_then(|mut f| {prof("frame_total", tf0); let tq = std::time::Instant::now(); crate::color::pipeline::output(p,&mut f)?; prof("pipe_out", tq); let tq = std::time::Instant::now(); let r = to_rgba8(&f); prof("to_rgba8", tq); Ok(r)}); *slots[k - i].lock().unwrap() = Some(res); }); } });
         let frames: Vec<Result<Vec<u8>, String>> = slots.into_iter().map(|m| m.into_inner().unwrap().unwrap()).collect();
         for f in frames { encoder.write(f?)?; }
         i = end;
@@ -496,7 +503,7 @@ pub fn render_clip_alone(p: &Project, id: &str, t: f64, cache: &Cache) -> Option
     let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?.clone();
     if t < c.start - 1e-9 || t >= c.start + c.duration - 1e-9 { return Some(Frame::new(p.width as usize, p.height as usize)); }
     let mut c = c; if let Some(m) = c.mask.as_mut() { m.matte = None; }
-    let sub = Project { occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![c], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 };
+    let sub = Project { ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![c], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 };
     MATTE_DEPTH.with(|d| d.set(d.get() + 1)); let r = render_frame_opts(&sub, t, cache, true).ok(); MATTE_DEPTH.with(|d| d.set(d.get() - 1)); r
 }
 

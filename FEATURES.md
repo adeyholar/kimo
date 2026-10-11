@@ -354,3 +354,13 @@ Fix: select a supported delivery gamut/transfer, or use float EXR/TIFF for worki
 or log interchange. This is signal labeling/precision, not HDR display calibration.
 
 - Layer transform parallelism (export/render speed, bit-identical): the scale/rotate/translate resampler splits rows over the `par` threads. Measured on 2 vCPU, 8 scaled+rotated 1280x720 layers: 0.942 s to 0.558 s per frame (1.69x), output PNG md5 identical for KINO_THREADS=1 and 2. Real film profile showed transform as the dominant stage.
+
+Native OCIO view video (explicit opt-in): `set_ocio_view_delivery` stores config,
+source space, display/view, scene-linear input gamut, and actual output
+gamut/transfer declaration. `export_ocio_view_video` applies the native OCIO
+2.5.1 forward display processor including looks, bypasses project output, then
+uses strict HEVC10/FFV1 16 delivery tags. No guessing from view names. Selection
+must match the current working gamut and does not affect ordinary export.
+Caller declares source gamut/white and view output encoding; tags do not prove
+these declarations. Existing mastering metadata is NOT inherited. No native
+HDR mastering certification. Integer outputs clip 0..1 and HEVC uses YUV420.

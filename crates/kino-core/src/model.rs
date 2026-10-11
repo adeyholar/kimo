@@ -122,6 +122,7 @@ fn one_speed() -> f64 { 1.0 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
     #[serde(default)] pub occluders: BTreeMap<String, OccSpec>,
+    #[serde(default)] pub ocio_view_delivery: Option<crate::color::view_video::Selection>,
     #[serde(default)] pub color_pipeline: crate::color::pipeline::Pipeline,
     #[serde(default)] pub camera: BTreeMap<String, crate::keyframe::Prop>,
     pub name: String,
@@ -139,7 +140,7 @@ pub struct Project {
 
 impl Default for Project {
     fn default() -> Self {
-        Project { occluders: BTreeMap::new(), color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![] }
+        Project { ocio_view_delivery: None, occluders: BTreeMap::new(), color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![] }
     }
 }
 
