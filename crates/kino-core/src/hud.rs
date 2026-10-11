@@ -94,11 +94,11 @@ pub fn add_prompt_box(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let fsz = num(a, "size", 24.0) * k; let (w, h) = (cw * 0.62, fsz * 3.2); let y = num(a, "y", 0.3 * ch); let e = Ease::OutExpo; let mut cl = vec![];
     let mut bg = clip(ss, Source::Shape { shape: "rect".into(), width: w, height: h, fill: [0.07, 0.07, 0.08], stroke_width: 2.0 * k, stroke_color: accent, sides: 4, corner_radius: 10.0 * k }, start, dur); set(&mut bg, "y", y);
     key(&mut bg, "scale", 0.0, 0.9, e); key(&mut bg, "scale", 0.4, 1.0, e); key(&mut bg, "opacity", 0.0, 0.0, e); key(&mut bg, "opacity", 0.25, 0.94, e); key(&mut bg, "opacity", dur - 0.2, 0.94, Ease::In); key(&mut bg, "opacity", dur, 0.0, Ease::In); cl.push(bg);
-    let mut t = clip(ss, txt(&text, a.get("font").and_then(|v| v.as_str()).unwrap_or("Inter"), fsz, [0.96, 0.95, 0.9], "left"), start + 0.3, dur - 0.3); set(&mut t, "y", y); set(&mut t, "x", -w / 2.0 + fsz * 1.2 + 0.0);
+    let mut t = clip(ss, txt(&text, a.get("font").and_then(|v| v.as_str()).unwrap_or("Inter"), fsz, [0.96, 0.95, 0.9], "left"), start + 0.3, dur - 0.3); set(&mut t, "y", y); let fam = a.get("font").and_then(|v| v.as_str()).unwrap_or("Inter"); let tw = crate::text::measure(&text, fam, fsz, 0.0, 0.0, "left", cw).map(|v| v.0).unwrap_or(text.chars().count() as f64 * fsz * 0.5); set(&mut t, "x", -w / 2.0 + fsz * 1.2 + tw / 2.0);
     key(&mut t, "reveal", 0.0, 0.0, Ease::Linear); key(&mut t, "reveal", type_time, 1.0, Ease::Linear); key(&mut t, "opacity", dur - 0.5, 1.0, Ease::In); key(&mut t, "opacity", dur - 0.3, 0.0, Ease::In); cl.push(t);
     // blinking caret: alternating on/off short clips after typing, plus a solid caret during typing is omitted (text engine shows reveal)
     let mut tcur = start + 0.3 + type_time; let end = start + dur - 0.3; let cx = -w / 2.0 + fsz * 1.2 + 0.0;
-    let _ = cx; let mut on = true; while tcur < end - 0.01 { let d = 0.5f64.min(end - tcur); if on { let mut c = clip(ss, shape("rect", 2.5 * k, fsz * 1.1, [0.96, 0.95, 0.9], 0.0, [0.0; 3]), tcur, d); set(&mut c, "y", y); set(&mut c, "x", -w / 2.0 + fsz * 1.2 + text.chars().count() as f64 * fsz * 0.5 + 4.0 * k); cl.push(c); } tcur += d; on = !on; }
+    let _ = cx; let mut on = true; while tcur < end - 0.01 { let d = 0.5f64.min(end - tcur); if on { let mut c = clip(ss, shape("rect", 2.5 * k, fsz * 1.1, [0.96, 0.95, 0.9], 0.0, [0.0; 3]), tcur, d); set(&mut c, "y", y); set(&mut c, "x", -w / 2.0 + fsz * 1.2 + tw + 4.0 * k); cl.push(c); } tcur += d; on = !on; }
     let ids = push(ss, &tid, cl)?; Ok(json!({"clip_ids": ids}))
 }
 

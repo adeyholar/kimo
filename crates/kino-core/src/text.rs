@@ -69,6 +69,8 @@ fn animate(an: &[TextAnimator], t: f64, g: &G, nchar: usize, nword: usize, nline
 }
 
 /// Rasterize all glyphs (with animator transforms) into a coverage mask; also returns the block bounds in canvas px.
+/// Laid-out size (width, height) in canvas pixels of `text` for a font name or path; same layout the renderer uses.
+pub fn measure(text: &str, font_name: &str, size: f64, spacing: f64, weight: f64, align: &str, cw: f64) -> Result<(f64, f64), String> { let f = font(font_name, weight)?; let (_, bw, bh, ..) = layout(text, &f, size as f32, spacing as f32, align, cw as f32, None); Ok((bw as f64, bh as f64)) }
 fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f32, align: &str, reveal: f64, fx: Option<&TextFx>, t: f64) -> (Vec<f32>, [f32; 4]) {
     let (glyphs, bw, bh, nl, nwords, _) = layout(text, f, size, spacing, align, cw as f32, fx); let sf = f.as_scaled(PxScale::from(size));
     let nchar = glyphs.len(); let shown = (reveal.clamp(0.0, 1.0) * nchar as f64).ceil() as usize;
