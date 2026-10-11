@@ -62,7 +62,7 @@ Left, default hole. Right, `hole_fill=1` (same frame, 1280x720 city plate, t=1.0
 
 ### Frosted glass (backdrop effect)
 
-`frosted_glass` turns any layer's alpha into a glass pane: inside it shows the composite below, blurred, tinted and refracted at a bevel, with a rim light. It runs after the layer's own position and scale, so a sliding panel frosts what is really under it. Frame from a 5 s 1280x720 clip (export took 15.0 s on the 2 GB box); the title sits on the pane. Limits: not for 3D-tilted layers; the refraction is a bevel offset, not a ray-traced lens; frosting is a 3-pass box blur, not a Gaussian.
+`frosted_glass` turns any layer's alpha into a glass pane: inside it shows the composite below, blurred, tinted and refracted at a bevel, with a rim light. It runs after the layer's own position and scale, so a sliding panel frosts what is really under it. Frame from a 5 s 1280x720 clip (export took 15.0 s on the 2 GB box); the title sits on the pane. `magnify` turns the pane into a magnifier lens. Limits: not for 3D-tilted layers; the refraction is a bevel offset, not a ray-traced lens; frosting is a 3-pass box blur, not a Gaussian.
 
 ![frosted glass](docs/media/frosted-glass.jpg)
 

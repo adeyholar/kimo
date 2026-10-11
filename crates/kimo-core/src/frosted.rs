@@ -21,6 +21,9 @@ pub fn apply(pr: &Params, f: &mut Frame, t: f64) -> Result<(), String> {
     let blur = g("blur", 24.0).clamp(0.0, 200.0) as usize; let refr = g("refraction", 14.0).clamp(0.0, 80.0) as f32; let disp = g("dispersion", 0.25).clamp(0.0, 1.5) as f32;
     let bevel = g("bevel", 10.0).clamp(1.0, 80.0) as usize; let tint = [g("tint_r", 1.0) as f32, g("tint_g", 1.0) as f32, g("tint_b", 1.0) as f32]; let tamt = g("tint_amount", 0.12).clamp(0.0, 1.0) as f32;
     let sat = g("saturation", 1.15).clamp(0.0, 3.0) as f32; let rim = g("edge_light", 0.5).clamp(0.0, 2.0) as f32; let mix = g("layer_mix", 0.0).clamp(0.0, 1.0) as f32;
+    let magnify = g("magnify", 1.0).clamp(0.25, 8.0) as f32;
+    // centre of the pane = alpha centroid (only needed for magnify != 1)
+    let (mut cx, mut cy) = (w as f32 * 0.5, h as f32 * 0.5); if magnify != 1.0 { let (mut sx, mut sy, mut sa) = (0f64, 0f64, 0f64); for y in 0..h { for x in 0..w { let a = f.d[(y * w + x) * 4 + 3] as f64; if a > 0.0 { sx += x as f64 * a; sy += y as f64 * a; sa += a; } } } if sa > 0.0 { cx = (sx / sa) as f32; cy = (sy / sa) as f32; } }
     let mut frost = Frame { w, h, d: bd.d.clone() }; box_blur3(&mut frost, blur);
     // smooth alpha -> height field; its gradient is the bevel normal, nonzero only near the pane edge
     let mut hf = Frame { w, h, d: vec![0.0; w * h * 4] }; for i in 0..w * h { hf.d[i * 4] = f.d[i * 4 + 3]; hf.d[i * 4 + 3] = 1.0; } box_blur3(&mut hf, bevel * 2);
@@ -30,7 +33,8 @@ pub fn apply(pr: &Params, f: &mut Frame, t: f64) -> Result<(), String> {
     for y in 0..h { for x in 0..w { let i = y * w + x; let a = f.d[i * 4 + 3]; if a <= 0.0 { continue; }
         let gx = hh(x + 1, y) - hh(x.saturating_sub(1), y); let gy = hh(x, y + 1) - hh(x, y.saturating_sub(1)); let gm = (gx * gx + gy * gy).sqrt();
         let (ox, oy) = (-gx * refr * bevel as f32 * 0.5, -gy * refr * bevel as f32 * 0.5);
-        let mut c = [0f32; 3]; for (j, cj) in c.iter_mut().enumerate() { let s = 1.0 + (j as f32 - 1.0) * disp * 0.5; *cj = sample(&frost.d, w, h, x as f32 + ox * s, y as f32 + oy * s, j); }
+        let (mx, my) = if magnify != 1.0 { (cx + (x as f32 - cx) / magnify, cy + (y as f32 - cy) / magnify) } else { (x as f32, y as f32) };
+        let mut c = [0f32; 3]; for (j, cj) in c.iter_mut().enumerate() { let s = 1.0 + (j as f32 - 1.0) * disp * 0.5; *cj = sample(&frost.d, w, h, mx + ox * s, my + oy * s, j); }
         let l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; for cj in c.iter_mut() { *cj = l + (*cj - l) * sat; }
         for j in 0..3 { c[j] = c[j] * (1.0 - tamt) + tint[j] * tamt; }
         // rim light: bright where the bevel normal faces up-left, darker down-right
