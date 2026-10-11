@@ -65,6 +65,7 @@ pub struct Clip {
     pub speed_curve: Option<Prop>,
     pub props: BTreeMap<String, Prop>, // opacity, x, y, scale, rotation
     pub effects: Vec<Effect>,
+    #[serde(default)] pub grade_graph: Option<crate::color::node_graph::Graph>,
     pub blend: String,
     #[serde(default)]
     pub mask: Option<Mask>,

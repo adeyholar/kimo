@@ -705,3 +705,31 @@ No calibrated stock, ACES/look superiority or display certification claim.
 - `add_shape_modifier` / `remove_shape_modifier` / `list_shape_modifiers`: trim paths, repeater, offset paths, merge paths, gradient stroke (shape_* effects, keyframable).
 - `set_layer_style` / `remove_layer_style` / `list_layer_styles`: inner shadow, bevel, stroke (inside/center/outside).
 - Proof: `python3 tests/gap3_proof.py`.
+Per-clip grading node DAG (explicit opt-in): grade nodes, normalized weighted
+parallel RGB mixers and ordered opacity layer mixers. `input` is the rendered
+clip after legacy effects, BEFORE clip masks/transforms. Serial graph matches
+same ordered grades exactly. No graph = old path. Output selection is explicit;
+parked nodes not rendered, all connections checked for cycles/missing IDs.
+First-input alpha is retained; node masks blend RGB against first input. This
+is a grading graph, NOT Fusion, shared/group/timeline grades or Resolve mixer
+parity. Per-node mask/key coverage and imported tracker keyframes are supported;
+tracking coordinates must come from an actual tracker, no node solver claimed.
+
+MCP: inspect_grade_graph, set_grade_graph, add_node, connect_nodes,
+disconnect_nodes, remove_grade_node, set_grade_output, set_grade_node,
+set_node_param (full Prop animation/expression), set_node_mask,
+grade_node_tracking and evaluate_grade_graph_samples (pixels/cache stats).
+Complete node/graph JSON exposes strings/domain bindings, bypass, connection
+order/weights, mask/path keys, parameters and cache budget; nothing GUI-only.
+
+Node cache is evaluation-local: a shared dependency runs once per frame/eval,
+Arc results evicted at last consumer. No persistent stale cross-frame cache.
+Max64nodes/16inputs, default256MiB cached-frame budget configurable1..1024MiB;
+over-budget fails transactionally, no quality downgrade. This budget measures
+cached input/output frames, not effect/mask scratch or decode memory; global
+memory guard remains active. Native OCIO per-effect strings work unchanged.
+Managed stale-gamut/reference-white bindings checked before timeline render.
+Tests: serial/real-frame exact parity, diamond single-evaluation/cache reuse,
+parallel/layer weights, masks/keys, nativeOCIO parity, cycles/rollback/JSON
+roundtrip, deterministic repeat and budget failures. No speed/hue/calibration
+superiority claim.

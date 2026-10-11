@@ -686,3 +686,47 @@ domain. Measured f32 shoulder rounding max2.981e-8 on100001samples0..10;
 grain additive amplitude is bounded by amount before f32 rounding, tested
 [-4,4] default delta<=0.0250003. These are sampled numerical checks, not a
 calibration or all-finite-input proof.
+
+## Per-clip grade graph model
+
+A clip may persist `grade_graph`: nodes keyed by stable caller-supplied ID,
+output ID (reserved `input` bypasses graph), cache_budget_mb. No graph leaves
+legacy effects untouched. Graph input is AFTER the clip's existing effects;
+output feeds its existing masks, geometry and composite. Adjustment-layer
+nodes follow existing adjustment effects. Nested clips carry their own graphs.
+
+Node JSON: id, kind (`grade`/`parallel`/`layer`), ordered inputs, weights (one
+Prop per input), effect (grade only: id/kind/params/strings), optional MaskLayer,
+bypass. Grade accepts one input. Parallel normalizes nonnegative0..1weights
+and averages RGB; layer uses first input as base, then blends later RGB inputs
+by their weights in order (first weight ignored). First input alpha is exact.
+These are defined kino mixers, not claimed Resolve mixer semantics. Mask/key
+coverage is computed on first input and blends node output to it. Mask kinds:
+rect/ellipse/path/linear/radial/luma/color/hsl/alpha/noise; no cross-clip mattes.
+Mask props/path keys are fully editable. `grade_node_tracking` imports normalized
+cx/cy/rot samples into rect/ellipse mask clip-local keys; not a tracking solve.
+
+MCP lifecycle: add_node -> connect_nodes -> set_grade_output. Grade defaults
+parent=input; mixers initially parked. Connections replace/append indexed
+slots; disconnect removes slot and weight. Remove referenced nodes fails until
+rewired. `set_grade_node`/`set_grade_graph` replace full JSON transactionally;
+null graph clears it. Full Prop payloads expose base/keyframes/ease/bezier/expr,
+effect strings expose explicit native OCIO domains or legacy wrappers. Node
+bypass forwards first input. Incomplete reachable nodes error at render;
+parked nodes may be edited, but cycles/missing references anywhere fail.
+
+Supported grades are a conservative color list reported by inspect_grade_graph;
+backdrop/spatial/matte-dependent effects not silently admitted. LUT nodes are
+not yet included. Graph does not infer working encoding. Existing bound gamut
+and wrapper reference-white checks apply to node effects before rendering.
+`evaluate_grade_graph_samples` reports actual evaluation-local cache stats on
+caller-declared float RGBA samples, not media decode. Serial exact parity and
+native OCIO reference proofs apply within tested domains, not certification.
+
+Cache computes each reachable node once, then frees frames after last consumer.
+Default256MiB/max1024MiB,64nodes/16inputs. A graph needing a wider live frontier
+errors; callers can raise budget or simplify graph. Budget is cached frames,
+not all effect/mask scratch; global guards remain. No cross-frame result reuse,
+so source/params/config/seed changes cannot hit stale frame results. Static
+layer cache is disabled for graph-bearing clips. No group/shared/timeline node
+system or UI added in this phase.

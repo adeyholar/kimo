@@ -380,7 +380,7 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
 pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) -> Result<Frame, String> {
     if !t.is_finite(){return Err("render time must be finite".into())}
     p.color_pipeline.validate()?;
-    for c in flat_clips(&p.tracks,0.) {for e in c.effects {if let Some(w)=e.strings.get("bound_linear_gamut"){let g=w.parse::<usize>().map_err(|_|"bad bound linear gamut")?;if !p.color_pipeline.enabled||g!=p.color_pipeline.working_gamut||e.params.get("gamut").map(|v|(v.base,v.keys.is_empty(),v.expr.is_empty()))!=Some((g as f64,true,true)){return Err("managed linear effect no longer matches working gamut; re-add it".into())}}if let Some(white)=e.strings.get("wrapper_reference_white"){if white.parse::<f64>().ok()!=Some(p.color_pipeline.reference_white){return Err("effect wrapper reference white changed; reconfigure wrapper".into())}}if let Some(w)=e.strings.get("wrapper_working_gamut"){if !p.color_pipeline.enabled||w.parse::<usize>().ok()!=Some(p.color_pipeline.working_gamut){return Err("effect encoding wrapper no longer matches project working gamut; reconfigure or clear it".into())}}}}
+    for c in flat_clips(&p.tracks,0.) {if let Some(g)=&c.grade_graph{g.validate_project(p)?;}for e in c.effects {if let Some(w)=e.strings.get("bound_linear_gamut"){let g=w.parse::<usize>().map_err(|_|"bad bound linear gamut")?;if !p.color_pipeline.enabled||g!=p.color_pipeline.working_gamut||e.params.get("gamut").map(|v|(v.base,v.keys.is_empty(),v.expr.is_empty()))!=Some((g as f64,true,true)){return Err("managed linear effect no longer matches working gamut; re-add it".into())}}if let Some(white)=e.strings.get("wrapper_reference_white"){if white.parse::<f64>().ok()!=Some(p.color_pipeline.reference_white){return Err("effect wrapper reference white changed; reconfigure wrapper".into())}}if let Some(w)=e.strings.get("wrapper_working_gamut"){if !p.color_pipeline.enabled||w.parse::<usize>().ok()!=Some(p.color_pipeline.working_gamut){return Err("effect encoding wrapper no longer matches project working gamut; reconfigure or clear it".into())}}}}
     let (w, h) = (p.width as usize, p.height as usize);
     let mut out = Frame::new(w, h);
     if !transparent { for i in 0..w*h { out.d[i*4+3] = 1.0; } } // opaque black canvas
@@ -397,6 +397,7 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         if let Source::Adjustment = c.source {
             let tpa = std::time::Instant::now(); let mut adj = Frame { w, h, d: out.d.clone() };
             for e in &c.effects { let tq = std::time::Instant::now(); effects::apply(&e.kind, &e.params, &e.strings, &mut adj, lt, seed)?; if std::env::var("KINO_PROF").is_ok() { eprintln!("ADJ {} {:.3}", e.kind, tq.elapsed().as_secs_f64()); } }
+            if let Some(g)=&c.grade_graph{g.apply(&mut adj,lt,seed,p.fps)?;}
             prof("adjust", tpa);
             let op = prop(c, "opacity", lt) as f32; let mk: Option<Frame> = c.mask.as_ref().map(|m| { let mut mf = Frame::new(w, h); for i in 0..w*h { mf.d[i*4] = out.d[i*4]; mf.d[i*4+1] = out.d[i*4+1]; mf.d[i*4+2] = out.d[i*4+2]; mf.d[i*4+3] = 1.0; } apply_mask(&mut mf, m, lt); { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut mf, &m.layers, lt, &ctx); } mf });
             for i in 0..w*h { let k = op * mk.as_ref().map(|m| m.d[i*4+3]).unwrap_or(1.0); for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - k) + adj.d[i*4+j] * k; } }
@@ -560,7 +561,7 @@ pub fn render_clip_alone(p: &Project, id: &str, t: f64, cache: &Cache) -> Option
 
 /// Effects with a per-effect mask (strings.mask_layer = id of a layer in the clip's mask stack) only apply where that layer covers.
 fn apply_effects_masked(p: &Project, c: &Clip, f: &mut Frame, lt: f64, seed: u64, t: f64, cache: &Cache) -> Result<(), String> {
-    if !c.effects.iter().any(|e| e.strings.contains_key("mask_layer")) { return apply_effects_local(&c.effects, f, lt, seed); }
+    if !c.effects.iter().any(|e| e.strings.contains_key("mask_layer")) { apply_effects_local(&c.effects, f, lt, seed)?;if let Some(g)=&c.grade_graph{g.apply(f,lt,seed,p.fps)?;}return Ok(()); }
     let mut i = 0;
     while i < c.effects.len() {
         let e = &c.effects[i];
@@ -575,6 +576,7 @@ fn apply_effects_masked(p: &Project, c: &Clip, f: &mut Frame, lt: f64, seed: u64
             i += 1;
         } else { let j = (i..c.effects.len()).find(|&j| c.effects[j].strings.contains_key("mask_layer")).unwrap_or(c.effects.len()); apply_effects_local(&c.effects[i..j], f, lt, seed)?; i = j; }
     }
+    if let Some(g)=&c.grade_graph{g.apply(f,lt,seed,p.fps)?;}
     Ok(())
 }
 
@@ -758,6 +760,7 @@ fn is_static_text(c: &Clip) -> bool {
     let constant = |pr: &crate::keyframe::Prop| pr.keys.is_empty() && pr.expr.is_empty();
     c.text_fx.is_none() && c.mask.is_none() && c.echo.is_none() && c.posterize_fps == 0.0
         && c.props.get("reveal").map_or(true, constant)
+        && c.grade_graph.is_none()
         && c.effects.iter().all(|e| STATIC_EFFECTS.contains(&e.kind.as_str()) && e.strings.is_empty() && e.params.values().all(constant))
 }
 /// Static text layers (constant text, params, effects) render identically every frame: render once per export, keep only the non-zero crop, rebuild by pasting.

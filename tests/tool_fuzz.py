@@ -14,7 +14,8 @@ class S:
         return json.loads(line)
 SKIP = {"export", "export_gif", "project_set", "render_frame", "export_gif", "export_audio", "transcribe", "download_stock"}   # slow / network
 def vals(sc):
-    t = sc.get("type"); 
+    t = sc.get("type")
+    if isinstance(t, list): t = next((x for x in t if x != "null"), None)
     if "enum" in sc: return [sc["enum"][0]]
     return {"number": [0, -1, 1e12, 0.5], "integer": [0, -1, 2**40], "string": ["", "nope", "x" * 5000], "boolean": [True, False], "array": [[], [1, 2, 3], ["a"]], "object": [{}, {"a": 1}]}.get(t, [None, 0, "x"])
 def main():
