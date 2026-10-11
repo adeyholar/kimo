@@ -308,11 +308,16 @@ fn transform(src: &Frame, scale: f64, rot_deg: f64, dx: f64, dy: f64) -> Frame {
 thread_local! { static BACKDROP: std::cell::RefCell<Option<std::rc::Rc<Frame>>> = Default::default(); }
 /// Composite of all layers below the clip currently being rendered. Only set while an effect that declares `needs_backdrop` runs; None otherwise.
 pub fn backdrop() -> Option<std::rc::Rc<Frame>> { BACKDROP.with(|b| b.borrow().clone()) }
+thread_local! { static POOL: std::cell::RefCell<Vec<(Vec<f32>, (usize, usize, usize, usize))>> = Default::default(); }
+/// Reusable layer buffers: a returned buffer is zero except inside its dirty rect, which is cleared on reuse (avoids a fresh 14 MB page-faulted allocation per layer).
+fn pool_take(w: usize, h: usize) -> Frame { let n = w * h * 4; let hit = POOL.with(|p| { let mut p = p.borrow_mut(); p.iter().position(|(v, _)| v.len() == n).map(|i| p.swap_remove(i)) });
+    match hit { Some((mut v, (x0, y0, x1, y1))) => { for y in y0..=y1.min(h - 1) { v[(y * w + x0) * 4..(y * w + x1.min(w - 1) + 1) * 4].fill(0.0); } Frame { w, h, d: v } }, None => Frame::new(w, h) } }
+fn pool_give(f: Frame, rect: (usize, usize, usize, usize)) { POOL.with(|p| { let mut p = p.borrow_mut(); if p.len() < 3 { p.push((f.d, rect)); } }); }
 thread_local! { static FAST_NS: std::cell::Cell<bool> = Default::default(); }
 thread_local! { static LAST_RECT: std::cell::Cell<Option<(usize, usize, usize, usize)>> = Default::default(); }
 fn transform_bb(src: &Frame, bb: Option<(usize, usize, usize, usize)>, scale: f64, rot_deg: f64, dx: f64, dy: f64) -> Frame {
     if (scale - 1.0).abs() < 1e-9 && rot_deg == 0.0 && dx == 0.0 && dy == 0.0 { return Frame { w: src.w, h: src.h, d: src.d.clone() }; }
-    let tp0 = std::time::Instant::now(); let (w, h) = (src.w, src.h); let mut o = Frame::new(w, h); prof("tb_alloc", tp0);
+    LAST_RECT.with(|l| l.set(None)); let tp0 = std::time::Instant::now(); let (w, h) = (src.w, src.h); let mut o = pool_take(w, h); prof("tb_alloc", tp0);
     let (cx, cy) = (w as f64/2.0, h as f64/2.0); let r = rot_deg.to_radians(); let (s, co) = (r.sin(), r.cos());
     let inv = 1.0 / scale.max(1e-6);
     let pure_shift = (scale - 1.0).abs() < 1e-9 && rot_deg == 0.0 && dx.fract() == 0.0 && dy.fract() == 0.0;
@@ -349,12 +354,15 @@ fn transform_bb(src: &Frame, bb: Option<(usize, usize, usize, usize)>, scale: f6
     prof("tb_loop", tpl); let _ = ow; o
 }
 
-fn blend(dst: &mut Frame, src: &Frame, opacity: f32, mode: &str, mask: Option<&dyn Fn(usize, usize) -> f32>) {
+fn blend(dst: &mut Frame, src: &Frame, opacity: f32, mode: &str, mask: Option<&dyn Fn(usize, usize) -> f32>) { blend_region(dst, src, opacity, mode, mask, None) }
+/// `region` (x0,y0,x1,y1 inclusive) must contain every pixel of `src` with alpha > 0; pixels outside are skipped without scanning (bit-identical to a full scan).
+fn blend_region(dst: &mut Frame, src: &Frame, opacity: f32, mode: &str, mask: Option<&dyn Fn(usize, usize) -> f32>, region: Option<(usize, usize, usize, usize)>) {
     let w = dst.w; let m_id = match mode { "add" => 1, "multiply" => 2, "screen" => 3, "overlay" => 4, _ => 0 };
-    for y in 0..dst.h {
+    let (ry0, ry1, rx0, rx1) = match region { Some((a, b, c, d)) => (b.min(dst.h), (d + 1).min(dst.h), a.min(w), (c + 1).min(w)), None => (0, dst.h, 0, w) };
+    for y in ry0..ry1 {
         let srow = &src.d[y * w * 4..(y + 1) * w * 4];
         // skip the transparent margins of the row (most layers are small)
-        let (mut x0, mut x1) = (0usize, w); while x0 < w && srow[x0 * 4 + 3] <= 0.0 { x0 += 1; } if x0 == w { continue; } while x1 > x0 && srow[(x1 - 1) * 4 + 3] <= 0.0 { x1 -= 1; }
+        let (mut x0, mut x1) = (rx0, rx1); while x0 < rx1 && srow[x0 * 4 + 3] <= 0.0 { x0 += 1; } if x0 == rx1 { continue; } while x1 > x0 && srow[(x1 - 1) * 4 + 3] <= 0.0 { x1 -= 1; }
         for x in x0..x1 { let i = (y * w + x) * 4;
             let a = srow[x * 4 + 3] * opacity * if let Some(m) = mask { m(x, y) } else { 1.0 }; if a <= 0.0 { continue; }
             for j in 0..3 {
@@ -423,19 +431,20 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
             blend(&mut out, &f3, op, c_blend, mask.as_deref()); if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } } continue;
         }
         let moving = c.motion_blur > 0.0 && ek == 0 && { let sh0 = c.motion_blur / 360.0 / p.fps; ["x", "y", "scale", "rotation"].iter().any(|k| (prop(c, k, lt - sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9 || (prop(c, k, lt + sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9) };
-        let tp=std::time::Instant::now(); let bbf = alpha_bbox(&f); prof("bbox", tp); let tp=std::time::Instant::now(); let f = if moving { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h]; let mut u: Option<(usize, usize, usize, usize)> = None;
+        let mut from_tb = false; let tp=std::time::Instant::now(); let bbf = alpha_bbox(&f); prof("bbox", tp); let tp=std::time::Instant::now(); let f = if moving { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h]; let mut u: Option<(usize, usize, usize, usize)> = None;
             for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (prop(c, "x", lt2), prop(c, "y", lt2)); dx2 += dx - prop(c, "x", lt) - mp0x; dy2 += dy - prop(c, "y", lt) - mp0y; let (mp2x, mp2y, mp2a) = mp_at(lt2); dx2 += mp2x; dy2 += mp2y;
                 let mut sc2 = prop(c, "scale", lt2); if sc != prop(c, "scale", lt) { sc2 *= sc / prop(c, "scale", lt).max(1e-9); } LAST_RECT.with(|l| l.set(None)); FAST_NS.with(|l| l.set(true)); let tf = transform_bb(&f, bbf, sc2, prop(c, "rotation", lt2) + rot_extra - mp0a + mp2a, dx2, dy2); FAST_NS.with(|l| l.set(false));
                 if let Some((rx0, ry0, rx1, ry1)) = LAST_RECT.with(|l| l.get()) { u = Some(match u { Some((a, b, c2, d)) => (a.min(rx0), b.min(ry0), c2.max(rx1), d.max(ry1)), None => (rx0, ry0, rx1, ry1) });
                 for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; let a = tf.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += tf.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; wsum[i] += a; } } } } }
             if let Some((rx0, ry0, rx1, ry1)) = u { for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } } } acc }
-            else if (sc - 1.0).abs() < 1e-9 && prop(c, "rotation", lt) + rot_extra == 0.0 && dx == 0.0 && dy == 0.0 { f } else { transform_bb(&f, bbf, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
+            else if (sc - 1.0).abs() < 1e-9 && prop(c, "rotation", lt) + rot_extra == 0.0 && dx == 0.0 && dy == 0.0 { f } else { from_tb = true; transform_bb(&f, bbf, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
         prof("transform", tp);
         let mut f = f; if let Some(mt) = c.mask.as_ref().and_then(|m| m.matte.as_ref()) { if let Some(src) = render_clip_alone(p, &mt.source, t, cache) { let cov = crate::masks::matte_coverage(mt, &src); for i in 0..w * h { f.d[i * 4 + 3] *= cov[i]; } } }
         if let Some(cf) = tplan.as_ref().and_then(|pl| pl.compose.as_ref()) { out = cf(&out, &f); continue; }
         if let Source::ShardBurst(_) = &c.source { if let Some(d) = crate::shards::take_disp() { crate::shards::refract_canvas(&mut out, &d, &f); } }
         if let Some(acc) = eacc.as_mut() { let wgt = op / (ne + 1) as f32; for i in 0..w * h { let a = f.d[i * 4 + 3] * wgt; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += f.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; } } continue; }
-        let tp=std::time::Instant::now(); blend(&mut out, &f, op, c_blend, mask.as_deref()); prof("blend", tp);
+        let tp=std::time::Instant::now(); let rect = if from_tb { LAST_RECT.with(|l| l.get()) } else { None }; blend_region(&mut out, &f, op, c_blend, mask.as_deref(), rect); prof("blend", tp);
+        if let Some(r) = rect { pool_give(f, r); }
         if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } }
         }
         if let Some(mut acc) = eacc { for i in 0..w * h { let a = acc.d[i * 4 + 3]; if a > 1e-6 { for j in 0..3 { acc.d[i * 4 + j] /= a; } } } blend(&mut out, &acc, 1.0, &c.blend, None); }
