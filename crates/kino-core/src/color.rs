@@ -6,6 +6,7 @@ pub mod managed;
 pub(crate) mod frame;
 pub mod curves;
 pub mod lut;
+pub mod bake;
 pub mod scopes;
 pub mod scope_image;
 pub mod scope_command;

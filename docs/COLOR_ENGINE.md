@@ -497,3 +497,38 @@ mask tracking or reference dependency at playback. This tool is a preview, not a
 persistent shot-match effect. Soft masks and low amount are important: a hard
 sample rectangle can make a visible grade boundary. Review actual pixels before
 accepting a look. Fit statistics describe this sample pair, not a quality score.
+
+## Explicit pointwise pipeline LUT bake
+
+`export_color_pipeline_lut` adds an ordered explicit steps bake, separate from
+existing clip-only export_grade_lut. fields: steps (1..64), path(.cube),
+size17/33/65(default33), time(frozen parameter time, default0),
+domain_min/domain_max (three finite numbers, default[0,0,0]/[1,1,1], within+-16).
+Steps:
+- {type:effect, kind:exposure, params:{stops:{base:0.5}}}; params use Kino Prop
+  JSON (base, optionalkeys/expr). Only supported pointwise kinds; wrapper encoding
+  supported. Explicit color_managed steps name gamut/transfer conversions.
+- {type:ocio, config_path:..., source:ACEScg, destination:ACEScct}
+- {type:ocio_view, config_path:..., source:ACEScg, display:"sRGB - Display",
+  view:"ACES 2.0 - SDR 100 nits (Rec.709)"}
+OCIO steps require native-ocio and installed OCIO2. Self-contained configs only.
+The chain order and source/output domains are caller declarations; the tool does
+not read/apply project defaults or guess color encoding. Configured OCIO views
+include looks. Existing project and export behavior unchanged.
+
+A static3D RGB LUT cannot represent grain, bloom/halation, vignette, denoise,
+matte-dependent grades, tracking, motion or automatic per-shot analysis. These
+are rejected, not silently omitted. Animation freezes at the explicit time.
+Alpha behavior is not encoded. Red changes fastest in standard.cube data order.
+Output is finite and unbounded up to parser1e6 limit; inputs outside domain clamp
+on Kino reapplication. Other apps may clamp outputs or interpolate differently.
+
+Tool reports deterministic4105pixel tetrahedral error metrics from the serialized
+LUT against direct transform: max, p99, RMS. These probes are not an error bound
+on every pixel. Uniform grids lose accuracy at steep nonlinear knees/log toes;
+encoding/HDR domains may need a separate shaper workflow (not built here).
+ActualOCIO2.5.1 measured17/33/65 ACEScct max0.07861/0.04254/0.01371;
+ACES2sRGBview max0.08251/0.04506/0.03643 on declared0..1AP1domain.65view RMS
+0.000740 and p990.002404. Affine +0.5stop max1.19e-7 atall3sizes. This is export/
+parse/reapply evidence, not lossless transfer, display calibration, crossapp
+conformance or an independent ACESimplementation. Review errors before reuse.

@@ -309,3 +309,6 @@ Measured on this 2-vCPU box (examples/bench_cpu.rs, examples/bench2.rs, old = bu
 - flow_blur 720p: 0.334 s -> 0.201 s (1.7x); optical flow 720p q5: 0.098 -> 0.085 s (1.15x, solver dominated by serial resampling); blur_cov sigma 12: 0.017 -> 0.006 s (2.8x).
 - denoise 720p (spatial+1 temporal neighbour): 0.444 s -> 0.381 s on 1 thread (precomputed spatial weights), 0.216 s on 2 threads (2.1x). Temporal pass still serial.
 Limit: speedup is capped by core count (2 here). This is CPU only; no GPU code exists yet.
+
+## LUT export / color bake (.cube 17/33/65) - BETA
+Explicit ordered-steps .cube export, with native OCIO space/view steps and managed/declared transforms. Spatial, masked and implicit effects fail closed (not baked). Every export reports max/p99/RMS error against the source chain. Verified against a real OCIO 2.5.1: affine roundtrip max 1.19e-7. Nonlinear bakes carry a tetrahedral approximation error: ACEScct max 0.0137 at 65, ACES2 view max 0.0364 at 65 (RMS 0.00074). A baked LUT is an approximation, not the live chain. Source: COLOR workstream; reviewed here (build, 3 focused tests with the default build, fuzz 167 tools / 6449 calls / 0 failures).
