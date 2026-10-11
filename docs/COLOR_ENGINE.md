@@ -532,3 +532,21 @@ ACES2sRGBview max0.08251/0.04506/0.03643 on declared0..1AP1domain.65view RMS
 0.000740 and p990.002404. Affine +0.5stop max1.19e-7 atall3sizes. This is export/
 parse/reapply evidence, not lossless transfer, display calibration, crossapp
 conformance or an independent ACESimplementation. Review errors before reuse.
+
+## Parallel color CPU pass
+
+The existing par worker selection now splits immutable nativeOCIO CPU processor
+application, LUT application, ordinary linear_grade and basic pointwise effects
+into disjoint pixel ranges. Math/order within each pixel is unchanged. No shared
+render/default/schema changes. Serial fallback for extreme linear-grade values
+preserves its existing first-overflow partial-write behavior. NativeOCIO remains
+transactional with perworker diagnostics and unchanged alpha; processors are not
+edited while workers run. No dynamic-property mutation API is exposed here.
+
+Real-film10 frame upscaled to1920x1080, releaseLinuxx86_64, OCIO2.5.1,
+prepatch177506a vs patched8workers: ACES2view warm~1170->608ms (~1.93x),
+LUT65apply~132->57ms (~2.31x), ordinarylineargrade~145->87ms (~1.66x),
+saturation~6.7->5.2ms (~1.29x). Separate patched1worker comparisons included.
+Exact rawRGBAfloat SHA256 matches prepatch/patched1/patched8 for all4paths.
+Timing is thisbox/thisfixture, includes existingpreflight/clone work, excludes
+filewrites, no realtime/crosshardwarepromise. LUTfirstcall parse slower thanwarm.

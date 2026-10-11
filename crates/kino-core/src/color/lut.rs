@@ -33,7 +33,11 @@ pub fn apply(pr:&Params,strings:&BTreeMap<String,String>,f:&mut Frame,t:f64)->Re
     let key=format!("{path}:{}:{:?}",meta.len(),meta.modified().ok());let cache=CACHE.get_or_init(Default::default);let l={let mut cache=cache.lock().map_err(|_|"LUT cache poisoned")?;
         if let Some(l)=cache.get(&key){l.clone()}else{let l=Arc::new(Lut::parse(&read_bounded(path)?)?);if cache.len()>=8{cache.clear()}cache.insert(key,l.clone());l}};
     let amount=p(pr,"intensity",1.,t);if !amount.is_finite(){return Err("invalid LUT intensity".into())}let amount=amount.clamp(0.,1.);
-    for(i,px) in f.d.chunks_exact_mut(4).enumerate(){if i%65536==0{crate::guard::check()}if px[..3].iter().any(|v|!v.is_finite()){return Err("nonfinite LUT input".into())}let out=l.sample([px[0],px[1],px[2]]);for j in 0..3{let v=px[j] as f64*(1.-amount as f64)+out[j] as f64*amount as f64;if !v.is_finite()||v.abs()>f32::MAX as f64{return Err("LUT interpolation overflow".into())}px[j]=v as f32}}
+    let failed=std::sync::atomic::AtomicBool::new(false);
+    let ptr=crate::par::SyncPtr(f.d.as_mut_ptr());
+    crate::par::ranges(f.w*f.h,32768,|a,b|{let ptr=ptr;for i in a..b{if i%65536==0{crate::guard::check()}let px=unsafe{std::slice::from_raw_parts_mut(ptr.0.add(i*4),4)};
+let out=l.sample([px[0],px[1],px[2]]);for j in 0..3{let v=px[j] as f64*(1.-amount as f64)+out[j] as f64*amount as f64;if !v.is_finite()||v.abs()>f32::MAX as f64{failed.store(true,std::sync::atomic::Ordering::Relaxed);continue}px[j]=v as f32}}});
+    if failed.load(std::sync::atomic::Ordering::Relaxed){return Err("LUT interpolation overflow".into())}
     Ok(())
 }
 

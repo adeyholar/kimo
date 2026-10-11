@@ -71,10 +71,16 @@ impl Processor {
         if self.is_noop(){return Ok(())}
         crate::guard::reserve(f.d.len().checked_mul(4).ok_or("OCIO frame allocation overflow")?);
         let mut temp=Frame{w:f.w,h:f.h,d:f.d.clone()};
-        for chunk in temp.d.chunks_mut(65536*4){
-            crate::guard::check();let mut err=[0;4096];
-            if unsafe{kino_ocio_apply(self.handle.as_ptr(),chunk.as_mut_ptr(),chunk.len()/4,err.as_mut_ptr(),err.len())}==0{return Err(diagnostic(&err))}
-        }
+        // CPU processors are immutable here; no dynamic-property edits. Disjoint frame ranges.
+        let ptr=crate::par::SyncPtr(temp.d.as_mut_ptr());
+        let handle=crate::par::SyncPtr(self.handle.as_ptr());
+        let failure=std::sync::Mutex::new(None::<String>);
+        crate::par::ranges(temp.w*temp.h,65536,|a,b|{let ptr=ptr;let handle=handle;
+            for i in (a..b).step_by(65536){crate::guard::check();let mut err=[0;4096];
+                if unsafe{kino_ocio_apply(handle.0,ptr.0.add(i*4),(b-i).min(65536),err.as_mut_ptr(),err.len())}==0{*failure.lock().unwrap()=Some(diagnostic(&err));break;}
+            }
+        });
+        if let Some(e)=failure.into_inner().map_err(|_|"OCIO worker error")?{return Err(e)}
         super::frame::validate(&temp)?;f.d=temp.d;Ok(())
     }
 }

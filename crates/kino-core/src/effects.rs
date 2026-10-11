@@ -226,8 +226,8 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
 }
 
 pub(crate) fn lum(c: [f32; 3]) -> f32 { 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2] }
-pub(crate) fn px(f: &mut Frame, op: impl Fn([f32; 3]) -> [f32; 3]) {
-    for i in 0..f.w*f.h { let o = op([f.d[i*4], f.d[i*4+1], f.d[i*4+2]]); f.d[i*4]=o[0]; f.d[i*4+1]=o[1]; f.d[i*4+2]=o[2]; }
+pub(crate) fn px(f: &mut Frame, op: impl Fn([f32; 3]) -> [f32; 3] + Sync) {
+    let ptr=crate::par::SyncPtr(f.d.as_mut_ptr());crate::par::ranges(f.w*f.h,32768,|a,b|{let ptr=ptr;for i in a..b{let px=unsafe{std::slice::from_raw_parts_mut(ptr.0.add(i*4),4)};let o=op([px[0],px[1],px[2]]);px[0]=o[0];px[1]=o[1];px[2]=o[2];}});
 }
 pub fn box_blur3(f: &mut Frame, r: usize) {
     if r == 0 || f.w == 0 || f.h == 0 { return; }
