@@ -17,6 +17,8 @@ pub struct ShardBurst {
     #[serde(default)] pub physics: bool, #[serde(default = "d_rest")] pub restitution: f64, #[serde(default = "d_fric")] pub friction: f64, #[serde(default)] pub floor: Option<f64>, #[serde(default)] pub ang_drag: f64, #[serde(default = "d_tr")] pub collide: bool,
     #[serde(default)] pub thickness: Option<[f64; 2]>, #[serde(default)] pub glass: f64, #[serde(default)] pub aspect: Option<[f64; 2]>, #[serde(default)] pub fresnel: f64, #[serde(default)] pub refract: f64, #[serde(default)] pub falloff: f64,
     #[serde(default)] pub plane: Option<Plane>,
+    /// Contact shadows cast onto the receiving surface (the z = `shadow_plane_z` plane, i.e. the plate the pane sat in): strength 0..1 (0 = off), falls off with height over `shadow_reach` (720p px, 0 = 220), blur grows with height.
+    #[serde(default)] pub contact_shadow: f64, #[serde(default)] pub shadow_reach: f64, #[serde(default)] pub shadow_plane_z: f64,
 }
 fn d_rest() -> f64 { 0.35 } fn d_fric() -> f64 { 0.5 } fn d_tr() -> bool { true }
 
@@ -83,9 +85,10 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
     let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));
     let tex = e.plane.as_ref().and_then(|p| p.texture.as_ref().and_then(|t| load_tex(t, p.region)));
     let occ = if let Some(m) = EXT_OCC.with(|c| c.borrow_mut().take()) { if m.len() == w * hh { Some(m) } else { None } } else { e.plane.as_ref().and_then(|p| p.occlusion.as_ref().and_then(|o| load_occ(o, (t * fps).round() as i64, w, hh))) };
+    let mut shadow = vec![0f32; if e.contact_shadow > 0.0 { w * hh } else { 0 }]; let sreach = if e.shadow_reach > 0.0 { e.shadow_reach } else { 220.0 } * k;
     let traj = if e.physics { Some((bake_cached(e, k, total, hh), 0)) } else { None };
     for sub in 0..nsub { let ts = (t + ((sub as f64 + 0.5) / nsub as f64 - 0.5) * shutter).max(0.0);
-        let mut prims: Vec<Prim> = Vec::with_capacity(e.count as usize * 2);
+        let mut prims: Vec<Prim> = Vec::with_capacity(e.count as usize * 2); let mut shp: Vec<(Vec<(f64, f64)>, f64, f64)> = vec![];
         let ncount = pcells.as_ref().map(|c| c.1.len() as u64).unwrap_or(e.count as u64);
         for i in 0..ncount {
             let r = |kk: u64| h(e.seed, i, kk); let pc = pcells.as_ref().map(|c| (&c.0, &c.1[i as usize]));
@@ -111,6 +114,11 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                 for v in 0..nv { let l = [loc[v].0, loc[v].1, zoff]; let wp = [pos[0] + rm[0][0] * l[0] + rm[0][1] * l[1] + rm[0][2] * l[2], pos[1] + rm[1][0] * l[0] + rm[1][1] * l[1] + rm[1][2] * l[2], pos[2] + rm[2][0] * l[0] + rm[2][1] * l[1] + rm[2][2] * l[2]];
                     match cv.project(wp) { Some((sx, sy, zv)) => { pts[v] = (sx, sy); dz += zv; } None => { ok = false; } } }
                 if !ok { break; } dz /= nv as f64; zsum += dz; shard.push((pts, dz, 0.0, 0.0, 0.0)); }
+            if e.contact_shadow > 0.0 { let mut poly = Vec::with_capacity(nv); let mut hs = 0.0; let mut okp = true; let zoff = thick * 0.5;
+                for v in 0..nv { let l = [loc[v].0, loc[v].1, zoff]; let wp = [pos[0] + rm[0][0] * l[0] + rm[0][1] * l[1] + rm[0][2] * l[2], pos[1] + rm[1][0] * l[0] + rm[1][1] * l[1] + rm[1][2] * l[2], pos[2] + rm[2][0] * l[0] + rm[2][1] * l[1] + rm[2][2] * l[2]];
+                    let hgt = (e.shadow_plane_z - wp[2]).max(0.0); hs += hgt; let lz = lg[2].abs().max(0.25); let (sx, sy) = ((-lg[0] / lz).clamp(-1.5, 1.5), (-lg[1] / lz).clamp(-1.5, 1.5));
+                    match cv.project([wp[0] + sx * hgt, wp[1] + sy * hgt, e.shadow_plane_z]) { Some((px, py, _)) => poly.push((px, py)), None => { okp = false; } } }
+                let hm = hs / nv as f64; if okp && hm > 0.5 * k { shp.push((poly, e.contact_shadow.clamp(0.0, 1.0) * (-hm / sreach).exp() * life_fade * born, (1.5 + hm * 0.10).min(40.0 * k))); } }
             if !ok || shard.len() < 2 { continue; } let zv = zsum / 2.0; let coc = (e.dof * ((zv - focus).abs() / zv) * fl * 0.035 * k).min(10.0 * k); let ndl = nrm[0] * lg[0] + nrm[1] * lg[1] + nrm[2] * lg[2];
             let refl = [lg[0] - 2.0 * ndl * nrm[0], lg[1] - 2.0 * ndl * nrm[1], lg[2] - 2.0 * ndl * nrm[2]]; let spec = refl[2].max(0.0).powi(18) + 0.35 * (-refl[2]).max(0.0).powi(18);
             let dim = 1.0 / (1.0 + coc * 0.12) * (-e.falloff * ((zv - fl).max(0.0) / fl)).exp(); let fres = 0.04 + 0.96 * (1.0 - nrm[2].abs()).powi(5); let al = life_fade * born * dim;
@@ -120,6 +128,12 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                 prims.push(Prim { depth: (shard[0].1 + shard[1].1) / 2.0 - 0.01, pts: q, n: 4, nz: nw[2].abs(), spec: sp2 + 0.12, rim_c: coc, blur: coc, alpha: al * 0.8 * (1.0 - fl), face: 2, u: r(15), tx: nw[0] * thick * 1.6, ty: nw[1] * thick * 1.6, n3: nw, tex: None, id: i, flat: fl }); } }
             for (fi, (pts, dz, _, _, _)) in shard.into_iter().enumerate() { let tex_aff = match (pc, &tex) { (Some((_, c)), Some(_)) if nv >= 3 => uv_affine(&pts, &c.uv), _ => None }; prims.push(Prim { depth: dz, pts, n: nv, nz: nrm[2].abs(), spec, rim_c: fres, blur: coc, alpha: if fi == 1 { al * (1.0 - fl) } else { al }, face: fi, u: r(15), tx: nrm[0] * thick, ty: nrm[1] * thick, n3: nrm, tex: tex_aff, id: i, flat: fl }); }
         }
+        for (poly, sa, sb) in &shp { if sa < &0.003 { continue; } let n = poly.len(); if n < 3 { continue; }
+            let mut area = 0.0; for v in 0..n { let (a, b) = (poly[v], poly[(v + 1) % n]); area += a.0 * b.1 - b.0 * a.1; } if area.abs() < 0.5 { continue; } let sg = if area >= 0.0 { 1.0 } else { -1.0 };
+            let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN); for p in poly { x0 = x0.min(p.0); x1 = x1.max(p.0); y0 = y0.min(p.1); y1 = y1.max(p.1); }
+            let (xa, xb, ya, yb) = ((x0 - sb).floor().max(0.0) as usize, (x1 + sb).ceil().min(w as f64 - 1.0) as usize, (y0 - sb).floor().max(0.0) as usize, (y1 + sb).ceil().min(hh as f64 - 1.0) as usize);
+            for y in ya..=yb { for x in xa..=xb { let (px, py) = (x as f64 + 0.5, y as f64 + 0.5); let mut d = f64::MAX; for v in 0..n { let (a, b) = (poly[v], poly[(v + 1) % n]); let (ex, ey) = (b.0 - a.0, b.1 - a.1); let l = (ex * ex + ey * ey).sqrt().max(1e-9); d = d.min(sg * ((px - a.0) * ey - (py - a.1) * ex) / l * -1.0 * -1.0); }
+                let cov = sstep((d + sb) / (2.0 * sb)); if cov <= 0.002 { continue; } let o = y * w + x; let v = (cov * sa) as f32 / nsub as f32; shadow[o] = shadow[o] + v - shadow[o] * v * nsub as f32 / 1.0 * 0.0; } } }
         prims.sort_by(|a, b| b.depth.partial_cmp(&a.depth).unwrap());
         PROBE.with(|pr| { let mut v = pr.borrow_mut(); v.clear(); for q in prims.iter().filter(|q| q.face == 0) { let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN); let mut c = (0.0, 0.0); for j in 0..q.n { x0 = x0.min(q.pts[j].0); x1 = x1.max(q.pts[j].0); y0 = y0.min(q.pts[j].1); y1 = y1.max(q.pts[j].1); c.0 += q.pts[j].0 / q.n as f64; c.1 += q.pts[j].1 / q.n as f64; } v.push(ProbeShard { id: q.id, cx: c.0, cy: c.1, bbox: [x0, y0, x1, y1], depth: q.depth, alpha: q.alpha }); } });
         for pr in &prims {
@@ -156,6 +170,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
     if rf { for o in 0..w * hh { dsum[o * 2] += dacc[o * 2] / nsub as f32; dsum[o * 2 + 1] += dacc[o * 2 + 1] / nsub as f32; } DISP.with(|d| *d.borrow_mut() = Some((w, hh, dsum))); } else { DISP.with(|d| *d.borrow_mut() = None); }
     for o in 0..w * hh { let i4 = o * 4; f.d[i4] += accc[o * 3] / nsub as f32; f.d[i4 + 1] += accc[o * 3 + 1] / nsub as f32; f.d[i4 + 2] += accc[o * 3 + 2] / nsub as f32; f.d[i4 + 3] += acca[o] / nsub as f32;
         let a = f.d[i4 + 3]; if a > 1e-5 { for j in 0..3 { f.d[i4 + j] = (f.d[i4 + j] / a).min(1.5); } } }
+    if !shadow.is_empty() { for o in 0..w * hh { let sa = shadow[o].min(0.95); if sa <= 0.0 { continue; } let i4 = o * 4; let a = f.d[i4 + 3]; let aa = a + sa * (1.0 - a); for j in 0..3 { f.d[i4 + j] = f.d[i4 + j] * a / aa; } f.d[i4 + 3] = aa; } }
 }
 
 fn bake_cached(e: &ShardBurst, k: f64, total: f64, hh: usize) -> std::sync::Arc<crate::physics::Traj> {
