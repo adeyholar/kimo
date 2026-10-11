@@ -672,3 +672,5 @@ User bar: every feature best in class. Tiers: **PRO** = matches or beats the pro
 - #5 detect_beats / analyze: 11.6 ms resolution, onsets stamped at window centre, strongest-wins min_gap, bpm from autocorrelation. Test on a 140 BPM synthetic kick: first six onsets within 1-2 ms of truth, bpm 139.9.
 - #6 add_counter hold default 0.
 - #7 add_audio_clip (audio-only, never draws) and a lookahead peak limiter on export (ceiling -1.5 dBFS; tested: +80% gain input exports at -1.5 dBFS peak). Gap: sample-peak limiter, not oversampled true-peak.
+
+- Detection box: default fill_opacity 0.08 to 0.05 (gentler) and the label tag width now uses measured text width (tag fits its text on the 720p check; the old 0.6 em guess could clip proportional fonts). Pass fill_opacity to restore.

@@ -23,8 +23,8 @@ pub fn add_detection_box(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let col = rgb(a, "color", [0.2, 0.9, 0.5]); let label = a.get("label").and_then(|v| v.as_str()).unwrap_or("object").to_string(); let conf = num(a, "confidence", 0.92);
     let font = a.get("font").and_then(|v| v.as_str()).unwrap_or("SpaceMono-Bold"); let fsz = 20.0 * k; let tag = format!("{} {:.2}", label, conf);
     let (pw, ph) = (bw * cw, bh * ch); let (cx, cy) = ((bx + bw / 2.0 - 0.5) * cw, (by + bh / 2.0 - 0.5) * ch);
-    let tw = tag.chars().count() as f64 * fsz * 0.6 + 16.0 * k; let th = fsz * 1.5;
-    let sw = (2.0 * k).max(1.5); let fill_alpha_box = num(a, "fill_opacity", 0.08);
+    let tw = crate::text::measure(&tag, font, fsz, 0.0, 0.0, "left", cw).map(|v| v.0).unwrap_or(tag.chars().count() as f64 * fsz * 0.6) + 16.0 * k; let th = fsz * 1.5;
+    let sw = (2.0 * k).max(1.5); let fill_alpha_box = num(a, "fill_opacity", 0.05);
     let imp0 = a.get("impact").and_then(|v| v.as_bool()).unwrap_or(false); let lag = if imp0 { 0.44 } else { 0.0 };
     let inst = a.get("instant").and_then(|v| v.as_bool()).unwrap_or(false); let e = Ease::OutExpo; let tin = if inst { 0.001 } else { 0.35 }; let mut cl = vec![];
     // soft fill
