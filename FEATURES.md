@@ -733,3 +733,7 @@ Tests: serial/real-frame exact parity, diamond single-evaluation/cache reuse,
 parallel/layer weights, masks/keys, nativeOCIO parity, cycles/rollback/JSON
 roundtrip, deterministic repeat and budget failures. No speed/hue/calibration
 superiority claim.
+
+## Gap #4: captions, audio effects, loudness, multicam (all MCP, BETA)
+15 MCP tools: captions (add/list/style/edit/burn-in), audio (effects incl. Schroeder comb/allpass reverb, pan, loudness measure/normalize, ducking), multicam (sync/add/switch/list). Details and the tool list: docs/EDITORIAL_MCP.md. Measured: LUFS within 0.15 LU of FFmpeg loudnorm; audio sync recovers a 350 ms offset on real PCM.
+Honest limits: sync is 5 ms RMS correlation, not sample-accurate; timecode labels are non-drop only; multicam uses the common overlap; pan is stereo balance; loudness uses sample peak, not true peak.

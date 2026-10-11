@@ -16,6 +16,7 @@ pub fn filter_chain(c: &Clip) -> String {
     if a.compress { f.push("acompressor=threshold=-18dB:ratio=3:attack=10:release=200".into()); }
     if a.echo > 0.0 { f.push(format!("aecho=0.8:0.8:{}:0.4", (a.echo * 1000.0) as i64)); }
     if a.reverse { f.push("areverse".into()); }
+    for effect in &a.effects { f.push(effect.filter()); }
     f.push(format!("aresample={SR}")); f.push("aformat=sample_fmts=flt:channel_layouts=stereo".into());
     f.join(",")
 }
@@ -24,22 +25,22 @@ pub fn decode_clip(path: &str, c: &Clip) -> Vec<f32> {
     let mut ch = match Command::new("ffmpeg").args(["-v","error","-ss",&format!("{}", c.in_point),"-t",&format!("{}", c.duration * c.speed),"-i",path,"-vn","-af",&filter_chain(c),"-f","f32le","-ac","2","-ar",&SR.to_string(),"-"])
         .stdout(Stdio::piped()).stderr(Stdio::null()).spawn() { Ok(c) => c, Err(_) => return vec![] };
     let mut b = Vec::new(); ch.stdout.take().unwrap().read_to_end(&mut b).ok(); let _ = ch.wait();
-    b.chunks_exact(4).map(|x| f32::from_le_bytes([x[0], x[1], x[2], x[3]])).collect()
+    { let mut pcm = b.chunks_exact(4).map(|x| f32::from_le_bytes([x[0], x[1], x[2], x[3]])).collect::<Vec<f32>>(); crate::editorial::process_pcm(&mut pcm, &c.audio.effects); pcm }
 }
 
 /// Mix every media clip's audio (and audio-only assets) into one interleaved stereo buffer.
 pub fn mix(p: &Project) -> Vec<f32> {
     let total = ((p.duration() * SR as f64).ceil() as usize) * 2; let mut out = vec![0f32; total];
     for t in &p.tracks { for c in &t.clips {
-        let Source::Media { asset } = &c.source else { continue }; if c.audio.mute { continue; }
+        let Source::Media { asset } = &c.source else { continue }; if t.muted || c.audio.mute { continue; }
         let Some(a) = p.assets.get(asset) else { continue };
         let s = decode_clip(&a.path, c); let off = ((c.start * SR as f64) as usize) * 2; let n = ((c.duration * SR as f64) as usize * 2).min(s.len());
         for i in (0..n).step_by(2) {
             let lt = (i / 2) as f64 / SR as f64;
-            let mut g = c.audio.volume.at(lt) as f32;
+            let mut g = (c.audio.volume.at(lt) * c.audio.duck_gain.at(lt)) as f32;
             if c.audio.fade_in > 0.0 && lt < c.audio.fade_in { g *= (lt / c.audio.fade_in) as f32; }
             let rem = c.duration - lt; if c.audio.fade_out > 0.0 && rem < c.audio.fade_out { g *= (rem / c.audio.fade_out) as f32; }
-            if off + i + 1 < out.len() { out[off + i] += s[i] * g; out[off + i + 1] += s[i + 1] * g; }
+            if off + i + 1 < out.len() { out[off + i] += s[i] * g * (1.0-c.audio.pan.max(0.0)) as f32; out[off + i + 1] += s[i + 1] * g * (1.0+c.audio.pan.min(0.0)) as f32; }
         }
     }}
     limit(&mut out, -1.5);
@@ -107,20 +108,20 @@ fn prior(pcm:&[f32])->Vec<u8>{let data=(pcm.len()*2) as u32;let mut b=Vec::new()
 impl std::fmt::Display for AudioError{fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{match self{Self::NoAudioTrack=>write!(f,"no audio track"),Self::DecodeFailed(e)=>write!(f,"audio decode failed: {e}"),Self::InvalidInput(e)=>write!(f,"invalid audio input: {e}"),Self::ResourceLimit(e)=>write!(f,"audio resource limit: {e}")}}}
 fn strict_audio_cap()->usize{(crate::guard::limits().mem_bytes/16).min(64*1024*1024)}
 fn strict_samples(seconds:f64)->Result<usize,AudioError>{if !seconds.is_finite()||seconds<0.{return Err(AudioError::InvalidInput("finite nonnegative duration required".into()))}let samples=(seconds*SR as f64).ceil()*2.;if !samples.is_finite()||samples>usize::MAX as f64{return Err(AudioError::ResourceLimit("sample count overflow".into()))}Ok(samples as usize)}
-fn strict_decode(path:&str,c:&Clip)->Result<Vec<f32>,AudioError>{
+pub(crate) fn strict_decode(path:&str,c:&Clip)->Result<Vec<f32>,AudioError>{
  if !c.speed.is_finite()||c.speed<=0.||!c.in_point.is_finite()||c.in_point<0.||!c.duration.is_finite()||c.duration<0.||[c.audio.pitch,c.audio.highpass,c.audio.lowpass,c.audio.denoise,c.audio.echo].iter().any(|v|!v.is_finite()){return Err(AudioError::InvalidInput("finite clip/audio controls required".into()))}
  let probe=crate::color::process::capture(Command::new("ffprobe").args(["-v","error","-select_streams","a:0","-show_entries","stream=index","-of","json",path]),1024*1024,std::time::Duration::from_secs(30)).map_err(AudioError::DecodeFailed)?;
  let header:serde_json::Value=serde_json::from_slice(&probe).map_err(|e|AudioError::DecodeFailed(e.to_string()))?;let streams=header["streams"].as_array().ok_or_else(||AudioError::DecodeFailed("invalid stream probe".into()))?;if streams.is_empty(){return Err(AudioError::NoAudioTrack)}
  let samples=strict_samples(c.duration+c.audio.echo.max(0.)+2.)?;let bytes=samples.checked_mul(4).ok_or_else(||AudioError::ResourceLimit("decode bytes overflow".into()))?;if bytes>strict_audio_cap(){return Err(AudioError::ResourceLimit(format!("audio decode exceeds{}byte cap",strict_audio_cap())))}crate::guard::reserve(bytes.checked_mul(2).ok_or_else(||AudioError::ResourceLimit("audio allocation overflow".into()))?);
  let raw=crate::color::process::decode_capture(Command::new("ffmpeg").args(["-v","error","-ss",&c.in_point.to_string(),"-t",&(c.duration*c.speed).to_string(),"-i",path,"-vn","-af",&filter_chain(c),"-f","f32le","-ac","2","-ar",&SR.to_string(),"-"]),bytes,crate::color::process::encode_deadline((c.duration*25.).ceil() as usize)).map_err(AudioError::DecodeFailed)?;
- if raw.len()%8!=0{return Err(AudioError::DecodeFailed("partial stereo float sample".into()))}let mut out=Vec::with_capacity(raw.len()/4);for(i,b)in raw.chunks_exact(4).enumerate(){if i%32768==0{crate::guard::check()}let v=f32::from_le_bytes(b.try_into().unwrap());if !v.is_finite(){return Err(AudioError::DecodeFailed("nonfinite decoded sample".into()))}out.push(v)}Ok(out)
+ if raw.len()%8!=0{return Err(AudioError::DecodeFailed("partial stereo float sample".into()))}let mut out=Vec::with_capacity(raw.len()/4);for(i,b)in raw.chunks_exact(4).enumerate(){if i%32768==0{crate::guard::check()}let v=f32::from_le_bytes(b.try_into().unwrap());if !v.is_finite(){return Err(AudioError::DecodeFailed("nonfinite decoded sample".into()))}out.push(v)}crate::editorial::process_pcm(&mut out,&c.audio.effects);Ok(out)
 }
 /// New strict path for high-bit export only. The legacy mix/decode API is unchanged.
 pub fn mix_strict(p:&Project)->Result<Vec<f32>,AudioError>{
  let total=strict_samples(p.duration())?;let bytes=total.checked_mul(4).ok_or_else(||AudioError::ResourceLimit("mix bytes overflow".into()))?;if bytes>strict_audio_cap(){return Err(AudioError::ResourceLimit(format!("timeline PCM exceeds{}byte cap",strict_audio_cap())))}crate::guard::reserve(bytes);let mut out=vec![0f32;total];
- for track in &p.tracks{for c in &track.clips{crate::guard::check();let Source::Media{asset}=&c.source else{continue};if c.audio.mute{continue}if !c.start.is_finite()||c.start<0.||!c.audio.fade_in.is_finite()||!c.audio.fade_out.is_finite(){return Err(AudioError::InvalidInput("invalid clip start/fades".into()))}let a=p.assets.get(asset).ok_or_else(||AudioError::InvalidInput("missing audio asset".into()))?;
+ for track in &p.tracks{for c in &track.clips{crate::guard::check();let Source::Media{asset}=&c.source else{continue};if track.muted || c.audio.mute{continue}if !c.start.is_finite()||c.start<0.||!c.audio.fade_in.is_finite()||!c.audio.fade_out.is_finite(){return Err(AudioError::InvalidInput("invalid clip start/fades".into()))}let a=p.assets.get(asset).ok_or_else(||AudioError::InvalidInput("missing audio asset".into()))?;
  let s=match strict_decode(&a.path,c){Ok(v)=>v,Err(AudioError::NoAudioTrack)=>continue,Err(e)=>return Err(e)};let off=((c.start*SR as f64) as usize).checked_mul(2).ok_or_else(||AudioError::ResourceLimit("audio offset overflow".into()))?;let n=((c.duration*SR as f64) as usize).checked_mul(2).ok_or_else(||AudioError::ResourceLimit("clip samples overflow".into()))?.min(s.len());
- for i in (0..n).step_by(2){if i%65536==0{crate::guard::check()}let lt=(i/2) as f64/SR as f64;let mut g=c.audio.volume.at(lt) as f32;if !g.is_finite(){return Err(AudioError::InvalidInput("nonfinite volume".into()))}if c.audio.fade_in>0.&&lt<c.audio.fade_in{g*=(lt/c.audio.fade_in) as f32}let rem=c.duration-lt;if c.audio.fade_out>0.&&rem<c.audio.fade_out{g*=(rem/c.audio.fade_out) as f32}if off.checked_add(i+1).filter(|j|*j<out.len()).is_some(){for j in 0..2{let v=out[off+i+j]+s[i+j]*g;if !v.is_finite(){return Err(AudioError::InvalidInput("audio mix overflow".into()))}out[off+i+j]=v}}}
+ for i in (0..n).step_by(2){if i%65536==0{crate::guard::check()}let lt=(i/2) as f64/SR as f64;let mut g=(c.audio.volume.at(lt)*c.audio.duck_gain.at(lt)) as f32;if !g.is_finite(){return Err(AudioError::InvalidInput("nonfinite volume".into()))}if c.audio.fade_in>0.&&lt<c.audio.fade_in{g*=(lt/c.audio.fade_in) as f32}let rem=c.duration-lt;if c.audio.fade_out>0.&&rem<c.audio.fade_out{g*=(rem/c.audio.fade_out) as f32}if off.checked_add(i+1).filter(|j|*j<out.len()).is_some(){for j in 0..2{let v=out[off+i+j]+s[i+j]*g*if j==0{(1.-c.audio.pan.max(0.)) as f32}else{(1.+c.audio.pan.min(0.)) as f32};if !v.is_finite(){return Err(AudioError::InvalidInput("audio mix overflow".into()))}out[off+i+j]=v}}}
  }}
  strict_limit(&mut out,-1.5);Ok(out)
 }

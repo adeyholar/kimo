@@ -98,8 +98,9 @@ pub enum TimeMode { #[default] Normal, Reverse, /// hold the frame at clip-local
     Freeze { at: f64 } }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Audio { pub mute: bool, pub volume: Prop, pub fade_in: f64, pub fade_out: f64, pub pitch: f64, pub highpass: f64, pub lowpass: f64, pub denoise: f64, pub compress: bool, pub echo: f64, pub reverse: bool }
-impl Default for Audio { fn default() -> Self { Audio { mute: false, volume: Prop::new(1.0), fade_in: 0.0, fade_out: 0.0, pitch: 0.0, highpass: 0.0, lowpass: 0.0, denoise: 0.0, compress: false, echo: 0.0, reverse: false } } }
+pub struct Audio { #[serde(default)] pub effects: Vec<crate::editorial::AudioEffect>, #[serde(default)] pub pan: f64, #[serde(default = "unity_prop")] pub duck_gain: Prop, pub mute: bool, pub volume: Prop, pub fade_in: f64, pub fade_out: f64, pub pitch: f64, pub highpass: f64, pub lowpass: f64, pub denoise: f64, pub compress: bool, pub echo: f64, pub reverse: bool }
+fn unity_prop() -> Prop { Prop::new(1.0) }
+impl Default for Audio { fn default() -> Self { Audio { effects: vec![], pan: 0.0, duck_gain: Prop::new(1.0), mute: false, volume: Prop::new(1.0), fade_in: 0.0, fade_out: 0.0, pitch: 0.0, highpass: 0.0, lowpass: 0.0, denoise: 0.0, compress: false, echo: 0.0, reverse: false } } }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transition { pub kind: String, pub duration: f64,
@@ -122,6 +123,7 @@ fn one_speed() -> f64 { 1.0 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
+    #[serde(default)] pub editorial: crate::editorial::Editorial,
     #[serde(default)] pub occluders: BTreeMap<String, OccSpec>,
     #[serde(default)] pub ocio_view_delivery: Option<crate::color::view_video::Selection>,
     #[serde(default)] pub color_pipeline: crate::color::pipeline::Pipeline,
@@ -141,7 +143,7 @@ pub struct Project {
 
 impl Default for Project {
     fn default() -> Self {
-        Project { ocio_view_delivery: None, occluders: BTreeMap::new(), color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![] }
+        Project { editorial: Default::default(), ocio_view_delivery: None, occluders: BTreeMap::new(), color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![] }
     }
 }
 
