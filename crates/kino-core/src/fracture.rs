@@ -15,7 +15,7 @@ fn ss(a: f32, b: f32, x: f32) -> f32 { let t = ((x - a) / (b - a).max(1e-6)).cla
 fn dist(a: V, b: V) -> f32 { ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt() }
 
 
-struct Cell { poly: Vec<V>, c: V, d: f32, tilt: V, shade: f32, t_rel: f32, falls: bool, vel: V, zv: f32, phi0: f32, om: f32, th0: f32, z: f32 }
+struct Cell { poly: Vec<V>, c: V, d: f32, tilt: V, shade: f32, t_rel: f32, falls: bool, vel: V, zv: f32, phi0: f32, om: f32, th0: f32, tl0: f32, z: f32 }
 struct Seg { a: V, b: V, d0: f32, d1: f32, g: f32, w: f32, cells: [usize; 2] }
 fn spans(poly: &[V], w: usize, h: usize, mut f: impl FnMut(usize, usize, f32)) {
     let (mut y0, mut y1) = (f32::MAX, f32::MIN); for q in poly { y0 = y0.min(q.1); y1 = y1.max(q.1); }
@@ -71,32 +71,35 @@ pub fn apply(pr: &Params, f: &mut Frame, t: f64, seed: u64) -> Result<(), String
     let g = |k: &str, d: f64| { let v = p(pr, k, d as f64, t); if v.is_finite() { v } else { d as f32 } };
     let hh = h as f32; let t0 = g("t0", 0.0); let tau = t as f32 - t0; if tau < 0.0 { return Ok(()); }
     let imp = (g("impact_x", 0.5).clamp(0.0, 1.0) * w as f32, g("impact_y", 0.5).clamp(0.0, 1.0) * hh); let (ix, iy) = imp;
-    let nr = g("radials", 14.0).clamp(5.0, 40.0); let grow = g("ring_growth", 1.3).clamp(1.12, 2.0); let r0 = g("r0", 0.012).clamp(0.003, 0.2) * hh;
-    let debris = g("debris", 70.0).clamp(0.0, 300.0) as usize; let max_cells = g("max_cells", 700.0).clamp(40.0, 1500.0) as usize;
+    let nr = g("radials", 14.0).clamp(5.0, 40.0); let grow = g("ring_growth", 1.3).clamp(1.08, 2.0); let r0 = g("r0", 0.012).clamp(0.003, 0.2) * hh;
+    let debris = g("debris", 70.0).clamp(0.0, 300.0) as usize; let max_cells = g("max_cells", 700.0).clamp(40.0, 2500.0) as usize;
     let speed = g("crack_speed", 12.0).clamp(0.2, 80.0) * hh; let front = speed * tau;
     let rel_t0 = g("release_delay", 0.1).max(0.0); let rel_spread = g("release_spread", 0.12).max(0.0); let rel_rad = g("release_radius", 0.6).clamp(0.02, 3.0) * hh;
     let grav = g("gravity", 2.5) * hh; let push = g("push", 0.35) * hh; let tumble = g("tumble", 6.0); let cam = g("toward_camera", 0.1) * hh;
     let fade_start = g("fade_start", 0.4); let clear_time = g("clear_time", 0.6).max(fade_start + 0.01);
     let refr = g("refraction", 7.0); let disp = g("dispersion", 0.35).clamp(0.0, 1.5); let cw = g("crack_width", 1.1).clamp(0.3, 8.0); let glint = g("glint", 0.7).clamp(0.0, 3.0); let bevel = g("bevel", 3.0).clamp(0.0, 20.0);
-    let thick = g("thickness", 5.0).clamp(0.0, 40.0); let hole_dim = g("hole_dim", 0.2).clamp(0.0, 1.0);
+    let etint = [g("edge_r", 0.62), g("edge_g", 0.68), g("edge_b", 0.66)]; let face_op = g("face_opacity", 0.85).clamp(0.05, 1.0); let fres = g("fresnel", 0.6).clamp(0.0, 2.0); let sheen = g("sheen", 0.5).clamp(0.0, 2.0); let crack_clear = g("crack_clear", 0.0); let thick = g("thickness", 5.0).clamp(0.0, 40.0); let hole_dim = g("hole_dim", 0.2).clamp(0.0, 1.0);
     let ns = g("blur_samples", 5.0).clamp(1.0, 16.0) as usize; let shutter = g("shutter_deg", 180.0).clamp(0.0, 360.0) / 360.0 / g("fps", 25.0).clamp(1.0, 240.0);
     let mut rg = Rng(seed ^ 0xF4AC_7E55); for _ in 0..3 { rg.n(); }
     // --- sites: jittered rings (more sites per ring outward = branching) + small debris near the impact ---
     let dmax = { let mut m = 0f32; for c in [(0.0, 0.0), (w as f32, 0.0), (0.0, hh), (w as f32, hh)] { m = m.max(dist(imp, c)); } m } * 1.1;
+    let budget = max_cells.saturating_sub(debris).max(30);
+    let est = |gr: f32| -> usize { let (mut r, mut k, mut tot) = (r0, 0usize, 1usize); while r < dmax && k < 200 { tot += ((nr * (1.0 + 0.4 * (k / 3) as f32)).round() as usize).clamp(5, 90); r = r * gr + 0.01 * hh * (k as f32 / 8.0).min(1.0); k += 1; } tot };
+    let mut grow = grow; let mut guard_i = 0; while est(grow) > budget && guard_i < 60 { grow *= 1.03; guard_i += 1; }
     let mut sites: Vec<V> = vec![imp]; let mut r = r0; let mut rprev = 0f32; let mut k = 0usize; let two = std::f32::consts::TAU; let ph0 = rg.f() * two;
-    while r < dmax && sites.len() < max_cells.saturating_sub(debris) { let gap = (r - rprev).max(r0 * 0.5); let nk = ((nr * (1.0 + 0.4 * (k / 3) as f32)).round() as usize).clamp(5, 90); let ph = ph0 + 0.1 * two / nk as f32 * rg.s();
+    while r < dmax && k < 200 { let gap = (r - rprev).max(r0 * 0.5); let nk = ((nr * (1.0 + 0.4 * (k / 3) as f32)).round() as usize).clamp(5, 90); let ph = ph0 + 0.1 * two / nk as f32 * rg.s();
         for i in 0..nk { let a = ph + two * (i as f32 + 0.22 * rg.s()) / nk as f32; let rr = r + 0.12 * gap * rg.s(); if sites.len() < max_cells { sites.push((ix + rr * a.cos(), iy + rr * a.sin())); } }
         rprev = r; r *= grow; r += 0.02 * hh * rg.f() * (k as f32 / 8.0).min(1.0); k += 1; }
     for _ in 0..debris { let rr = 0.3 * hh * rg.f().powf(1.7) + 0.004 * hh; let a = rg.f() * two; sites.push((ix + rr * a.cos(), iy + rr * a.sin())); }
     let pad = 0.05 * w as f32; let polys = voronoi(&sites, (-pad, -pad, w as f32 + pad, hh + pad));
     let mut cells: Vec<Cell> = Vec::with_capacity(polys.len()); let mut edges: Vec<(usize, usize, V, V)> = Vec::new();
-    for (i, pl) in polys.iter().enumerate() { if pl.len() < 3 { cells.push(Cell { poly: vec![sites[i]; 3], c: sites[i], d: dist(sites[i], imp), tilt: (0.0, 0.0), shade: 1.0, t_rel: 0.0, falls: false, vel: (0.0, 0.0), zv: 0.0, phi0: 0.0, om: 0.0, th0: 0.0, z: 0.0 }); continue; }
+    for (i, pl) in polys.iter().enumerate() { if pl.len() < 3 { cells.push(Cell { poly: vec![sites[i]; 3], c: sites[i], d: dist(sites[i], imp), tilt: (0.0, 0.0), shade: 1.0, t_rel: 0.0, falls: false, vel: (0.0, 0.0), zv: 0.0, phi0: 0.0, om: 0.0, th0: 0.0, tl0: 0.0, z: 0.0 }); continue; }
         let poly: Vec<V> = pl.iter().map(|q| q.0).collect(); let mut c = (0.0, 0.0); for q in &poly { c.0 += q.0; c.1 += q.1; } c = (c.0 / poly.len() as f32, c.1 / poly.len() as f32);
         let d = dist(c, imp); let rad = (c.0 - ix, c.1 - iy); let rl = (rad.0 * rad.0 + rad.1 * rad.1).sqrt().max(1e-3);
         let falls = d <= rel_rad && rg.f() < 1.0 - ss(0.75, 1.0, d / rel_rad);
         let t_rel = (rel_t0 + rel_spread * (d / rel_rad) + 0.04 * rg.f()).max(d / speed + 0.02);
         let sp = push * (0.4 + 0.8 * rg.f()); let vel = (rad.0 / rl * sp + 0.15 * push * rg.s(), rad.1 / rl * sp - 0.2 * push * rg.f());
-        cells.push(Cell { poly, c, d, tilt: (rg.s() * refr, rg.s() * refr), shade: 1.0 + 0.04 * rg.s(), t_rel, falls, vel, zv: cam * (0.4 + rg.f()), phi0: rg.f() * two, om: tumble * 0.4 * rg.s(), th0: tumble * (0.4 + 0.9 * rg.f()) * if rg.f() < 0.5 { -1.0 } else { 1.0 }, z: rg.f() });
+        cells.push(Cell { poly, c, d, tilt: (rg.s() * refr, rg.s() * refr), shade: 1.0 + 0.04 * rg.s(), t_rel, falls, vel, zv: cam * (0.4 + rg.f()), phi0: rg.f() * two, om: tumble * 0.4 * rg.s(), th0: tumble * (0.25 + 1.5 * rg.f()) * if rg.f() < 0.5 { -1.0 } else { 1.0 }, tl0: tumble.min(8.0) * 0.12 * (0.3 + rg.f()) * if rg.f() < 0.5 { -1.0 } else { 1.0 }, z: rg.f() });
         let m = pl.len(); for e in 0..m { let tg = pl[e].1; if tg != usize::MAX && tg > i { edges.push((i, tg, pl[e].0, pl[(e + 1) % m].0)); } } }
     // crack segments with zigzag + per-segment width/brightness variation
     let mut segs: Vec<Seg> = Vec::new();
@@ -113,28 +116,29 @@ pub fn apply(pr: &Params, f: &mut Frame, t: f64, seed: u64) -> Result<(), String
             let rch = bil(&src, w, h, fx + tx * (1.0 + disp), fy + ty * (1.0 + disp)); let gch = bil(&src, w, h, fx + tx, fy + ty); let bch = bil(&src, w, h, fx + tx * (1.0 - disp).max(0.0), fy + ty * (1.0 - disp).max(0.0));
             f.d[o] = rch[0] * sh; f.d[o + 1] = gch[1] * sh; f.d[o + 2] = bch[2] * sh; f.d[o + 3] = gch[3]; }); }
     let mut order: Vec<usize> = (0..cells.len()).filter(|&i| released(&cells[i])).collect();
-    for &ci in &order { spans(&cells[ci].poly, w, h, |y, x, cov| { let o = (y * w + x) * 4; for j in 0..3 { f.d[o + j] *= 1.0 - cov; } f.d[o + 3] = f.d[o + 3] * (1.0 - cov) + hole_dim * cov; }); }
+    let mut holem = vec![0f32; n];
+    for &ci in &order { spans(&cells[ci].poly, w, h, |y, x, cov| { let o = (y * w + x) * 4; if cov > holem[y * w + x] { holem[y * w + x] = cov; } for j in 0..3 { f.d[o + j] *= 1.0 - cov; } f.d[o + 3] = f.d[o + 3] * (1.0 - cov) + hole_dim * cov; }); }
     let mut cov = vec![0f32; n]; let mut gl = vec![0f32; n];
     for s in &segs { let rel = |c: usize| released(&cells[c]); if rel(s.cells[0]) && rel(s.cells[1]) { continue; }
         let amt = ((front - s.d0) / (s.d1 - s.d0).max(1.0)).clamp(0.0, 1.0); if amt <= 0.0 { continue; } let b = (s.a.0 + (s.b.0 - s.a.0) * amt, s.a.1 + (s.b.1 - s.a.1) * amt);
         let dm = 0.5 * (s.d0 + s.d1); let center = 0.3 + 0.7 * ss(0.0, 0.3 * hh, dm); let gl_on = if s.g > 0.55 { (s.g - 0.55) / 0.45 } else { 0.0 };
         seg_cov(&mut cov, &mut gl, w, h, s.a, b, cw * s.w, glint * (0.15 + 0.85 * gl_on) * center); }
-    for i in 0..n { let o = i * 4; if f.d[o + 3] <= 0.0 { continue; } let c = cov[i]; let gg = gl[i];
+    for i in 0..n { let o = i * 4; if f.d[o + 3] <= 0.0 { continue; } let keep = (1.0 - holem[i]) * if crack_clear > 0.0 { 1.0 - ss(crack_clear * 0.7, crack_clear, tau) } else { 1.0 }; let c = cov[i] * keep; let gg = gl[i] * keep;
         if c > 0.0 || gg > 0.0 { for j in 0..3 { f.d[o + j] = f.d[o + j] * (1.0 - 0.5 * c) + (gg * 0.5 + c * 0.1) * (0.6 + 0.4 * f.d[o + j].min(1.0)); } } }
     // falling shards: 3D tumble about an in-plane axis, slab thickness, sub-frame motion blur
     order.sort_by(|a, b| cells[*a].z.partial_cmp(&cells[*b].z).unwrap_or(std::cmp::Ordering::Equal));
     let mut acc = vec![0f32; n * 4]; let mut lay = vec![0f32; n * 4]; let fl = 2.5 * hh; let mut drew = false;
     for sidx in 0..ns { let tau_s = tau + if ns > 1 { (sidx as f32 / (ns - 1) as f32 - 0.5) * shutter } else { 0.0 };
         let fade = 1.0 - ss(fade_start, clear_time, tau_s); if fade <= 0.0 { continue; } for v in lay.iter_mut() { *v = 0.0; }
-        for &ci in &order { let c = &cells[ci]; let ts = (tau_s - c.t_rel).max(0.0);
-            let (cxd, cyd) = (c.c.0 + c.vel.0 * ts, c.c.1 + c.vel.1 * ts + 0.5 * grav * ts * ts); let zc = c.zv * ts; let th = c.th0 * ts; let phi = c.phi0 + c.om * ts; let (cth, sth) = (th.cos(), th.sin()); let (ux, uy) = (phi.cos(), phi.sin()); let (nx, ny) = (-uy, ux);
+        for &ci in &order { let c = &cells[ci]; let jit = { let mut hsh = (ci as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ (sidx as u64).wrapping_mul(0xBF58476D1CE4E5B9) ^ seed; hsh ^= hsh >> 29; hsh = hsh.wrapping_mul(0x94D049BB133111EB); hsh ^= hsh >> 32; ((hsh & 0xFFFFFF) as f32 / 16777216.0 - 0.5) * if ns > 1 { shutter / (ns - 1) as f32 } else { 0.0 } }; let ts = (tau_s + jit - c.t_rel).max(0.0);
+            let (cxd, cyd) = (c.c.0 + c.vel.0 * ts, c.c.1 + c.vel.1 * ts + 0.5 * grav * ts * ts); let zc = c.zv * ts; let th = c.th0 * ts + c.tl0 * (ts / 0.05).min(1.0); let phi = c.phi0 + c.om * ts; let (cth, sth) = (th.cos(), th.sin()); let (ux, uy) = (phi.cos(), phi.sin()); let (nx, ny) = (-uy, ux);
             if cxd < -0.5 * w as f32 || cxd > 1.5 * w as f32 || cyd > 2.5 * hh { continue; }
             let fp = (fl - zc).max(0.9 * hh); let kk = fl / fp;
             let fwd = |q: V, zo: f32| -> V { let (dx, dy) = (q.0 - c.c.0, q.1 - c.c.1); let pa = dx * ux + dy * uy; let pb = dx * nx + dy * ny; let bq = pb * cth - zo * sth; let zq = pb * sth + zo * cth; let s = kk * fp / (fp - zq).max(0.05 * hh); (cxd + s * (pa * ux + bq * nx), cyd + s * (pa * uy + bq * ny)) };
             let m = c.poly.len(); let hz = 0.5 * thick; let front_up = cth >= 0.0;
             let pf: Vec<V> = c.poly.iter().map(|q| fwd(*q, hz)).collect(); let pbk: Vec<V> = c.poly.iter().map(|q| fwd(*q, -hz)).collect();
             let (near, far) = if front_up { (&pf, &pbk) } else { (&pbk, &pf) };
-            let edge_col = [0.50 * c.shade, 0.72 * c.shade, 0.66 * c.shade]; let light = 0.5 + 0.5 * (th * 1.3 + c.z * 6.0).sin(); let ecol = [edge_col[0] * (0.4 + 0.8 * light), edge_col[1] * (0.4 + 0.8 * light), edge_col[2] * (0.4 + 0.8 * light)];
+            let edge_col = [etint[0] * c.shade, etint[1] * c.shade, etint[2] * c.shade]; let light = 0.5 + 0.5 * (th * 1.3 + c.z * 6.0).sin(); let ecol = [edge_col[0] * (0.4 + 0.8 * light), edge_col[1] * (0.4 + 0.8 * light), edge_col[2] * (0.4 + 0.8 * light)];
             let mut put = |y: usize, x: usize, col: [f32; 3], al: f32| { if al <= 0.0 { return; } let o = (y * w + x) * 4; let oa = lay[o + 3]; for j in 0..3 { lay[o + j] = col[j] * al + lay[o + j] * (1.0 - al); } lay[o + 3] = al + oa * (1.0 - al); };
             if thick > 0.2 { spans(far, w, h, |y, x, cv| put(y, x, ecol, cv * fade)); for e in 0..m { let e2 = (e + 1) % m; let quad = [pf[e], pf[e2], pbk[e2], pbk[e]]; spans(&quad, w, h, |y, x, cv| put(y, x, ecol, cv * fade)); } }
             if cth.abs() < 0.03 { spans(near, w, h, |y, x, cv| put(y, x, ecol, cv * fade)); continue; }
@@ -143,7 +147,8 @@ pub fn apply(pr: &Params, f: &mut Frame, t: f64, seed: u64) -> Result<(), String
                 let pb = db * fp / den; let s = kk * fp / (fp - pb * sth).max(0.05 * hh); let pa = da / s; let (qx, qy) = (c.c.0 + pa * ux + pb * nx, c.c.1 + pa * uy + pb * ny);
                 let mut dm = f32::MAX; for e in 0..m { let (a, b) = (c.poly[e], c.poly[(e + 1) % m]); let (dx, dy) = (b.0 - a.0, b.1 - a.1); let l2 = (dx * dx + dy * dy).max(1e-6); let tt = (((qx - a.0) * dx + (qy - a.1) * dy) / l2).clamp(0.0, 1.0); dm = dm.min(((qx - a.0 - tt * dx).powi(2) + (qy - a.1 - tt * dy).powi(2)).sqrt()); }
                 let sm = bil(&src, w, h, qx, qy); let bv = if bevel > 0.0 { 1.0 - ss(0.0, bevel, dm * s) } else { 0.0 }; let lum = 0.3 * glint * bv * (0.3 + light);
-                let tint = if back { [0.92, 1.0, 1.04] } else { [1.0, 1.0, 1.0] }; put(y, x, [sm[0] * shade * tint[0] + lum, sm[1] * shade * tint[1] + lum, sm[2] * shade * tint[2] + lum], cv * fade * sm[3]); }); }
+                let tint = if back { [0.92, 1.0, 1.04] } else { [1.0, 1.0, 1.0] }; let fr = (1.0 - cth.abs()).powi(3) * fres; let st = (((pa + pb) * 0.02 + th * 2.0 + c.z * 9.0).sin() * 3.0).tanh() * 0.5 + 0.5; let sh2 = lum + sheen * 0.05 * st * (0.3 + light) + fr * 0.35 + (1.0 - ss(0.0, 2.5 * bevel.max(1.0), dm * s)) * fres * 0.12;
+                put(y, x, [sm[0] * shade * tint[0] + sh2 * 0.9, sm[1] * shade * tint[1] + sh2, sm[2] * shade * tint[2] + sh2 * 1.1], (cv * fade * sm[3] * (face_op + fr * 0.5 + 0.2 * (1.0 - ss(0.0, bevel.max(1.0) * 3.0, dm * s)))).min(cv * fade * sm[3])); }); }
         for i in 0..n * 4 { acc[i] += lay[i]; } drew = true; }
     if drew { let inv = 1.0 / ns as f32; for i in 0..n { let o = i * 4; let a = (acc[o + 3] * inv).clamp(0.0, 1.0); if a <= 0.0 { continue; } let oa = f.d[o + 3]; let na = a + oa * (1.0 - a);
         for j in 0..3 { f.d[o + j] = (acc[o + j] * inv + f.d[o + j] * oa * (1.0 - a)) / na.max(1e-6); } f.d[o + 3] = na; } }
