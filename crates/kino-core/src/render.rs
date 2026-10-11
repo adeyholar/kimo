@@ -746,9 +746,9 @@ pub fn target_screen_occ(p: &Project, id: &str, t: f64) -> Option<std::sync::Arc
 /// Effects that depend only on their (constant) parameters and the pixels: no time, seed or randomness.
 const STATIC_EFFECTS: &[&str] = &["exposure", "contrast", "saturation", "temperature", "tint", "color_wheels", "curves", "teal_orange", "vignette", "blur", "glow", "invert", "sharpen", "posterize", "sepia", "outline", "outer_glow", "long_shadow", "choker", "feather_alpha", "silhouette_fill"];
 fn is_static_text(c: &Clip) -> bool {
-    let Source::Text { text, .. } = &c.source else { return false };
+    let plain = match &c.source { Source::Text { text, .. } => !text.contains('{'), Source::Shape { .. } => true, _ => false }; if !plain { return false; }
     let constant = |pr: &crate::keyframe::Prop| pr.keys.is_empty() && pr.expr.is_empty();
-    !text.contains('{') && c.text_fx.is_none() && c.mask.is_none() && c.echo.is_none() && c.posterize_fps == 0.0
+    c.text_fx.is_none() && c.mask.is_none() && c.echo.is_none() && c.posterize_fps == 0.0
         && c.props.get("reveal").map_or(true, constant)
         && c.effects.iter().all(|e| STATIC_EFFECTS.contains(&e.kind.as_str()) && e.strings.is_empty() && e.params.values().all(constant))
 }
