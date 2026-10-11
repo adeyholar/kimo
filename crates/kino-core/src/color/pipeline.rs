@@ -29,6 +29,7 @@ pub fn export_high(p:&Project,path:&str,format:&str,crf:u32)->Result<f64,String>
     if format=="hevc10"&&(p.width%2!=0||p.height%2!=0){return Err("HEVC420 requires even dimensions".into())}crate::guard::check_project(p,crate::guard::limits())?;
     let hdr=p.color_pipeline.enabled&&p.color_pipeline.output_transfer==6;
     if hdr&&p.color_pipeline.output_gamut!=1{return Err("PQ export requires Rec2020 output gamut=1".into())}
+    if p.color_pipeline.enabled&&p.color_pipeline.output_transfer==7&&p.color_pipeline.output_gamut!=1{return Err("HLG export requires Rec2020 output gamut=1".into())}
     if format=="ffv1_16"&&!path.to_lowercase().ends_with(".mkv"){return Err("ffv1_16 requires .mkv".into())}
     let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba64le","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v",codec,"-pix_fmt",pix]);
     if p.color_pipeline.mastering.is_some()&&format!="hevc10"{return Err("static mastering metadata supported by HEVC10 only".into())}

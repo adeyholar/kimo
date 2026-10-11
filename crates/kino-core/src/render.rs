@@ -367,13 +367,19 @@ pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<
     write_image(&f,path)
 }
 
-fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Command{let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}",p.width,p.height),"-r",&format!("{}",p.fps),"-i","-","-c:v","libx264","-pix_fmt","yuv420p","-crf",&crf.to_string(),path]);cmd}
+/// Ordinary video delivery is explicit Rec709 RGB -> limited BT709 YUV.
+/// Disabled projects keep their display-sRGB render samples; only delivery changes.
+fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Result<Command,String>{
+    let q=&p.color_pipeline;
+    let transfer=if q.enabled{q.validate()?;if q.output_gamut!=0{return Err("ordinary video export requires Rec709 output gamut=0; select a supported delivery output or export_high_bit".into())}match q.output_transfer{0=>"linear",1=>"iec61966-2-1",8=>"bt709",_=>return Err("ordinary video export requires exactly taggable linear/sRGB/BT709 output transfer; select a supported delivery output or export_high_bit".into())}}else{"iec61966-2-1"};
+    let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v","libx264","-vf","scale=out_color_matrix=bt709:out_range=tv","-pix_fmt","yuv420p","-color_range","tv","-color_primaries","bt709","-color_trc",transfer,"-colorspace","bt709","-crf",&crf.to_string(),path]);Ok(cmd)
+}
 
 pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> {
     if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) { return Err("HDR delivery requires export_high_bit; legacy export is 8-bit SDR".into()); }
     let mut cache = Cache::new();
     let n = (p.duration() * p.fps).round() as usize;
-    let mut command=legacy_encoder_command(p,path,crf);
+    let mut command=legacy_encoder_command(p,path,crf)?;
     let frame_bytes=(p.width as usize).checked_mul(p.height as usize).and_then(|v|v.checked_mul(4)).ok_or("legacy encoder frame overflow")?;
     let mut encoder=crate::color::process::EncodeStream::new(&mut command,frame_bytes,crate::color::process::encode_deadline(n))?;
     let nt = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1);
@@ -568,7 +574,8 @@ fn flow_pair(fr:&Frames,a:usize,b:usize,w:usize,h:usize)->Result<(Frame,Frame),S
 #[test]fn decoder_reaped_on_unwind(){let mut id=0;let r=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{let child=Command::new("sleep").arg("30").spawn().unwrap();id=child.id();let _decoder=DecodeProcess(child);panic!("test cancelled decode");}));assert!(r.is_err());assert!(!std::path::Path::new(&format!("/proc/{id}")).exists());}
 }
 #[cfg(test)]mod legacy_encoder_tests{use super::*;
-#[test]fn logged_argv_exactly_preserves_legacy_options(){let mut p=Project::default();p.width=320;p.height=180;p.fps=25.;let cmd=legacy_encoder_command(&p,"proof.mp4",23);let logged:Vec<_>=cmd.get_args().map(|v|v.to_string_lossy().to_string()).collect();assert_eq!(logged,vec!["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s","320x180","-r","25","-i","-","-c:v","libx264","-pix_fmt","yuv420p","-crf","23","proof.mp4"]);}
+#[test]fn ordinary_video_argv_declares_matching_conversion_and_tags(){for(w,h)in[(320,180),(1280,720)]{let mut p=Project::default();p.width=w;p.height=h;p.fps=25.;let cmd=legacy_encoder_command(&p,"proof.mp4",23).unwrap();let logged:Vec<_>=cmd.get_args().map(|v|v.to_string_lossy().to_string()).collect();assert_eq!(logged,vec!["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{w}x{h}"),"-r","25","-i","-","-c:v","libx264","-vf","scale=out_color_matrix=bt709:out_range=tv","-pix_fmt","yuv420p","-color_range","tv","-color_primaries","bt709","-color_trc","iec61966-2-1","-colorspace","bt709","-crf","23","proof.mp4"]);}}
+#[test]fn ordinary_video_rejects_untaggable_output_before_spawn(){let mut p=Project::default();p.color_pipeline.enabled=true;for g in 1..=7{p.color_pipeline.output_gamut=g;assert!(legacy_encoder_command(&p,"unused.mp4",18).is_err())}p.color_pipeline.output_gamut=0;for t in[2,3,4,5,6,7]{p.color_pipeline.output_transfer=t;assert!(legacy_encoder_command(&p,"unused.mp4",18).is_err())}for(t,name)in[(0,"linear"),(1,"iec61966-2-1"),(8,"bt709")]{p.color_pipeline.output_transfer=t;let cmd=legacy_encoder_command(&p,"unused.mp4",18).unwrap();let args:Vec<_>=cmd.get_args().map(|v|v.to_string_lossy().to_string()).collect();assert!(args.windows(2).any(|v|v==["-color_trc",name]));}}
 #[test]fn parallel_out_of_order_arrival_preserves_writer_order(){let path=std::env::temp_dir().join(format!("kino-ordered-{}.bin",std::process::id()));let mut cmd=Command::new("sh");cmd.args(["-c",&format!("exec cat > {}",path.display())]);let mut encoder=crate::color::process::EncodeStream::new(&mut cmd,4,std::time::Duration::from_secs(2)).unwrap();let slots:Vec<_>=(0..4).map(|_|std::sync::Mutex::new(None)).collect();std::thread::scope(|sc|{for k in 0..4{let slots=&slots;sc.spawn(move||{std::thread::sleep(std::time::Duration::from_millis((3-k)*10));*slots[k as usize].lock().unwrap()=Some(vec![k as u8;4]);});}});for slot in slots{encoder.write(slot.into_inner().unwrap().unwrap()).unwrap();}encoder.finish().unwrap();assert_eq!(std::fs::read(&path).unwrap(),vec![0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3]);std::fs::remove_file(path).unwrap();}
 }
 #[cfg(test)]mod legacy_unwind_test{use super::*;
