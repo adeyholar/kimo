@@ -252,7 +252,9 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
                 let i = (y * w + x) * 4; let a = (fl + sk * (1.0 - fl)).clamp(0.0, 1.0); if a <= 0.0 { continue; }
                 for j in 0..3 { f.d[i + j] = ((fill[j] * fl + stroke_color[j] * sk * (1.0 - fl)) / a) as f32; } f.d[i + 3] = a as f32; } }
         }
-        Source::Emitter(e) => crate::particles::render_fps(e, &mut f, lt, p.fps),
+        Source::Emitter(e) => { let has = e.colliders.iter().any(|c| c.kind == "layer");
+            if has { let (w0, h0) = (f.w, f.h); let ms = e.colliders.iter().map(|cc| if cc.kind == "layer" { render_clip_alone(p, &cc.clip_id, c.start + lt, cache).map(|fr| (fr.w.min(w0), fr.h.min(h0), (0..fr.w.min(w0) * fr.h.min(h0)).map(|i| fr.d[(i / fr.w.min(w0) * fr.w + i % fr.w.min(w0)) * 4 + 3]).collect::<Vec<f32>>())) } else { None }).collect(); crate::particles::set_layer_masks(ms); }
+            crate::particles::render_fps(e, &mut f, lt, p.fps); if has { crate::particles::set_layer_masks(Vec::new()); } }
         Source::SpeedLines(s) => crate::speedlines::render(s, &mut f, lt),
         Source::GlitchConfetti(s) => crate::confetti::render(s, &mut f, lt),
         Source::Scene3D(e) => { let t0 = c.start + lt; crate::scene3d::render_blur(e, &mut f, lt, p.fps, &|off| crate::three_d::Camera::from_props(&p.camera, t0 + off)) }

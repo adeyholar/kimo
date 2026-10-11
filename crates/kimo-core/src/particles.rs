@@ -30,7 +30,20 @@ pub struct Emitter {
 fn d_fric() -> f64 { 0.15 }
 /// kind: circle (x,y centre, r = radius as fraction of frame height), rect (x,y centre, w,h as frame fractions), plane (x,y point, angle = degrees of the outward normal, 270 = faces up on screen).
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct Collider { #[serde(default)] pub kind: String, #[serde(default)] pub x: f64, #[serde(default)] pub y: f64, #[serde(default)] pub r: f64, #[serde(default)] pub w: f64, #[serde(default)] pub h: f64, #[serde(default)] pub angle: f64 }
+pub struct Collider { #[serde(default)] pub kind: String, #[serde(default)] pub x: f64, #[serde(default)] pub y: f64, #[serde(default)] pub r: f64, #[serde(default)] pub w: f64, #[serde(default)] pub h: f64, #[serde(default)] pub angle: f64,
+    /// kind "layer": the alpha silhouette of this clip (rendered once at the current frame and held static); alpha >= `threshold` (default 0.5) is solid.
+    #[serde(default)] pub clip_id: String, #[serde(default = "d_half")] pub threshold: f64 }
+thread_local! { static LAYER_MASKS: std::cell::RefCell<Vec<Option<std::rc::Rc<(usize, usize, Vec<f32>)>>>> = Default::default(); }
+/// Silhouette masks for the emitter's `layer` colliders, indexed like `colliders`; set by the renderer around the emitter render.
+pub fn set_layer_masks(m: Vec<Option<(usize, usize, Vec<f32>)>>) { LAYER_MASKS.with(|l| *l.borrow_mut() = m.into_iter().map(|o| o.map(std::rc::Rc::new)).collect()); }
+fn layer_hit(idx: usize, thr: f64, px: f64, py: f64, v: (f64, f64)) -> Option<((f64, f64), f64)> {
+    LAYER_MASKS.with(|l| { let l = l.borrow(); let m = l.get(idx)?.as_ref()?; let (mw, mh, d) = (m.0, m.1, &m.2); let thr = thr as f32;
+        let a = |x: f64, y: f64| -> f32 { if x < 0.0 || y < 0.0 || x >= mw as f64 || y >= mh as f64 { 0.0 } else { d[(y as usize) * mw + x as usize] } };
+        if a(px, py) < thr { return None; }
+        let r = 3.0; let (gx, gy) = (a(px + r, py) - a(px - r, py), a(px, py + r) - a(px, py - r)); let gl = ((gx * gx + gy * gy) as f64).sqrt();
+        let n = if gl > 1e-4 { (-(gx as f64) / gl, -(gy as f64) / gl) } else { let vl = (v.0 * v.0 + v.1 * v.1).sqrt().max(1e-9); (-v.0 / vl, -v.1 / vl) };
+        let mut pen = 0.0; while pen < 96.0 && a(px + n.0 * pen, py + n.1 * pen) >= thr { pen += 1.0; } Some((n, pen + 0.5)) })
+}
 /// If (px,py) is inside the collider return (outward unit normal, penetration depth).
 fn hit(c: &Collider, px: f64, py: f64, w: f64, hh: f64) -> Option<((f64, f64), f64)> {
     match c.kind.as_str() {
@@ -77,7 +90,7 @@ fn accumulate(e: &Emitter, fw: usize, fh: usize, t: f64) -> Vec<f32> {
             if e.vortex != 0.0 { let (dx, dy) = (px - e.vortex_x * w, py - e.vortex_y * hh); let d = (dx * dx + dy * dy).sqrt().max(20.0 * sc); ax += -dy / d * e.vortex * sc; ay += dx / d * e.vortex * sc; }
             let dr = (-e.drag * dt).exp(); vx = (vx + ax * dt) * dr; vy = (vy + ay * dt) * dr; px += vx * dt; py += vy * dt;
             if e.floor && py > hh { py = hh; vy = -vy.abs() * e.bounce; vx *= 0.85; }
-            for c in &e.colliders { if let Some(((nx, ny), pen)) = hit(c, px, py, w, hh) { px += nx * pen; py += ny * pen; let vn = vx * nx + vy * ny; if vn < 0.0 { let (tx, ty) = (vx - vn * nx, vy - vn * ny); let k = 1.0 - e.friction.clamp(0.0, 1.0); vx = tx * k - vn * nx * e.bounce; vy = ty * k - vn * ny * e.bounce; } } }
+            for (ci, c) in e.colliders.iter().enumerate() { let hh_ = if c.kind == "layer" { layer_hit(ci, c.threshold, px, py, (vx, vy)) } else { hit(c, px, py, w, hh) }; if let Some(((nx, ny), pen)) = hh_ { px += nx * pen; py += ny * pen; let vn = vx * nx + vy * ny; if vn < 0.0 { let (tx, ty) = (vx - vn * nx, vy - vn * ny); let k = 1.0 - e.friction.clamp(0.0, 1.0); vx = tx * k - vn * nx * e.bounce; vy = ty * k - vn * ny * e.bounce; } } }
             if e.trail > 0 && s % every == 0 { hist.push((px, py)); } }
         let u = age / life; let size = lerp(e.size0, e.size1, u) * sc * (1.0 + (h(e.seed, i, 5) - 0.5) * 2.0 * e.size_var); let mut alpha = lerp(e.alpha0, e.alpha1, u).clamp(0.0, 1.5); if e.fade_in > 0.0 { let t = (u / e.fade_in).clamp(0.0, 1.0); alpha *= t * t * (3.0 - 2.0 * t); }
         let col = [lerp(e.color0[0], e.color1[0], u), lerp(e.color0[1], e.color1[1], u), lerp(e.color0[2], e.color1[2], u)];
