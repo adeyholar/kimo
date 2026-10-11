@@ -1,7 +1,7 @@
 //! Classical (non-ML) trimap alpha matting: sampling-based (F,B) pair estimation for every unknown pixel, edge-aware guided-filter
 //! smoothing, and foreground colour decontamination. Keeps partial alpha on hair, motion blur and glass edges. No learned model is used.
-pub struct Opts { pub band: usize, pub samples: usize, pub radius: usize, pub guide_radius: usize, pub eps: f32, pub spatial: f32 }
-impl Default for Opts { fn default() -> Self { Opts { band: 8, samples: 10, radius: 0, guide_radius: 4, eps: 1e-4, spatial: 0.0 } } }
+pub struct Opts { pub band: usize, pub samples: usize, pub radius: usize, pub guide_radius: usize, pub eps: f32, pub spatial: f32, pub bg_bounds: bool }
+impl Default for Opts { fn default() -> Self { Opts { band: 8, samples: 10, radius: 0, guide_radius: 4, eps: 1e-4, spatial: 0.0, bg_bounds: false } } }
 pub struct Matte { pub alpha: Vec<f32>, pub fg: Vec<f32>, pub unknown: usize, pub trimap: Vec<u8> }
 
 fn dist_transform(mask: &[bool], w: usize, h: usize, maxd: usize) -> Vec<f32> { // chamfer distance to nearest true, capped
@@ -63,7 +63,39 @@ pub fn matte(img: &[f32], trimap: &[u8], w: usize, h: usize, o: &Opts) -> Matte 
     // edge-aware smoothing of the unknown region guided by the image (confidence-weighted blend with raw estimate)
     let sm = guided_filter(img, &alpha, w, h, o.guide_radius, o.eps);
     for i in 0..n { if trimap[i] == 128 { let a = sm[i].clamp(0.0, 1.0); let wgt = 0.35 + 0.65 * (1.0 - conf[i]); alpha[i] = (alpha[i] * (1.0 - wgt) + a * wgt).clamp(0.0, 1.0); } else { alpha[i] = if trimap[i] == 255 { 1.0 } else { 0.0 }; } }
-    // decontaminate: F = (C - (1-a) B) / a with B from the blended bg; here use the sampled F directly where alpha is partial, original colour where opaque
-    for i in 0..n { if trimap[i] == 255 || alpha[i] > 0.98 { for c in 0..3 { fg[i * 3 + c] = img[i * 3 + c]; } } }
+    // colour-distance sanity bounds from the local background model: a pixel that is nearly background colour cannot be solid foreground,
+    // and one far from it cannot be mostly background. Kills wall residue and holes the sampler gets wrong when F and B are similar.
+    let bgm0: Vec<bool> = trimap.iter().map(|&t| t == 0).collect(); let model0 = bg_model(img, &bgm0, w, h, 40);
+    if o.bg_bounds { for i in 0..n { if trimap[i] == 128 { let d = ((img[i * 3] - model0[i * 3]).powi(2) + (img[i * 3 + 1] - model0[i * 3 + 1]).powi(2) + (img[i * 3 + 2] - model0[i * 3 + 2]).powi(2)).sqrt(); let ceil = ((d - 0.02) / 0.06).clamp(0.0, 1.0); let floor = ((d - 0.08) / 0.12).clamp(0.0, 1.0); alpha[i] = alpha[i].min(ceil).max(floor); } } }
+    // decontaminate: F = (C - (1-a) B) / a with B = local background model from the sure-background pixels; opaque pixels keep their colour
+    let bgm: Vec<bool> = trimap.iter().map(|&t| t == 0).collect(); let model = bg_model(img, &bgm, w, h, 40);
+    for i in 0..n { if trimap[i] == 255 || alpha[i] > 0.98 { for c in 0..3 { fg[i * 3 + c] = img[i * 3 + c]; } } else if trimap[i] == 128 { let a = alpha[i].max(0.08); let mut dec = [0f32; 3]; for c in 0..3 { let f = ((img[i * 3 + c] - (1.0 - alpha[i]) * model[i * 3 + c]) / a).clamp(0.0, 1.0); dec[c] = f; } let sm = [fg[i * 3], fg[i * 3 + 1], fg[i * 3 + 2]]; let dd = ((dec[0] - sm[0]).powi(2) + (dec[1] - sm[1]).powi(2) + (dec[2] - sm[2]).powi(2)).sqrt(); let t = (1.0 - (dd - 0.1) / 0.15).clamp(0.0, 1.0); for c in 0..3 { fg[i * 3 + c] = dec[c] * t + sm[c] * (1.0 - t); } } }
     Matte { alpha, fg, unknown, trimap: trimap.to_vec() }
+}
+
+/// Local background colour model by normalised convolution of the pixels where `mask` is true (radius `r`). Pixels with no nearby
+/// support fall back to the global mean of the masked pixels.
+pub fn bg_model(img: &[f32], mask: &[bool], w: usize, h: usize, r: usize) -> Vec<f32> {
+    let n = w * h; let m: Vec<f32> = mask.iter().map(|&b| if b { 1.0 } else { 0.0 }).collect(); let den = box_filter(&m, w, h, r);
+    let mut out = vec![0f32; n * 3]; let cnt = m.iter().sum::<f32>().max(1.0); let mut gm = [0f32; 3];
+    for c in 0..3 { for i in 0..n { gm[c] += img[i * 3 + c] * m[i]; } gm[c] /= cnt; }
+    for c in 0..3 { let ch: Vec<f32> = (0..n).map(|i| img[i * 3 + c] * m[i]).collect(); let num = box_filter(&ch, w, h, r); for i in 0..n { out[i * 3 + c] = if den[i] > 0.002 { (num[i] / den[i]).clamp(0.0, 1.0) } else { gm[c] }; } }
+    out
+}
+/// Automatic background suggestion: pixels the seed calls foreground that match the local background colour model AND are connected to
+/// the outside background through such pixels (so a loose outline leaves no wall inside it) are switched to background in the seed.
+/// Returns the corrected seed and the number of pixels reclaimed. `thr` is an RGB (0..1) distance to the background model.
+pub fn auto_background(img: &[f32], seed: &[f32], w: usize, h: usize, band: usize, thr: f32) -> (Vec<f32>, usize) {
+    let n = w * h; let tri = trimap_from_alpha(seed, w, h, band); let bgm: Vec<bool> = tri.iter().map(|&t| t == 0).collect();
+    if !bgm.iter().any(|&b| b) { return (seed.to_vec(), 0); }
+    let model = bg_model(img, &bgm, w, h, 70);
+    let like: Vec<bool> = (0..n).map(|i| { let d = ((img[i * 3] - model[i * 3]).powi(2) + (img[i * 3 + 1] - model[i * 3 + 1]).powi(2) + (img[i * 3 + 2] - model[i * 3 + 2]).powi(2)).sqrt(); d < thr }).collect();
+    // erode by 1 px so thin colour-matching bridges do not leak into the subject
+    let er: Vec<bool> = (0..n).map(|i| { let (x, y) = (i % w, i / w); if !like[i] { return false; } for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] { let (xx, yy) = (x as i32 + dx, y as i32 + dy); if xx < 0 || yy < 0 || xx >= w as i32 || yy >= h as i32 { continue; } if !like[yy as usize * w + xx as usize] { return false; } } true }).collect();
+    let mut out = seed.to_vec(); let mut stack: Vec<usize> = vec![]; let mut seen = vec![false; n];
+    for i in 0..n { if seed[i] > 0.5 && er[i] { let (x, y) = (i % w, i / w); let mut touch = false; for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] { let (xx, yy) = (x as i32 + dx, y as i32 + dy); if xx >= 0 && yy >= 0 && xx < w as i32 && yy < h as i32 && seed[yy as usize * w + xx as usize] <= 0.5 { touch = true; } } if touch { seen[i] = true; stack.push(i); } } }
+    let mut count = 0;
+    while let Some(i) = stack.pop() { out[i] = 0.0; count += 1; let (x, y) = (i % w, i / w);
+        for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] { let (xx, yy) = (x as i32 + dx, y as i32 + dy); if xx < 0 || yy < 0 || xx >= w as i32 || yy >= h as i32 { continue; } let j = yy as usize * w + xx as usize; if !seen[j] && seed[j] > 0.5 && er[j] { seen[j] = true; stack.push(j); } } }
+    (out, count)
 }
