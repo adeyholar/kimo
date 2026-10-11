@@ -25,6 +25,8 @@ pub struct ShardBurst {
     #[serde(default)] pub plane: Option<Plane>,
     /// Contact shadows cast onto the receiving surface (the z = `shadow_plane_z` plane, i.e. the plate the pane sat in): strength 0..1 (0 = off), falls off with height over `shadow_reach` (720p px, 0 = 220), blur grows with height.
     /// Motion blur: shutter angle in degrees (180 = the previous fixed half-frame shutter, 0 = off) and temporal samples (0 = automatic: 4, or 8 with a texture). More samples remove the stepped ghost copies of fast shards (cost is linear).
+    /// Debris trails: `trail` 0..1 strength (0 = off), `trail_length` seconds of history (default 0.12), `trail_samples` 2..24 (default 8). Faded earlier-time copies of every shard are composited behind the shard (same shader, same occluder).
+    #[serde(default)] pub trail: f64, #[serde(default)] pub trail_length: f64, #[serde(default)] pub trail_samples: u32,
     #[serde(default = "d_shut")] pub shutter_deg: f64, #[serde(default)] pub blur_samples: u32,
     #[serde(default)] pub contact_shadow: f64, #[serde(default)] pub shadow_reach: f64, #[serde(default)] pub shadow_plane_z: f64,
 }
@@ -96,7 +98,12 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
     let occ = if let Some(m) = EXT_OCC.with(|c| c.borrow_mut().take()) { if m.len() == w * hh { Some(m) } else { None } } else { e.plane.as_ref().and_then(|p| p.occlusion.as_ref().and_then(|o| load_occ(o, (t * fps).round() as i64, w, hh))) };
     let mut shadow = vec![0f32; if e.contact_shadow > 0.0 { w * hh } else { 0 }]; let sreach = if e.shadow_reach > 0.0 { e.shadow_reach } else { 220.0 } * k;
     let traj = if e.physics { Some((bake_cached(e, k, total, hh), 0)) } else { None };
-    for sub in 0..nsub { let ts = (t + ((sub as f64 + 0.5) / nsub as f64 - 0.5) * shutter).max(0.0);
+    // sample list: trail samples first (older time, fading weight), then the shutter samples; the last sample is always a shutter sample
+    let mut samples: Vec<(f64, f32, bool)> = vec![];
+    if e.trail > 0.0 && e.trail.is_finite() { let nt = if e.trail_samples == 0 { 8 } else { (e.trail_samples as usize).clamp(2, 24) }; let len = if e.trail_length > 0.0 { e.trail_length.min(2.0) } else { 0.12 };
+        for kk in (1..=nt).rev() { let u = kk as f64 / nt as f64; let wt = (e.trail.clamp(0.0, 1.0) * (1.0 - u * 0.85).powi(2)) as f32 / nsub as f32 * (4.0 / nt as f32).min(1.0); samples.push(((t - u * len).max(0.0), wt, true)); } }
+    for sub in 0..nsub { samples.push(((t + ((sub as f64 + 0.5) / nsub as f64 - 0.5) * shutter).max(0.0), 1.0 / nsub as f32, false)); }
+    for (si, &(ts, wt, is_trail)) in samples.iter().enumerate() {
         let mut prims: Vec<Prim> = Vec::with_capacity(e.count as usize * 2); let mut shp: Vec<(Vec<(f64, f64)>, f64, f64)> = vec![];
         let ncount = pcells.as_ref().map(|c| c.1.len() as u64).unwrap_or(e.count as u64);
         for i in 0..ncount {
@@ -125,7 +132,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                 for v in 0..nv { let l = [loc[v].0, loc[v].1, zoff]; let wp = [pos[0] + rm[0][0] * l[0] + rm[0][1] * l[1] + rm[0][2] * l[2], pos[1] + rm[1][0] * l[0] + rm[1][1] * l[1] + rm[1][2] * l[2], pos[2] + rm[2][0] * l[0] + rm[2][1] * l[1] + rm[2][2] * l[2]];
                     match cv.project(wp) { Some((sx, sy, zv)) => { pts[v] = (sx, sy); dz += zv; } None => { ok = false; } } }
                 if !ok { break; } dz /= nv as f64; zsum += dz; shard.push((pts, dz, 0.0, 0.0, 0.0)); }
-            if e.contact_shadow > 0.0 { let mut poly = Vec::with_capacity(nv); let mut hs = 0.0; let mut okp = true; let zoff = thick * 0.5;
+            if e.contact_shadow > 0.0 && !is_trail { let mut poly = Vec::with_capacity(nv); let mut hs = 0.0; let mut okp = true; let zoff = thick * 0.5;
                 for v in 0..nv { let l = [loc[v].0, loc[v].1, zoff]; let wp = [pos[0] + rm[0][0] * l[0] + rm[0][1] * l[1] + rm[0][2] * l[2], pos[1] + rm[1][0] * l[0] + rm[1][1] * l[1] + rm[1][2] * l[2], pos[2] + rm[2][0] * l[0] + rm[2][1] * l[1] + rm[2][2] * l[2]];
                     let hgt = (e.shadow_plane_z - wp[2]).max(0.0); hs += hgt; let lz = lg[2].abs().max(0.25); let (sx, sy) = ((-lg[0] / lz).clamp(-1.5, 1.5), (-lg[1] / lz).clamp(-1.5, 1.5));
                     match cv.project([wp[0] + sx * hgt, wp[1] + sy * hgt, e.shadow_plane_z]) { Some((px, py, _)) => poly.push((px, py)), None => { okp = false; } } }
@@ -180,9 +187,9 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                 let (ca, aa) = (a as f32, acca[o]); // over (premultiplied accumulation)
                 accc[o * 3] = accc[o * 3] * (1.0 - ca) + cr as f32 * ca; accc[o * 3 + 1] = accc[o * 3 + 1] * (1.0 - ca) + cg as f32 * ca; accc[o * 3 + 2] = accc[o * 3 + 2] * (1.0 - ca) + cb as f32 * ca; acca[o] = ca + aa * (1.0 - ca); if rf { let k2 = e.refract as f32 * k as f32 * (1.0 + 0.5 * rim as f32); dacc[o * 2] = dacc[o * 2] * (1.0 - ca) + (pr.tx as f32 * k2) * ca; dacc[o * 2 + 1] = dacc[o * 2 + 1] * (1.0 - ca) + (pr.ty as f32 * k2) * ca; } } } }
         // fold sub-frame into frame accumulators happens after all subs; keep running average via scaling below
-        if sub + 1 < nsub { // store partial: normalise at the end using per-sub snapshots
+        if si + 1 < samples.len() { // store partial: normalise at the end using per-sub snapshots
             // snapshots are summed by re-using buffers: move current to f (additive average) then clear
-                for o in 0..w * hh { let i4 = o * 4; f.d[i4] += accc[o * 3] / nsub as f32; f.d[i4 + 1] += accc[o * 3 + 1] / nsub as f32; f.d[i4 + 2] += accc[o * 3 + 2] / nsub as f32; f.d[i4 + 3] += acca[o] / nsub as f32; if rf { dsum[o * 2] += dacc[o * 2] / nsub as f32; dsum[o * 2 + 1] += dacc[o * 2 + 1] / nsub as f32; dacc[o * 2] = 0.0; dacc[o * 2 + 1] = 0.0; } accc[o * 3] = 0.0; accc[o * 3 + 1] = 0.0; accc[o * 3 + 2] = 0.0; acca[o] = 0.0; }
+                for o in 0..w * hh { let i4 = o * 4; f.d[i4] += accc[o * 3] * wt; f.d[i4 + 1] += accc[o * 3 + 1] * wt; f.d[i4 + 2] += accc[o * 3 + 2] * wt; f.d[i4 + 3] += acca[o] * wt; if rf { dsum[o * 2] += dacc[o * 2] * wt; dsum[o * 2 + 1] += dacc[o * 2 + 1] * wt; dacc[o * 2] = 0.0; dacc[o * 2 + 1] = 0.0; } accc[o * 3] = 0.0; accc[o * 3 + 1] = 0.0; accc[o * 3 + 2] = 0.0; acca[o] = 0.0; }
         }
     }
     if rf { for o in 0..w * hh { dsum[o * 2] += dacc[o * 2] / nsub as f32; dsum[o * 2 + 1] += dacc[o * 2 + 1] / nsub as f32; } DISP.with(|d| *d.borrow_mut() = Some((w, hh, dsum))); } else { DISP.with(|d| *d.borrow_mut() = None); }
