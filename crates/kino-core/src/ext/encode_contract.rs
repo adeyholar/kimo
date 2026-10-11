@@ -1,0 +1,2 @@
+use super::kit::*;
+pub fn commands()->Vec<Command>{vec![Command{name:"inspect_high_bit_delivery_contract",description:"Resolveexacthighbitpipe/outputtags fromprojectdeclarations, failunsupportedoutputs. DisabledprojectassumessRGB/Rec709. Noencoding/filemutation.",mutates:false,schema:obj(vec![("format",json!({"type":"string","enum":["hevc10","ffv1_16"]}))],&["format"]),run:|ss,a|serde_json::to_value(crate::color::encode_contract::high(&ss.project.color_pipeline,str_arg(a,"format")?)?).map_err(|e|e.to_string())}]}

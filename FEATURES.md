@@ -344,3 +344,11 @@ Static text-layer cache (export only, BETA): text clips with constant text (no `
 - ASC CDL files (BETA, COLOR): strict .cc/.cdl import (roxmltree, DTD/entities rejected), canonical semantic export, native OCIO CDLTransform with explicit ASC clamped style, inspect/apply/export tools, optional ACEScct sandwich with bound guard. Verified by focused tests (cdl_xml) and fuzz (172 tools, 0 failures); not yet checked against third-party grading-app CDL files.
 
 - Text fixes (from external review): add_prompt_box text now sits inside its plate (measured: text left edge 273 px = plate left 244 + padding; was 174, outside the plate). add_text gains `x` and `anchor` (center|left|right) so x refers to the block center, left or right edge (measured left edge 145 px vs target 140, glyph side bearing). New `text::measure`. `font` accepts a family name or a file path everywhere (it already did; descriptions now say so). Not yet done: non-snake-case warnings, gentler speed-line/detection-box defaults.
+High-bit delivery contract (COLOR): disabled-project exports now explicitly use
+Rec709/sRGB, BT709 limited-range YUV for HEVC10 or full-range identity RGB for
+FFV116. This fixes the formerly untagged/default-matrix disabled HEVC path.
+Managed high-bit exports accept Rec709/Rec2020 with exact linear/sRGB/BT709
+transfer tags, plus Rec2020PQ/HLG. Other gamuts and gamma2.4/log/ACEScct output
+that previously exported untagged/partiallytagged now ERROR before encoding.
+Fix: select supported delivery gamut/transfer, or use floatEXR/TIFF for working
+or log interchange. This is signal labeling/precision, not HDRdisplaycalibration.

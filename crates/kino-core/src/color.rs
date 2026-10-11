@@ -19,6 +19,7 @@ pub mod cdl_file;
 pub mod blur;
 pub mod linear;
 pub mod pipeline;
+pub mod encode_contract;
 pub mod wrapper;
 pub mod metadata;
 pub mod hdr_validation;

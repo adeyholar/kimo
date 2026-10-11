@@ -613,3 +613,17 @@ Reference nativeclampsemantics:
 https://opencolorio.readthedocs.io/en/latest/api/transforms.html
 XMLinteropexamples (secondaryimplementation):
 https://cdl-convert.readthedocs.io/en/latest/usage_cc.html
+
+## Strict high-bit delivery contract
+
+Disabled high-bit exports previously omitted conversion/tags and could use
+FFmpeg's default RGB->YUV matrix. Now explicitRec709/sRGB BT709limitedYUV HEVC10;
+FFV116 explicitfull RGB identity. Managed Rec709/Rec2020 supports exact
+linear/sRGB/BT709, plus Rec2020PQ/HLG. Other gamut/transfer pairs fail BEFORE
+encoder spawn rather than exporting untagged. Gamma2.4 is not mislabeledBT709.
+Use supportedoutputpair or floatEXR/TIFF for untaggedworking/log interchange.
+inspect_high_bit_delivery_contract(format) exposes pipe/outputbitdepth+tags.
+RGBA64LE pipe uses8bytes/pixel, retains16bitquantization; HEVC converts to10bit
+limitedrangeYUV420, FFV1 preserves16bitRGB. Neither path calls to_rgba8. All
+integerdelivery clamps0..1; losslesscodec doesn't restore out-of-domainradiance.
+NativeOCIOdisplay/view is not storedprojectoutput: no automaticviewnametagguess.

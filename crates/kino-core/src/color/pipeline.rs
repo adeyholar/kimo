@@ -30,20 +30,14 @@ pub fn export_high(p:&Project,path:&str,format:&str,crf:u32)->Result<f64,String>
     let hdr=p.color_pipeline.enabled&&p.color_pipeline.output_transfer==6;
     if hdr&&p.color_pipeline.output_gamut!=1{return Err("PQ export requires Rec2020 output gamut=1".into())}
     if p.color_pipeline.enabled&&p.color_pipeline.output_transfer==7&&p.color_pipeline.output_gamut!=1{return Err("HLG export requires Rec2020 output gamut=1".into())}
+    let delivery=super::encode_contract::high(&p.color_pipeline,format)?;
     if format=="ffv1_16"&&!path.to_lowercase().ends_with(".mkv"){return Err("ffv1_16 requires .mkv".into())}
     let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba64le","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v",codec,"-pix_fmt",pix]);
     if p.color_pipeline.mastering.is_some()&&format!="hevc10"{return Err("static mastering metadata supported by HEVC10 only".into())}
     let mut encoder_params="pools=2:frame-threads=2:log-level=error".to_string();if let Some(m)=&p.color_pipeline.mastering{encoder_params.push(':');encoder_params.push_str(&m.x265()?);}
     if format=="hevc10"{cmd.args(["-crf",&crf.to_string(),"-x265-params",&encoder_params,"-tag:v","hvc1"]);}
-    if hdr{if format=="hevc10" {cmd.args(["-vf","scale=out_color_matrix=bt2020:out_range=tv","-color_range","tv"]);}
-    cmd.args(["-color_primaries","bt2020","-color_trc","smpte2084","-colorspace",if format=="hevc10"{"bt2020nc"}else{"rgb"}]);}else if p.color_pipeline.enabled&&p.color_pipeline.output_transfer==7&&p.color_pipeline.output_gamut==1{if format=="hevc10" {cmd.args(["-vf","scale=out_color_matrix=bt2020:out_range=tv","-color_range","tv"]);}
-    cmd.args(["-color_primaries","bt2020","-color_trc","arib-std-b67","-colorspace",if format=="hevc10"{"bt2020nc"}else{"rgb"}]);}
-    // Declare only exact supported transfer identities, never call gamma2.4 BT709 OETF.
-    if p.color_pipeline.enabled && p.color_pipeline.output_gamut==0 {
-      if format=="hevc10"{cmd.args(["-vf","scale=out_color_matrix=bt709:out_range=tv","-color_range","tv"]);}else{cmd.args(["-color_range","pc"]);}
-      cmd.args(["-color_primaries","bt709","-colorspace",if format=="hevc10"{"bt709"}else{"rgb"}]);
-      let transfer=match p.color_pipeline.output_transfer{0=>Some("linear"),1=>Some("iec61966-2-1"),8=>Some("bt709"),_=>None};if let Some(t)=transfer{cmd.args(["-color_trc",t]);}
-    }
+    if let Some(matrix)=delivery.matrix_scale{cmd.args(["-vf",&format!("scale=in_range=pc:out_color_matrix={matrix}:out_range=tv")]);}
+    cmd.args(["-color_range",delivery.range,"-color_primaries",delivery.primaries,"-color_trc",delivery.transfer_tag,"-colorspace",delivery.matrix]);
     let count=(p.duration()*p.fps).round() as usize;let frame_bytes=(p.width as usize).checked_mul(p.height as usize).and_then(|v|v.checked_mul(8)).ok_or("encoder frame overflow")?;
     let mut encoder=super::process::EncodeStream::new(cmd.arg(path),frame_bytes,super::process::encode_deadline(count))?;let mut cache=crate::render::Cache::new();
     for i in 0..count{crate::guard::check();let t=i as f64/p.fps;crate::render::prepare_export_range(p,&mut cache,t,t)?;let mut f=crate::render::render_frame(p,t,&cache)?;output(p,&mut f)?;encoder.write(rgba16(&f)?)?}encoder.finish()?;
