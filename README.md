@@ -66,6 +66,12 @@ Left, default hole. Right, `hole_fill=1` (same frame, 1280x720 city plate, t=1.0
 
 ![frosted glass](docs/media/frosted-glass.jpg)
 
+### Particles that hit things
+
+Emitters take `colliders` (circle, rect or plane, analytic and deterministic) that sparks bounce off with `bounce` and `friction`, plus a `vortex` swirl force. Left to right: no obstacle, a circle and a floor plane, a vortex with a floor (same seed). Limits: obstacles are static shapes, not the silhouette of another layer; particles do not collide with each other; thin rects can be tunnelled by very fast particles (60 integration steps per second).
+
+![particle physics](docs/media/particle-physics.jpg)
+
 ### Motion blur on particles and on 3D scenes
 
 Both take `shutter_deg` and `blur_samples`, default off. The scene is sampled at several instants across the shutter and averaged in premultiplied space. 3D scene blur re-poses the whole scene per sample, so object animation, parenting and camera moves all blur. Measured on a 1280x720 scene: 0.19 s per frame off, 0.87 s at 8 samples. At 8 samples a very fast move shows stepped copies, so raise `blur_samples`.

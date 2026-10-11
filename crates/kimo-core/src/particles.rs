@@ -17,11 +17,27 @@ pub struct Emitter {
     #[serde(default)] pub turbulence: f64, #[serde(default = "d1")] pub turb_scale: f64,       // px/s^2, field size in frame fractions
     #[serde(default)] pub attractor_x: f64, #[serde(default)] pub attractor_y: f64, #[serde(default)] pub attractor: f64, // strength px/s^2 (0 = off), pos normalized
     #[serde(default)] pub floor: bool, #[serde(default = "d_half")] pub bounce: f64,
+    /// Solid obstacles particles bounce off (analytic, deterministic). Empty = off.
+    #[serde(default)] pub colliders: Vec<Collider>, #[serde(default = "d_fric")] pub friction: f64,
+    /// Swirl force around (vortex_x, vortex_y) in px/s^2 (0 = off); positive = clockwise on screen.
+    #[serde(default)] pub vortex: f64, #[serde(default)] pub vortex_x: f64, #[serde(default)] pub vortex_y: f64,
     #[serde(default = "d_sz")] pub size0: f64, #[serde(default = "d_sz")] pub size1: f64, #[serde(default)] pub size_var: f64,
     #[serde(default = "d_c0")] pub color0: [f64; 3], #[serde(default = "d_c1")] pub color1: [f64; 3],
     #[serde(default = "d1")] pub alpha0: f64, #[serde(default)] pub alpha1: f64,
     #[serde(default)] pub fade_in: f64, #[serde(default)] pub trail: u32, #[serde(default = "d_sprite")] pub sprite: String,        // soft | hard | streak | ring | star | spark
     #[serde(default)] pub shutter_deg: f64, #[serde(default)] pub blur_samples: u32, #[serde(default)] pub prewarm: bool, #[serde(default = "d_seed")] pub seed: u64, #[serde(default)] pub additive: bool,
+}
+fn d_fric() -> f64 { 0.15 }
+/// kind: circle (x,y centre, r = radius as fraction of frame height), rect (x,y centre, w,h as frame fractions), plane (x,y point, angle = degrees of the outward normal, 270 = faces up on screen).
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct Collider { #[serde(default)] pub kind: String, #[serde(default)] pub x: f64, #[serde(default)] pub y: f64, #[serde(default)] pub r: f64, #[serde(default)] pub w: f64, #[serde(default)] pub h: f64, #[serde(default)] pub angle: f64 }
+/// If (px,py) is inside the collider return (outward unit normal, penetration depth).
+fn hit(c: &Collider, px: f64, py: f64, w: f64, hh: f64) -> Option<((f64, f64), f64)> {
+    match c.kind.as_str() {
+        "circle" => { let (cx, cy, r) = (c.x * w, c.y * hh, c.r * hh); let (dx, dy) = (px - cx, py - cy); let d = (dx * dx + dy * dy).sqrt(); if d < r && r > 0.0 { let n = if d > 1e-6 { (dx / d, dy / d) } else { (0.0, -1.0) }; Some((n, r - d)) } else { None } }
+        "rect" => { let (cx, cy, hw, hhh) = (c.x * w, c.y * hh, c.w * w * 0.5, c.h * hh * 0.5); let (dx, dy) = (px - cx, py - cy); if dx.abs() < hw && dy.abs() < hhh { let (ox, oy) = (hw - dx.abs(), hhh - dy.abs()); if ox < oy { Some(((dx.signum(), 0.0), ox)) } else { Some(((0.0, dy.signum()), oy)) } } else { None } }
+        "plane" => { let a = c.angle.to_radians(); let n = (a.cos(), a.sin()); let d = (px - c.x * w) * n.0 + (py - c.y * hh) * n.1; if d < 0.0 { Some((n, -d)) } else { None } }
+        _ => None }
 }
 impl Default for Emitter { fn default() -> Self { serde_json::from_str("{}").unwrap() } }
 
@@ -58,8 +74,10 @@ fn accumulate(e: &Emitter, fw: usize, fh: usize, t: f64) -> Vec<f32> {
             let mut ax = e.wind * sc; let mut ay = e.gravity * sc;
             if e.turbulence != 0.0 { let k = 6.0 / (e.turb_scale.max(0.05) * w.max(hh)); ax += e.turbulence * sc * ((py * k * 0.9 + tt * 1.3 + rx * 6.0).sin() + 0.5 * (py * k * 2.1 - tt * 0.7).cos()); ay += e.turbulence * sc * ((px * k * 1.1 - tt * 1.1 + ry * 6.0).cos() + 0.5 * (px * k * 1.9 + tt * 0.9).sin()); }
             if e.attractor != 0.0 { let (dx, dy) = (e.attractor_x * w - px, e.attractor_y * hh - py); let d = (dx * dx + dy * dy).sqrt().max(20.0 * sc); ax += dx / d * e.attractor * sc; ay += dy / d * e.attractor * sc; }
+            if e.vortex != 0.0 { let (dx, dy) = (px - e.vortex_x * w, py - e.vortex_y * hh); let d = (dx * dx + dy * dy).sqrt().max(20.0 * sc); ax += -dy / d * e.vortex * sc; ay += dx / d * e.vortex * sc; }
             let dr = (-e.drag * dt).exp(); vx = (vx + ax * dt) * dr; vy = (vy + ay * dt) * dr; px += vx * dt; py += vy * dt;
             if e.floor && py > hh { py = hh; vy = -vy.abs() * e.bounce; vx *= 0.85; }
+            for c in &e.colliders { if let Some(((nx, ny), pen)) = hit(c, px, py, w, hh) { px += nx * pen; py += ny * pen; let vn = vx * nx + vy * ny; if vn < 0.0 { let (tx, ty) = (vx - vn * nx, vy - vn * ny); let k = 1.0 - e.friction.clamp(0.0, 1.0); vx = tx * k - vn * nx * e.bounce; vy = ty * k - vn * ny * e.bounce; } } }
             if e.trail > 0 && s % every == 0 { hist.push((px, py)); } }
         let u = age / life; let size = lerp(e.size0, e.size1, u) * sc * (1.0 + (h(e.seed, i, 5) - 0.5) * 2.0 * e.size_var); let mut alpha = lerp(e.alpha0, e.alpha1, u).clamp(0.0, 1.5); if e.fade_in > 0.0 { let t = (u / e.fade_in).clamp(0.0, 1.0); alpha *= t * t * (3.0 - 2.0 * t); }
         let col = [lerp(e.color0[0], e.color1[0], u), lerp(e.color0[1], e.color1[1], u), lerp(e.color0[2], e.color1[2], u)];
