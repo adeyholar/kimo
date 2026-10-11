@@ -1,4 +1,4 @@
-//! Explicit Kino LGG in ACEScct. Not an application-specific primary-wheel match.
+//! Explicit Kimo LGG in ACEScct. Not an application-specific primary-wheel match.
 use crate::effects::{p,Frame,Params};use std::collections::BTreeMap;
 pub fn map(x:f64,lift:f64,gamma:f64,gain:f64,offset:f64,inverse:bool)->f64{if inverse{let a=(x-offset)/gain;(a.abs().powf(gamma).copysign(a)-lift)/(1.-lift)}else{let a=x+lift*(1.-x);a.abs().powf(1./gamma).copysign(a)*gain+offset}}
 pub fn apply(pr:&Params,strings:&BTreeMap<String,String>,f:&mut Frame,t:f64)->Result<(),String>{
@@ -13,4 +13,4 @@ pub fn apply(pr:&Params,strings:&BTreeMap<String,String>,f:&mut Frame,t:f64)->Re
  for(i,px)in out.d.chunks_exact_mut(4).enumerate(){if i%65536==0{crate::guard::check()}for j in 0..3{let v=map(px[j] as f64,lift[j],gamma[j],gain[j],offset[j],inv==1.);if !v.is_finite()||v.abs()>f32::MAX as f64{return Err("ACEScctgrade overflow".into())}px[j]=v as f32;}}
  dec.apply(&mut out)?;f.d=out.d;Ok(())}
 }
-pub fn catalog()->Vec<super::Entry>{vec![("acescct_primaries","NativeOCIOAP1->ACEScct, explicitKino signedLGG+offset, backAP1. RequiresboundAP1project/configspaces. NOT Resolve wheel parity.",&[("gamut",3.,"AP1only"),("lift_r",0.,"-1..1exclusive"),("lift_g",0.,""),("lift_b",0.,""),("gamma_r",1.,"0.1..10"),("gamma_g",1.,""),("gamma_b",1.,""),("gain_r",1.,"0.01..10"),("gain_g",1.,""),("gain_b",1.,""),("offset_r",0.,"+-1"),("offset_g",0.,""),("offset_b",0.,""),("inverse",0.,"0/1")])]}
+pub fn catalog()->Vec<super::Entry>{vec![("acescct_primaries","NativeOCIOAP1->ACEScct, explicitKimo signedLGG+offset, backAP1. RequiresboundAP1project/configspaces. NOT Resolve wheel parity.",&[("gamut",3.,"AP1only"),("lift_r",0.,"-1..1exclusive"),("lift_g",0.,""),("lift_b",0.,""),("gamma_r",1.,"0.1..10"),("gamma_g",1.,""),("gamma_b",1.,""),("gain_r",1.,"0.01..10"),("gain_g",1.,""),("gain_b",1.,""),("offset_r",0.,"+-1"),("offset_g",0.,""),("offset_b",0.,""),("inverse",0.,"0/1")])]}

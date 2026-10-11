@@ -1,4 +1,4 @@
-use kino_core::{color::scopes,effects::Frame};
+use kimo_core::{color::scopes,effects::Frame};
 #[test]fn seeded_scope_accounting_all_counted_pixels(){
     let mut seed=1234567u32;let mut d=Vec::new();let mut expected=0u64;
     for i in 0..1024{let mut px=[0f32;4];for v in &mut px[..3]{seed=seed.wrapping_mul(1664525).wrapping_add(1013904223);*v=(seed%10000) as f32/1000.-2.;}px[3]=if i%7==0{0.}else{0.5};if px[3]>0.{expected+=1}d.extend(px);}

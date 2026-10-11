@@ -1,4 +1,4 @@
-use kino_core::effects::{box_blur3, Frame};
+use kimo_core::effects::{box_blur3, Frame};
 use std::time::Instant;
 // reference = the pre-optimisation implementation, kept verbatim for bit-exactness checks
 fn ref_axis(f: &mut Frame, r: usize, horiz: bool) {
@@ -21,12 +21,12 @@ fn main() {
     for r in [4usize, 24, 80] {
         let base = mk(w, h);
         let mut a = base.clone_f(); let t = Instant::now(); ref_blur(&mut a, r); let t_ref = t.elapsed().as_secs_f64();
-        kino_core::par::set_threads(1);
+        kimo_core::par::set_threads(1);
         let mut b = base.clone_f(); let t = Instant::now(); box_blur3(&mut b, r); let t1 = t.elapsed().as_secs_f64();
-        kino_core::par::set_threads(0);
+        kimo_core::par::set_threads(0);
         let mut c = base.clone_f(); let t = Instant::now(); box_blur3(&mut c, r); let tn = t.elapsed().as_secs_f64();
         let same = a.d.iter().zip(&b.d).all(|(x, y)| x.to_bits() == y.to_bits()) && a.d.iter().zip(&c.d).all(|(x, y)| x.to_bits() == y.to_bits());
-        println!("box_blur3 1080p r={r}: old {t_ref:.3}s  new 1thr {t1:.3}s ({:.1}x)  new {}thr {tn:.3}s ({:.1}x)  bit-identical={same}", t_ref/t1, kino_core::par::threads(), t_ref/tn);
+        println!("box_blur3 1080p r={r}: old {t_ref:.3}s  new 1thr {t1:.3}s ({:.1}x)  new {}thr {tn:.3}s ({:.1}x)  bit-identical={same}", t_ref/t1, kimo_core::par::threads(), t_ref/tn);
     }
 }
 trait CF { fn clone_f(&self) -> Frame; }

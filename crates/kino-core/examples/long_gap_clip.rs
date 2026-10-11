@@ -1,5 +1,5 @@
 //! End-to-end command/decode proof: long_gap_clip video-path [end-frame]
-use kino_core::commands::{dispatch, Session};
+use kimo_core::commands::{dispatch, Session};
 use serde_json::json;
 fn main() {
     let a: Vec<_> = std::env::args().collect();

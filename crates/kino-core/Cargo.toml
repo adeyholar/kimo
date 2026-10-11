@@ -1,5 +1,5 @@
 [package]
-name = "kino-core"
+name = "kimo-core"
 version.workspace = true
 edition.workspace = true
 

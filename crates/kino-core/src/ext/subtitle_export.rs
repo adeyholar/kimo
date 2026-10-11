@@ -15,7 +15,7 @@ fn scratch(parent: &Path) -> Result<Scratch, String> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     for _ in 0..100 {
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = parent.join(format!(".kino-subs-{}-{id}", std::process::id()));
+        let path = parent.join(format!(".kimo-subs-{}-{id}", std::process::id()));
         match std::fs::create_dir(&path) {
             Ok(()) => return Ok(Scratch(path)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -201,7 +201,7 @@ mod integration_tests {
     }
     #[test]
     fn selectable_stream_range_and_atomic_failure() {
-        let root = std::env::temp_dir().join(format!("kino-soft-proof-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("kimo-soft-proof-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let mut s = Session::new();
         call(
@@ -280,7 +280,7 @@ mod integration_tests {
             .unwrap()
             .file_name()
             .to_string_lossy()
-            .starts_with(".kino-subs")));
+            .starts_with(".kimo-subs")));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

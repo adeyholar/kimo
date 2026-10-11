@@ -1,4 +1,4 @@
-use kino_core::{color::output_audit,effects::Frame,model::Project,guard};
+use kimo_core::{color::output_audit,effects::Frame,model::Project,guard};
 use std::sync::atomic::Ordering::Relaxed;
 #[test]fn audit_overlay_preflight_all_frame_copies(){
     let mut p=Project::default();p.color_pipeline.enabled=true;p.color_pipeline.working_gamut=0;

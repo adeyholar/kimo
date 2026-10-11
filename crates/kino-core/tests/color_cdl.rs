@@ -1,4 +1,4 @@
-use kino_core::{color::cdl::apply,effects::{Frame,Params},keyframe::Prop};
+use kimo_core::{color::cdl::apply,effects::{Frame,Params},keyframe::Prop};
 #[test]fn sop_known_answer(){let mut p=Params::new();for (k,v) in [("slope_r",2.),("offset_r",0.1),("power_r",2.),("saturation",1.)]{p.insert(k.into(),Prop::new(v));}let mut f=Frame{w:1,h:1,d:vec![0.2,0.3,0.4,0.6]};apply(&p,&mut f,0.).unwrap();assert!((f.d[0]-0.25).abs()<1e-6);assert_eq!(f.d[3],0.6)}
 #[test]fn hostile_sop(){for(k,v)in [("power_r",0.),("slope_r",-1.),("saturation",-1.),("power_b",f64::NAN)]{let mut p=Params::new();p.insert(k.into(),Prop::new(v));let mut f=Frame{w:1,h:1,d:vec![0.5;4]};assert!(apply(&p,&mut f,0.).is_err())}}
 

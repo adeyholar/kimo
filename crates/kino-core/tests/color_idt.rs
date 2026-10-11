@@ -1,5 +1,5 @@
-use kino_core::color::idt::*;
-use kino_core::{color::managed::mv, effects::{Frame, Params}, keyframe::Prop};
+use kimo_core::color::idt::*;
+use kimo_core::{color::managed::mv, effects::{Frame, Params}, keyframe::Prop};
 fn rng(s: &mut u64) -> f64 { *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); ((*s >> 33) as f64) / (1u64 << 31) as f64 }
 const M: [[f64; 3]; 3] = [[1.1, 0.05, -0.02], [-0.03, 0.95, 0.08], [0.01, -0.06, 1.2]];
 fn chart(g: [f64; 3]) -> Vec<([f64; 3], [f64; 3])> { let mut s = 7u64; (0..24).map(|_| { let m = [0.02 + 0.9 * rng(&mut s), 0.02 + 0.9 * rng(&mut s), 0.02 + 0.9 * rng(&mut s)]; let x = [m[0].powf(g[0]), m[1].powf(g[1]), m[2].powf(g[2])]; (m, mv(M, x)) }).collect() }
@@ -13,7 +13,7 @@ fn chart(g: [f64; 3]) -> Vec<([f64; 3], [f64; 3])> { let mut s = 7u64; (0..24).m
 #[test] fn fit_hostile() { assert!(fit(&[], false).is_err()); let mut c = chart([1.; 3]); assert!(fit(&c[..5], false).is_err()); c[0].0[1] = f64::NAN; assert!(fit(&c, false).is_err());
     let flat: Vec<_> = (0..10).map(|_| ([0.5; 3], [0.5; 3])).collect(); assert!(fit(&flat, false).is_err()); let z: Vec<_> = (0..10).map(|_| ([0.; 3], [0.; 3])).collect(); assert!(fit(&z, true).is_err()); }
 #[test] fn profile_roundtrip_and_hostile() { let f = fit(&chart([1.; 3]), false).unwrap(); let r = from_text(&to_text(&f.profile)).unwrap(); assert_eq!(r, f.profile); assert_eq!(from_text("  ").unwrap(), Profile::default());
-    for bad in ["x 1", "kino-idt-v1 1 1 1", "kino-idt-v1 0 1 1 1 0 0 0 1 0 0 0 1", "kino-idt-v1 1 1 1 1 0 0 0 1 0 0 0 NaN", "kino-idt-v1 1 1 1 1e300 0 0 0 1 0 0 0 1"] { assert!(from_text(bad).is_err(), "{bad}") } }
+    for bad in ["x 1", "kimo-idt-v1 1 1 1", "kimo-idt-v1 0 1 1 1 0 0 0 1 0 0 0 1", "kimo-idt-v1 1 1 1 1 0 0 0 1 0 0 0 NaN", "kimo-idt-v1 1 1 1 1e300 0 0 0 1 0 0 0 1"] { assert!(from_text(bad).is_err(), "{bad}") } }
 fn frame() -> Frame { Frame { w: 2, h: 1, d: vec![0.2, 0.4, 0.6, 1., 0.1, 0.9, 0.3, 0.5] } }
 #[test] fn identity_cases() { let mut f = frame(); let b = f.d.clone(); apply(&Params::new(), &mut f, 0.).unwrap(); assert_eq!(f.d, b);
     let pr = Profile { matrix: M, gamma: [1.2; 3] }; apply_profile(&pr, &mut f, 0.).unwrap(); assert_eq!(f.d, b); }

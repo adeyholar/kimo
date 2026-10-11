@@ -138,7 +138,7 @@ fn rot_from(w: V3) -> [V3; 3] { let ang = v_norm(w); if ang < 1e-12 { return [[1
 fn rot_apply(r: &[V3; 3], v: V3) -> V3 { v_add(v_add(v_mul(r[0], v[0]), v_mul(r[1], v[1])), v_mul(r[2], v[2])) }
 /// Predict the next quad from the last accepted quads by constant-velocity extrapolation in plane-pose space (rotation vector + translation), which stays physically consistent as the plane goes edge-on or leaves the frame.
 pub fn pose_predict(hist: &[Quad], w: usize, h: usize) -> Option<Quad> {
-    if hist.len() < 3 { return None; } let (f, cx, cy) = (std::env::var("KINO_F").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.9) * w as f64, w as f64 / 2.0, h as f64 / 2.0); let n = hist.len().min(5); let ps: Vec<Pose> = hist[hist.len() - n..].iter().filter_map(|q| pose_from_quad(q, f, cx, cy)).collect(); if ps.len() < 3 { return None; }
+    if hist.len() < 3 { return None; } let (f, cx, cy) = (std::env::var("KIMO_F").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.9) * w as f64, w as f64 / 2.0, h as f64 / 2.0); let n = hist.len().min(5); let ps: Vec<Pose> = hist[hist.len() - n..].iter().filter_map(|q| pose_from_quad(q, f, cx, cy)).collect(); if ps.len() < 3 { return None; }
     let mut wv = [0f64; 3]; let mut tv = [0f64; 3]; let m = ps.len() - 1; for i in 1..ps.len() { let dr = mat_mul_t(&ps[i].r, &ps[i - 1].r); let ww = rot_axis(&dr); wv = v_add(wv, ww); tv = v_add(tv, v_sub(ps[i].t, ps[i - 1].t)); }
     let (wv, tv) = (v_mul(wv, 1.0 / m as f64), v_mul(tv, 1.0 / m as f64)); let last = &ps[ps.len() - 1]; let rn = { let d = rot_from(wv); let mut o = [[0f64; 3]; 3]; for j in 0..3 { o[j] = rot_apply(&d, last.r[j]); } o }; let tn = v_add(last.t, tv);
     let mut q = [[0f64; 2]; 4]; for (k, (u, v)) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].iter().enumerate() { let pt = v_add(v_add(v_mul(rn[0], last.a * u), v_mul(rn[1], last.b * v)), tn); if pt[2] < 0.02 { return None; } q[k] = [f * pt[0] / pt[2] + cx, f * pt[1] / pt[2] + cy]; if !q[k][0].is_finite() || !q[k][1].is_finite() || q[k][0].abs() > 1e5 || q[k][1].abs() > 1e5 { return None; } }
@@ -247,7 +247,7 @@ pub fn track_mesh(p: &Project, clip_id: &str, q0: Quad, nx: usize, ny: usize, f0
     let mut prev = v0.clone(); let mut prev2 = v0.clone();
     for (fi, qt) in g.quads.iter().enumerate() { let cur_img: Img = if fi == 0 { ref_img.clone() } else { (crate::tracking::clip_gray_pub(p, &mut cache, &c, f0 + fi)?, w, h) };
         let cp = pyr(&cur_img);
-        let rel = if fi == 0 || std::env::var("KINO_REL").is_err() { [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0] } else { solve_h(&g.quads[fi - 1], qt).unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]) };
+        let rel = if fi == 0 || std::env::var("KIMO_REL").is_err() { [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0] } else { solve_h(&g.quads[fi - 1], qt).unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]) };
         let base: Vec<(f64, f64)> = prev.iter().zip(prev2.iter()).map(|(v, v2)| { let a = ap(&rel, v.0, v.1); (a.0 + (v.0 - v2.0) * 0.85, a.1 + (v.1 - v2.1) * 0.85) }).collect(); let mut d = vec![(0f64, 0f64); nx * ny]; let mut cf = vec![0f64; nx * ny];
         if fi > 0 { for k in 0..nx * ny { let (vx, vy) = v0[k]; let (bx, by) = base[k]; let (i, j) = (k % nx, k / nx);
             let (il, ir, jl, jr) = (i.saturating_sub(1), (i + 1).min(nx - 1), j.saturating_sub(1), (j + 1).min(ny - 1));

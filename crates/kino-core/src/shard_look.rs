@@ -24,7 +24,7 @@ fn unit(v: [f64; 3], fallback: [f64; 3]) -> [f64; 3] {
     if !m.is_finite() || m < 1e-12 { fallback } else { v.map(|x| x/m) }
 }
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 { a[0]*b[0]+a[1]*b[1]+a[2]*b[2] }
-/// World-space sky/ground with a wide studio softbox. +y is down in Kino.
+/// World-space sky/ground with a wide studio softbox. +y is down in Kimo.
 /// No textures, random state, IO or time dependence; evaluate once per facet.
 pub fn environment(normal: [f64; 3], to_eye: [f64; 3], roughness: f64, linear: bool) -> ([f64; 3], f64) {
     let n = unit(normal, [0.0, 0.0, -1.0]); let v = unit(to_eye, [0.0, 0.0, -1.0]);

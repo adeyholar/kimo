@@ -339,8 +339,8 @@ pub fn solve(tracks: &[Track], nframes: usize, w: f64, h: f64, o: &SolveOpts) ->
     Ok(Solution { mode: "full", k1k2: [k.k1, k.k2], poses, intr: k, points, point_track: ids_sorted, rms: if cnt > 0 { (tot / cnt as f64).sqrt() } else { f64::NAN }, frame_rms, registered, notes })
 }
 
-/// Convert a solved pose to Kino camera props (cam_x,cam_y,cam_z px, pan,tilt,roll deg). Kino: C = pos - (0,0,f), so with world_kino = solver*scale + (0,0,-f) the solved camera centre maps to pos = C*scale and frame 0 sits at the default camera; R_c2w = Ry(pan) Rx(tilt) Rz(roll).
-pub fn to_kino(p: &Pose, f: f64, scale_px: f64, h: f64) -> ([f64; 3], [f64; 3], f64) {
+/// Convert a solved pose to Kimo camera props (cam_x,cam_y,cam_z px, pan,tilt,roll deg). Kimo: C = pos - (0,0,f), so with world_kimo = solver*scale + (0,0,-f) the solved camera centre maps to pos = C*scale and frame 0 sits at the default camera; R_c2w = Ry(pan) Rx(tilt) Rz(roll).
+pub fn to_kimo(p: &Pose, f: f64, scale_px: f64, h: f64) -> ([f64; 3], [f64; 3], f64) {
     let rc = tp(&p.r); let c = p.center(); let tilt = -rc[1][2].clamp(-1.0, 1.0).asin(); let roll = rc[1][0].atan2(rc[1][1]); let pan = rc[0][2].atan2(rc[2][2]);
     ([c[0] * scale_px, c[1] * scale_px, c[2] * scale_px], [pan.to_degrees(), tilt.to_degrees(), roll.to_degrees()], 2.0 * (h / 2.0 / f).atan().to_degrees())
 }

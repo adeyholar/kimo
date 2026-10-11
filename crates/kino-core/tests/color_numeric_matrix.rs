@@ -1,4 +1,4 @@
-use kino_core::color::managed::{decode,encode,conversion,mv};
+use kimo_core::color::managed::{decode,encode,conversion,mv};
 #[test]fn seeded_signed_hdr_gamut_transfer_roundtrip(){
     let mut seed=0x4d595df4u64;let mut samples=0;
     for from in 0..8{for to in 0..8{for _ in 0..64{

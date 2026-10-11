@@ -853,7 +853,7 @@ mod tests {
         call(s,"add_clip",json!({"track_id":t,"source_type":"media","asset_id":a,"start":start,"duration":duration}))["clip_id"].as_str().unwrap().into()
     }
     fn fixture(name: &str, src: &str) -> String {
-        let p = format!("/tmp/kino-gap4-{}-{name}.wav", std::process::id());
+        let p = format!("/tmp/kimo-gap4-{}-{name}.wav", std::process::id());
         assert!(std::process::Command::new("ffmpeg")
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", src, "-ac", "2", &p])
             .status()
@@ -866,7 +866,7 @@ mod tests {
         let mut s = Session::new();
         let t = track(&mut s);
         let path = format!("/tmp/gap4-caption-{}.srt", std::process::id());
-        std::fs::write(&path,"1\n00:00:00,000 --> 00:00:01,500\nHello Kino\n\n2\n00:00:01,500 --> 00:00:03,000\nSecond line\n").unwrap();
+        std::fs::write(&path,"1\n00:00:00,000 --> 00:00:01,500\nHello Kimo\n\n2\n00:00:01,500 --> 00:00:03,000\nSecond line\n").unwrap();
         let v = call(
             &mut s,
             "add_captions",

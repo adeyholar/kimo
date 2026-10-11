@@ -1,5 +1,5 @@
 //! Fixture runner: raw little-endian f32 RGBA comes from an OUTSIDE-engine oracle.
-use kino_core::{
+use kimo_core::{
     color::pipeline::export_high,
     commands::{dispatch, Session},
 };

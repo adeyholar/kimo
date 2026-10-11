@@ -1,5 +1,5 @@
 //! Proof through the exact Rust implementation: W H DIR, RGBA and matte f32 LE.
-pub use kino_core::{color, effects, guard};
+pub use kimo_core::{color, effects, guard};
 #[path = "../src/color/subject_match.rs"]
 mod subject_match;
 use effects::Frame;
