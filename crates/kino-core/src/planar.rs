@@ -149,14 +149,17 @@ pub struct Track { pub quads: Vec<Quad>, pub conf: Vec<f64>, pub gain: Vec<f64>,
 /// Track the quad `q0` (pixel coords) through frames `[f0, f1]` of a media clip.
 pub fn track(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels: usize) -> Result<Track, String> { track_opts(p, clip_id, q0, f0, f1, levels, false) }
 /// `reanchor`: segment mode. When the frame-to-frame fit is confident but the original anchor no longer matches (lighting or appearance change), the anchor is refreshed from the current frame so the track restarts a new drift-free segment instead of dropping.
-pub fn track_opts(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels: usize, reanchor: bool) -> Result<Track, String> {
+pub fn track_opts(p: &Project, clip_id: &str, q0: Quad, f0: usize, f1: usize, levels: usize, reanchor: bool) -> Result<Track, String> { let frames: Vec<usize> = (f0..=f1).collect(); track_frames(p, clip_id, q0, &frames, levels, reanchor) }
+/// Same tracker over an explicit frame order (frames[0] is the anchor frame where `q0` is given); descending order tracks backward in time.
+pub fn track_frames(p: &Project, clip_id: &str, q0: Quad, frames: &[usize], levels: usize, reanchor: bool) -> Result<Track, String> {
+    if frames.is_empty() { return Err("no frames".into()); } let f0 = frames[0];
     let c = p.find_clip(clip_id).ok_or("no such clip")?.clone(); let mut cache = crate::render::Cache::new(); let (w, h) = (p.width as usize, p.height as usize);
     let levels = levels.clamp(2, 5); let iters = [6usize, 8, 10, 12, 12];
     let get = |cache: &mut crate::render::Cache, i: usize| -> Result<Vec<Img>, String> { let g = crate::tracking::clip_gray_pub(p, cache, &c, i)?; Ok(pyramid(g, w, h, levels)) };
     let p0 = get(&mut cache, f0)?; let mut anchor = make_tmpl(&p0, &q0);
     let mut out = Track { quads: vec![q0], conf: vec![1.0], gain: vec![1.0], lost: vec![false] };
     let mut prev_pyr = p0; let (mut q, mut vel) = (q0, [[0f64; 2]; 4]); let mut lost = false; let mut prevq: Option<Quad> = None; let mut hist: Vec<f64> = vec![]; let mut qh: Vec<Quad> = vec![q0];
-    for i in f0 + 1..=f1 {
+    for &i in &frames[1..] {
         let cur = get(&mut cache, i)?; let mut pred = q; for k in 0..4 { pred[k][0] += vel[k][0]; pred[k][1] += vel[k][1]; }
         if let (Some(pq), false) = (prevq, lost) { if let Some(g) = solve_h(&pq, &q) { let mut hp = q; let mut okh = true; for k in 0..4 { let (x, y) = ap(&g, q[k][0], q[k][1]); if !x.is_finite() || !y.is_finite() || (x - q[k][0]).abs() > 400.0 || (y - q[k][1]).abs() > 400.0 { okh = false; } hp[k] = [x, y]; } if okh { pred = hp; } } }
         let pose_pred = pose_predict(&qh, w, h).filter(|pp| { let szp = (q[1][0] - q[0][0]).hypot(q[1][1] - q[0][1]).max((q[3][0] - q[0][0]).hypot(q[3][1] - q[0][1])).max(40.0); (0..4).all(|k| (pp[k][0] - pred[k][0]).hypot(pp[k][1] - pred[k][1]) < 1.5 * szp) });
