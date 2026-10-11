@@ -15,6 +15,7 @@ pub mod linear;
 pub mod pipeline;
 pub mod wrapper;
 pub mod metadata;
+pub mod hdr_validation;
 pub mod delivery;
 pub(crate) mod process;
 pub(crate) mod mux;

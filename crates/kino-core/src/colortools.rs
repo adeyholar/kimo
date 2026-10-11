@@ -70,7 +70,7 @@ pub fn scope_png(f: &Frame, kind: &str, path: &str) -> Result<(), String> {
         for j in 0..3 { out[o + j] = (c[j].clamp(0.0, 1.0) * 255.0) as u8; } out[o + 3] = 255; } }
     encode_still_bytes(&mut scope_encoder_command(ow,oh,path),out,out_bytes,crate::color::process::encode_deadline(1)) }
 
-pub fn commands() -> Vec<Command> { vec![
+pub fn commands() -> Vec<Command> { let mut commands = vec![
     Command{name:"inspect_color_frame_metadata",description:"Explicit first-video-packet decode for frame-level static HDR SEI/side data. Some codecs yield noframe; no wholefile certification or measuredmetadata inference.",mutates:false,schema:obj(vec![("path",s("local video file"))],&["path"]),run:|_,a|crate::color::delivery::first_frame_metadata(sa(a,"path")?)},
     Command{name:"inspect_color_delivery",description:"Header-only local media inspection: codec/pixelformat, declared color tags/staticmetadata, audio and missingtagfields. No pixeldecode/calibration/inference or project mutation.",mutates:false,schema:obj(vec![("path",s("local exported video file"))],&["path"]),run:|_,a|crate::color::delivery::inspect(sa(a,"path")?)},
     Command{name:"inspect_color_pipeline",description:"Inspect current declared color domains, bound/wrapped effects and honest output/reference limitations. No media render, dependency probe or automatic transform selection.",mutates:false,schema:obj(vec![],&[]),run:|ss,_|crate::color::pipeline::inspect(&ss.project)},
@@ -174,7 +174,7 @@ pub fn commands() -> Vec<Command> { vec![
         run: |ss, a| {if ss.project.color_pipeline.enabled{return Err("legacy color match requires display-referred project".into())}let strength=on(a,"strength",1.);if !strength.is_finite()||!(0. ..=1.).contains(&strength){return Err("strength0..1 required".into())}let (id, rid) = (sa(a, "clip_id")?, sa(a, "ref_clip_id")?); let fs = clip_frame(&ss.project, id, na(a, "time")?)?; let fr = clip_frame(&ss.project, rid, na(a, "ref_time")?)?; let (sm, sd) = stats(&fs, None)?; let (tm, td) = stats(&fr, None)?;
             let v: Vec<(&str, f64)> = vec![("sr_mean", sm[0] as f64), ("sg_mean", sm[1] as f64), ("sb_mean", sm[2] as f64), ("sr_std", sd[0] as f64), ("sg_std", sd[1] as f64), ("sb_std", sd[2] as f64), ("tr_mean", tm[0] as f64), ("tg_mean", tm[1] as f64), ("tb_mean", tm[2] as f64), ("tr_std", td[0] as f64), ("tg_std", td[1] as f64), ("tb_std", td[2] as f64), ("strength", strength)];
             let fx = add_fx(&mut ss.project, id, "color_transfer", &v)?; Ok(json!({"effect_id": fx, "src_mean": sm, "ref_mean": tm})) } },
-] }
+]; commands.extend(crate::color::hdr_validation::commands()); commands }
 
 #[cfg(test)] mod color_sampling_tests {
     use super::*;
