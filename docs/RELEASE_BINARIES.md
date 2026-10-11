@@ -5,6 +5,14 @@ Assets per tag `vX.Y.Z` (or manual run of the `release` workflow):
 - `kimo-<tag>-linux-x86_64-static.tar.gz` - primary. Static musl, runs on any x86_64 Linux.
 - `kimo-<tag>-linux-x86_64-glibc.tar.gz` - dynamic glibc (built on Ubuntu 22.04, needs glibc >= 2.35). Optional.
 - `.sha256` next to each.
+- `kimo-<version>-windows-x86_64-setup.exe` - per-user Windows x64 installer with uninstall support.
+- `kimo-<version>-windows-x86_64.zip` - portable Windows x64 package.
+
+Windows packages use the Cargo version and include `bin/kimo-mcp.exe`, bundled
+fonts with OFL licenses, and a setup guide. FFmpeg/FFprobe are installed
+separately, as on Linux. See [Windows setup](../packaging/windows/WINDOWS.md).
+Installers are unsigned. Manual workflow runs produce both Windows files and
+SHA-256 checksums; tag releases publish them alongside Linux packages.
 
 Layout: `bin/kimo-mcp`, `fonts/*.ttf` (+ `fetch.sh`), docs. Keep `fonts/` next to `bin/`;
 Kimo finds it from the executable path (also `KIMO_FONTS=<dir>`, `./fonts`, `~/kimo/fonts`, `/usr/share/fonts`).

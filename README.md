@@ -34,6 +34,15 @@ The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve
 
 **Download a binary (Linux x86_64, static, no dependencies except ffmpeg):**
 
+Windows x64 also ships a per-user setup installer and portable ZIP, with the
+same MCP server and bundled fonts. Download Windows assets from
+[GitHub Releases](https://github.com/naman-sharma12345/kimo/releases), or from
+a manual `release` workflow run's artifacts. See the
+[Windows setup guide](packaging/windows/WINDOWS.md) for FFmpeg installation
+and MCP configuration. To build locally, run
+`powershell -ExecutionPolicy Bypass -File packaging/windows/build.ps1`
+with Rust, Python 3, and Inno Setup 6 installed.
+
 ```
 curl -LO https://github.com/naman-sharma12345/kimo/releases/download/v1.0.0/kimo-v1.0.0-linux-x86_64.tar.gz
 tar xzf kimo-v1.0.0-linux-x86_64.tar.gz

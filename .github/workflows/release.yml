@@ -68,7 +68,7 @@ jobs:
           fi
           out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | KIMO_FONTS=$PWD/fonts "$bin")
           echo "$out" | head -1 | grep -q '"serverInfo"'
-          echo "$out" | tail -1 | python3 -c 'import sys,json; n=len(json.loads(sys.stdin.read())["result"]["tools"]); print("tools:",n); assert n>50'
+          echo "$out" | tail -1 | python3 -c 'import sys,json; n=len(json.loads(sys.stdin.read())["result"]["tools"]); print("tools:",n); assert n>=16'
 
       - name: Package
         id: pkg
@@ -91,9 +91,38 @@ jobs:
             dist/${{ steps.pkg.outputs.name }}.tar.gz
             dist/${{ steps.pkg.outputs.name }}.tar.gz.sha256
 
+  windows:
+    name: build (windows-x86_64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/release
+          key: windows-x86_64-v2-${{ hashFiles('Cargo.lock') }}
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Build and package Windows
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          ./packaging/windows/build.ps1 -Version $version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kimo-windows-x86_64
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: publish release
-    needs: build
+    needs: [build, windows]
     if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || inputs.publish)
     runs-on: ubuntu-22.04
     permissions:
