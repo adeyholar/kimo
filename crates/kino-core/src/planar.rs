@@ -293,7 +293,7 @@ fn build_seq(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f64) -> Op
     let (w, h) = (sp.w, sp.h); let n = ((c.duration * fps).ceil() as usize).clamp(1, 4000); let t_of = |i: usize| sp.src_start + (sp.f0 + i) as f64 / fps - c.start;
     let q0 = pin_quad(c, t_of(0).max(0.0))?; let len = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
     let (lw, lh) = ((len(q0[0], q0[1]) + len(q0[3], q0[2])) / 2.0, (len(q0[0], q0[3]) + len(q0[1], q0[2])) / 2.0); let pw = 256usize; let ph = ((pw as f64 * lh / lw.max(1.0)).round() as usize).clamp(48, 512);
-    let mut child = std::process::Command::new("ffmpeg").args(["-v", "error", "-ss", &format!("{:.6}", sp.src_time), "-i", &sp.path, "-vf", &format!("fps={},scale={}:{}", fps / sp.speed.max(0.01), w, h), "-frames:v", &n.to_string(), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
+    let mut child = std::process::Command::new("ffmpeg").args(["-v", "error", "-ss", &format!("{:.6}", sp.src_time), "-i", &sp.path, "-vf", &format!("setpts=PTS/{},fps={},scale={}:{}", sp.speed.max(0.01), fps, w, h), "-frames:v", &n.to_string(), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
     let mut out = child.stdout.take()?; let mut buf = vec![0u8; w * h * 4]; let mut mats: Vec<Vec<u8>> = vec![]; let mut model: Vec<f32> = vec![]; use std::io::Read;
     let (lo, hi) = (0.07 / sp.soft.max(0.2), 0.16 / sp.soft.max(0.2));
     for i in 0..n { if out.read_exact(&mut buf).is_err() { break; } crate::guard::check();
