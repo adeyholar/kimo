@@ -1,4 +1,4 @@
-use kino_core::{effects::Frame, shards::{self, ShardBurst}, three_d::Camera};
+use kimo_core::{effects::Frame, shards::{self, ShardBurst}, three_d::Camera};
 use serde_json::{json, Value};
 fn cfg(extra: Value) -> ShardBurst {
     let mut c = json!({"count":180,"size_min":3,"size_max":38,"origin_spread":140,"speed":240,"gravity":45,"spin":220,"dof":0,"shutter_deg":0,"seed":21,"brightness":1.0,"tint":[0.82,0.90,1.0],"thickness":[0.02,0.05]});

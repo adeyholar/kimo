@@ -275,7 +275,7 @@ mod truepeak_tests {
     }
     #[test]
     fn compare_ffmpeg_ebur128() {
-        let path = std::env::temp_dir().join(format!("kino-truepeak-{}.wav", std::process::id()));
+        let path = std::env::temp_dir().join(format!("kimo-truepeak-{}.wav", std::process::id()));
         for hz in [997., 12000., 17000.] {
             let pcm: Vec<f32> = (0..48000)
                 .flat_map(|i| {

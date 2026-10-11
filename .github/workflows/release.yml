@@ -49,7 +49,7 @@ jobs:
           key: ${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
 
       - name: Build (default features, no OCIO)
-        run: cargo build --release --locked -p kino-mcp --target ${{ matrix.target }}
+        run: cargo build --release --locked -p kimo-mcp --target ${{ matrix.target }}
 
       - name: Fetch bundled fonts (SIL OFL)
         run: |
@@ -62,11 +62,11 @@ jobs:
 
       - name: Smoke test the built binary
         run: |
-          bin=target/${{ matrix.target }}/release/kino-mcp
+          bin=target/${{ matrix.target }}/release/kimo-mcp
           if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ]; then
             file "$bin" | grep -q 'statically linked'
           fi
-          out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | KINO_FONTS=$PWD/fonts "$bin")
+          out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | KIMO_FONTS=$PWD/fonts "$bin")
           echo "$out" | head -1 | grep -q '"serverInfo"'
           echo "$out" | tail -1 | python3 -c 'import sys,json; n=len(json.loads(sys.stdin.read())["result"]["tools"]); print("tools:",n); assert n>50'
 
@@ -74,10 +74,10 @@ jobs:
         id: pkg
         run: |
           ver="${GITHUB_REF_NAME//\//-}"
-          name="kino-${ver}-${{ matrix.suffix }}"
+          name="kimo-${ver}-${{ matrix.suffix }}"
           mkdir -p "dist/$name/bin" "dist/$name/fonts"
-          install -m755 target/${{ matrix.target }}/release/kino-mcp "dist/$name/bin/kino-mcp"
-          strip "dist/$name/bin/kino-mcp" || true
+          install -m755 target/${{ matrix.target }}/release/kimo-mcp "dist/$name/bin/kimo-mcp"
+          strip "dist/$name/bin/kimo-mcp" || true
           cp fonts/*.ttf fonts/fetch.sh "dist/$name/fonts/"
           cp README.md FEATURES.md "dist/$name/" 
           cp docs/RELEASE_BINARIES.md "dist/$name/"

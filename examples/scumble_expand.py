@@ -1,8 +1,8 @@
 # SCUMBLE 7.6-8.8 s: doner box expands at constant speed to full frame, 2-frame white flash, hard cut to the zoomed-out scene
 # where boxes are filled with image crops via animated masks.
-import sys; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); k.call("project_set",width=1280,height=720,fps=25)
+import sys; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); k.call("project_set",width=1280,height=720,fps=25)
 def trk(): return k.call("add_track")["track_id"]
 D=1.3
 A=k.call("import_media",path="/tmp/ref/pA.png")["asset_id"]

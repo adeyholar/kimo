@@ -2,7 +2,7 @@
 import sys
 """Synthetic engine proof, measured exports + real-id hostile color tools. Run at repo root."""
 import json,subprocess,time,select,pathlib
-p=subprocess.Popen(['target/release/kino-mcp'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=open('/tmp/color-engine-stderr.log','w'),text=True);seq=0
+p=subprocess.Popen(['target/release/kimo-mcp'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=open('/tmp/color-engine-stderr.log','w'),text=True);seq=0
 out=pathlib.Path('/downloads');out.mkdir(exist_ok=True)
 def rpc(name,**args):
  global seq

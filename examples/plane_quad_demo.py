@@ -1,5 +1,5 @@
 # plane_fracture on a perspective quad with a carried texture: the intact key plate shatters from its own pose. Writes /tmp/pq_sheet.png
-import sys,time,numpy as np;sys.path.insert(0,'/home/sandbox/kino/examples');from mcp_client import Kino
+import sys,time,numpy as np;sys.path.insert(0,'/home/sandbox/kimo/examples');from mcp_client import Kimo
 from PIL import Image
 TEX=sys.argv[1];Q=[[253,299],[749,140],[1061,458],[521,620]]
 tex=Image.open(TEX).convert('RGB').resize((640,440))
@@ -10,7 +10,7 @@ for (x,y),(X,Y) in zip(dst,src):
 c=np.linalg.solve(np.array(A),np.array(B))
 plate=tex.transform((1280,720),Image.PERSPECTIVE,tuple(c),Image.BICUBIC)
 m=Image.new('L',(640,440),255).transform((1280,720),Image.PERSPECTIVE,tuple(c));bg=Image.new('RGB',(1280,720),(40,30,28));bg.paste(plate,(0,0),m);bg.save('/tmp/pq_bg.png')
-k=Kino();C=k.call;C('project_set',width=1280,height=720,fps=25)
+k=Kimo();C=k.call;C('project_set',width=1280,height=720,fps=25)
 t0=C('add_track')['track_id'];a=C('import_media',path='/tmp/pq_bg.png')['asset_id'];C('add_clip',track_id=t0,source_type='media',asset_id=a,start=0,duration=1.2)
 t=C('add_track')['track_id']
 cfg={'plane':{'quad':Q,'region':[640,440],'impact_uv':[0.62,0.55],'cells':140,'radius':70,'wave_speed':1400,'impulse':900,'lift':1.0,'under_depth':0,'texture':TEX,'occlusion':(sys.argv[2] if len(sys.argv)>2 else None),'opaque':1.0,'hidden_until_birth':False,'max_delay':0.2},'gravity':700,'drag':1.6,'spin':380,'refract':0,'fresnel':0.6,'glass':0.3,'thickness':[.02,.06],'dof':0.4}

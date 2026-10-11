@@ -1,6 +1,6 @@
 """Text animation, mask reveal, LUT and HSL via MCP only."""
-from mcp_client import Kino
-k = Kino(); k.call("project_set", width=960, height=540, fps=30)
+from mcp_client import Kimo
+k = Kimo(); k.call("project_set", width=960, height=540, fps=30)
 a = k.call("import_media", path="/tmp/src_b.mp4")["asset_id"]
 t1, t2 = k.call("add_track")["track_id"], k.call("add_track")["track_id"]
 c = k.call("add_clip", track_id=t1, source_type="media", asset_id=a, start=0, duration=3)["clip_id"]

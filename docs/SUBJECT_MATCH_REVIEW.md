@@ -65,7 +65,7 @@ No schema, registry, render.rs, dependency or default was changed.
 
 ## Proven results
 
-- `cargo test -p kino-core --test subject_match --test color_matching`:
+- `cargo test -p kimo-core --test subject_match --test color_matching`:
   16 new focused tests plus 9 existing Lab tests passed (25/25).
 - New tests cover identity, repeatable output, weighted means/covariance,
   weighted log lighting moments, alpha exclusion/preservation, independent
@@ -92,7 +92,7 @@ No schema, registry, render.rs, dependency or default was changed.
 
 ## Reproduce
 
-`cargo test -p kino-core --test subject_match --test color_matching`
+`cargo test -p kimo-core --test subject_match --test color_matching`
 
 Install Python numpy, Pillow, scikit-image. Then run from repo root:
 `python3 examples/subject_match_proof.py /downloads/subject-match-proof`

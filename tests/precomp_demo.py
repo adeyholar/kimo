@@ -1,6 +1,6 @@
-import sys; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); k.call("project_set",width=1280,height=720,fps=25)
+import sys; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); k.call("project_set",width=1280,height=720,fps=25)
 def trk(): return k.call("add_track")["track_id"]
 t=trk(); k.call("add_clip",track_id=t,source_type="solid",color=[0.1,0.1,0.12],start=0,duration=2)
 ids=[]

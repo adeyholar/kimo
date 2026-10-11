@@ -1,5 +1,5 @@
 //! Direct Rust API bypasses JSON sanitization, so validate each declared control.
-use kino_core::{color,effects::{Frame,Params},keyframe::Prop};
+use kimo_core::{color,effects::{Frame,Params},keyframe::Prop};
 #[test]fn every_declared_managed_control_rejects_nonfinite_before_write(){
     type Effect=fn(&Params,&mut Frame,f64)->Result<(),String>;
     let cases:[(Effect,Vec<color::Entry>);8]=[

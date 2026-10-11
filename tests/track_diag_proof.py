@@ -2,7 +2,7 @@
 grade the tools; the tools themselves never see it). Usage: python3 tests/track_diag_proof.py <dir containing plate.mp4 and gt.json>"""
 import json, subprocess, select, sys, numpy as np
 d = sys.argv[1] if len(sys.argv) > 1 else "."
-p = subprocess.Popen(["target/release/kino-mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True); i = 0
+p = subprocess.Popen(["target/release/kimo-mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True); i = 0
 def rpc(m, params):
     global i; i += 1; p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": m, "params": params}) + "\n"); p.stdin.flush()
     if not select.select([p.stdout], [], [], 110)[0]: raise TimeoutError

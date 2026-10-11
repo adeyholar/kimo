@@ -1,4 +1,4 @@
-use kino_core::{color,effects::{Frame,Params},guard};
+use kimo_core::{color,effects::{Frame,Params},guard};
 use std::sync::atomic::Ordering::Relaxed;
 #[test]fn cancelled_color_calls_do_not_mutate(){
     type Effect=fn(&Params,&mut Frame,f64)->Result<(),String>;

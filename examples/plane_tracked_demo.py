@@ -1,6 +1,6 @@
 # Tracked shattering plate: a moving perspective plate is tracked (track_planar), a plane_fracture layer is pinned to it, and the plate shatters while staying glued.
 # Ground truth: the plate quad is known per frame; reports corner error of the tracker. usage: plane_tracked_demo.py <texture>  -> /tmp/pt_sheet.png, /tmp/pt.mp4
-import sys,time,subprocess,numpy as np;sys.path.insert(0,'/home/sandbox/kino/examples');from mcp_client import Kino
+import sys,time,subprocess,numpy as np;sys.path.insert(0,'/home/sandbox/kimo/examples');from mcp_client import Kimo
 from PIL import Image
 TEX=sys.argv[1];tex=Image.open(TEX).convert('RGB').resize((640,440));W,H,N=1280,720,45
 def quad(i):
@@ -14,7 +14,7 @@ for i in range(N):
     c=coef(quad(i));plate=tex.transform((W,H),Image.PERSPECTIVE,c,Image.BICUBIC);m=Image.new('L',(640,440),255).transform((W,H),Image.PERSPECTIVE,c)
     bg=Image.new('RGB',(W,H),(40,30,28));bg.paste(plate,(0,0),m);bg.save('/tmp/ptf/f%03d.png'%i)
 subprocess.run(['ffmpeg','-v','error','-y','-framerate','30','-i','/tmp/ptf/f%03d.png','-c:v','libx264','-crf','12','-pix_fmt','yuv420p','/tmp/pt_plate.mp4'],check=True)
-k=Kino();C=k.call;C('project_set',width=W,height=H,fps=30)
+k=Kimo();C=k.call;C('project_set',width=W,height=H,fps=30)
 a=C('import_media',path='/tmp/pt_plate.mp4')['asset_id'];t0=C('add_track')['track_id'];plate=C('add_clip',track_id=t0,source_type='media',asset_id=a,start=0,duration=N/30)['clip_id']
 t1=C('add_track')['track_id']
 # shard layer authored over the whole canvas = the plate's own UV space (plane quad = full canvas), so the pin maps it onto the tracked quad

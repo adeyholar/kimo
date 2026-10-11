@@ -21,17 +21,27 @@ pub struct Emitter {
     #[serde(default = "d_c0")] pub color0: [f64; 3], #[serde(default = "d_c1")] pub color1: [f64; 3],
     #[serde(default = "d1")] pub alpha0: f64, #[serde(default)] pub alpha1: f64,
     #[serde(default)] pub fade_in: f64, #[serde(default)] pub trail: u32, #[serde(default = "d_sprite")] pub sprite: String,        // soft | hard | streak | ring | star | spark
-    #[serde(default)] pub prewarm: bool, #[serde(default = "d_seed")] pub seed: u64, #[serde(default)] pub additive: bool,
+    #[serde(default)] pub shutter_deg: f64, #[serde(default)] pub blur_samples: u32, #[serde(default)] pub prewarm: bool, #[serde(default = "d_seed")] pub seed: u64, #[serde(default)] pub additive: bool,
 }
 impl Default for Emitter { fn default() -> Self { serde_json::from_str("{}").unwrap() } }
 
 fn h(seed: u64, i: i64, k: u64) -> f64 { let mut x = seed ^ (i as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ k.wrapping_mul(0xBF58476D1CE4E5B9); x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9); x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 31; (x >> 11) as f64 / (1u64 << 53) as f64 }
 fn lerp(a: f64, b: f64, t: f64) -> f64 { a + (b - a) * t }
 
-pub fn render(e: &Emitter, f: &mut Frame, t: f64) {
-    let (w, hh) = (f.w as f64, f.h as f64); let sc = hh / 1080.0; let rate = e.rate.max(0.01); let lmax = e.life + e.life_var.abs();
+pub fn render(e: &Emitter, f: &mut Frame, t: f64) { render_fps(e, f, t, 25.0) }
+/// Motion blur: when `shutter_deg` > 0 the particle system is integrated at `blur_samples` instants spread over the shutter interval
+/// centred on `t` (shutter_deg/360 of a frame) and the premultiplied accumulation buffers are averaged, which is the temporal integral of what the
+/// camera sees (exact for every sprite, speed and force, cost = samples x one render). Auto samples = fastest-particle travel over the shutter divided by 0.6 of the smallest sprite size, clamped 4..32 (so no visible stepping). 0 degrees = off, pixel-identical to before.
+pub fn render_fps(e: &Emitter, f: &mut Frame, t: f64, fps: f64) {
+    let buf = if e.shutter_deg > 0.0 { let sh = e.shutter_deg.clamp(0.0, 720.0) / 360.0 / fps.max(1.0); let n = if e.blur_samples == 0 { let sc = f.h as f64 / 1080.0; let travel = (e.speed + e.speed_var.abs()) * sc * sh; ((travel / (0.6 * e.size0.min(e.size1).max(1.0) * sc).max(1.0)).ceil() as usize).clamp(4, 32) } else { e.blur_samples.clamp(2, 64) as usize };
+        let mut acc = vec![0f32; f.w * f.h * 4]; for k in 0..n { let tk = t + sh * ((k as f64 + 0.5) / n as f64 - 0.5); let b = accumulate(e, f.w, f.h, tk); for i in 0..acc.len() { acc[i] += b[i]; } } let inv = 1.0 / n as f32; for v in acc.iter_mut() { *v *= inv; } acc }
+        else { accumulate(e, f.w, f.h, t) };
+    composite(e, f, &buf);
+}
+fn accumulate(e: &Emitter, fw: usize, fh: usize, t: f64) -> Vec<f32> {
+    let (w, hh) = (fw as f64, fh as f64); let sc = hh / 1080.0; let rate = e.rate.max(0.01); let lmax = e.life + e.life_var.abs();
     let i_hi = (t * rate).floor() as i64; let i_lo = ((t - lmax) * rate).floor() as i64 + 1; let i_lo = if e.prewarm { i_lo } else { i_lo.max(0) };
-    let mut buf = vec![0f32; f.w * f.h * 4]; // premultiplied accumulation
+    let mut buf = vec![0f32; fw * fh * 4]; // premultiplied accumulation
     for i in i_lo..=i_hi {
         let birth = i as f64 / rate; let life = (e.life + (h(e.seed, i, 9) - 0.5) * 2.0 * e.life_var).max(0.05); let age = t - birth; if age < 0.0 || age > life { continue; }
         // spawn
@@ -54,8 +64,11 @@ pub fn render(e: &Emitter, f: &mut Frame, t: f64) {
         let u = age / life; let size = lerp(e.size0, e.size1, u) * sc * (1.0 + (h(e.seed, i, 5) - 0.5) * 2.0 * e.size_var); let mut alpha = lerp(e.alpha0, e.alpha1, u).clamp(0.0, 1.5); if e.fade_in > 0.0 { let t = (u / e.fade_in).clamp(0.0, 1.0); alpha *= t * t * (3.0 - 2.0 * t); }
         let col = [lerp(e.color0[0], e.color1[0], u), lerp(e.color0[1], e.color1[1], u), lerp(e.color0[2], e.color1[2], u)];
         let mut pts: Vec<(f64, f64, f64)> = hist.iter().rev().enumerate().map(|(k, p)| (p.0, p.1, alpha * (1.0 - (k as f64 + 1.0) / (hist.len() as f64 + 1.0)) * 0.6)).collect(); pts.insert(0, (px, py, alpha));
-        for (k, (x, y, a)) in pts.iter().enumerate() { let s_ = size * (1.0 - 0.5 * k as f64 / pts.len() as f64).max(0.2); stamp(&mut buf, f.w, f.h, *x, *y, s_.max(0.4), *a as f32, col, &e.sprite, vx, vy); }
+        for (k, (x, y, a)) in pts.iter().enumerate() { let s_ = size * (1.0 - 0.5 * k as f64 / pts.len() as f64).max(0.2); stamp(&mut buf, fw, fh, *x, *y, s_.max(0.4), *a as f32, col, &e.sprite, vx, vy); }
     }
+    buf
+}
+fn composite(e: &Emitter, f: &mut Frame, buf: &[f32]) {
     // composite premultiplied buffer over frame
     for i in 0..f.w * f.h { let (r, g, b, a) = (buf[i * 4], buf[i * 4 + 1], buf[i * 4 + 2], buf[i * 4 + 3]); if a <= 0.0 { continue; } let a = a.min(1.0);
         let o = &mut f.d[i * 4..i * 4 + 4]; if e.additive { for (j, c) in [r, g, b].iter().enumerate() { o[j] = (o[j] * o[3] + c).min(4.0); } o[3] = (o[3] + a).min(1.0); let al = o[3].max(1e-6); for j in 0..3 { o[j] /= al; } }

@@ -1,4 +1,4 @@
-# kino
+# kimo
 
 MCP-first, AI-first video editor in Rust. Every operation (cut, transform, keyframe, effect, transition, grade, track, mix, export) is a registered command. The MCP server's tool list is generated from that registry, so a feature cannot exist without being AI-callable. The AI can also render a frame to PNG and read video scopes, so it can look at its own work and iterate.
 
@@ -12,7 +12,7 @@ Needs `ffmpeg` and `ffprobe` on PATH (decode/encode).
 
 ## Use from an MCP client
 ```json
-{ "mcpServers": { "kino": { "command": "/path/to/kino/target/release/kino-mcp" } } }
+{ "mcpServers": { "kimo": { "command": "/path/to/kimo/target/release/kimo-mcp" } } }
 ```
 Call `tools/list` to see everything. Start with `project_set`, `import_media`, `add_track`, `add_clip`, `add_effect`, `render_frame`, `export`.
 

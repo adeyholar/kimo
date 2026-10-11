@@ -50,14 +50,15 @@ pub fn fit(patches: &[([f64; 3], [f64; 3])], fit_curve: bool) -> Result<Fit, Str
     for (m, r) in patches { let o = lin(&profile, *m); for j in 0..3 { let e = (o[j] - r[j]).abs(); s2 += e * e; mx = mx.max(e) } }
     Ok(Fit { profile, rms: (s2 / (3 * patches.len()) as f64).sqrt(), max_err: mx, curve_fitted })
 }
-/// Reusable profile text: `kino-idt-v1 gamma(3) matrix(9)`. Empty / whitespace-only text is the identity profile.
+/// Reusable profile text: `kimo-idt-v1 gamma(3) matrix(9)`. Empty / whitespace-only text is the identity profile.
 pub fn to_text(pr: &Profile) -> String {
-    let mut s = String::from("kino-idt-v1"); for g in pr.gamma { s += &format!(" {:e}", g) } for r in pr.matrix { for v in r { s += &format!(" {:e}", v) } } s
+    let mut s = String::from("kimo-idt-v1"); for g in pr.gamma { s += &format!(" {:e}", g) } for r in pr.matrix { for v in r { s += &format!(" {:e}", v) } } s
 }
 pub fn from_text(t: &str) -> Result<Profile, String> {
     let t = t.trim(); if t.is_empty() { return Ok(Profile::default()) }
     if t.len() > 4096 { return Err("profile too large".into()) }
-    let mut it = t.split_whitespace(); if it.next() != Some("kino-idt-v1") { return Err("not a kino-idt-v1 profile".into()) }
+    let mut it = t.split_whitespace(); if !matches!(it.next(), Some("kimo-idt-v1") | Some("kino-idt-v1")) { // legacy header from before the rename is still accepted
+         return Err("not a kimo-idt-v1 profile".into()) }
     let v: Vec<f64> = it.map(|s| s.parse::<f64>().map_err(|_| "bad number in profile".to_string())).collect::<Result<_, _>>()?;
     if v.len() != 12 { return Err("profile needs 3 gamma + 9 matrix values".into()) }
     let pr = Profile { gamma: [v[0], v[1], v[2]], matrix: std::array::from_fn(|i| std::array::from_fn(|j| v[3 + i * 3 + j])) };

@@ -1,7 +1,7 @@
-use kino_core::{color::ocio,effects::Frame,model::Project,guard};
+use kimo_core::{color::ocio,effects::Frame,model::Project,guard};
 use std::sync::atomic::Ordering::Relaxed;
 #[test]fn persistent_processor_preflights_each_input_buffer(){
-    if std::env::var("KINO_TEST_OCIO").is_err(){return}
+    if std::env::var("KIMO_TEST_OCIO").is_err(){return}
     let mut p=Project::default();p.color_pipeline.enabled=true;
     let mut processor=ocio::Processor::new(&p,16,16,"sdr").unwrap();
     let f=Frame{w:16,h:16,d:vec![0.18;1024]};

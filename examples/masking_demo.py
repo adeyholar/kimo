@@ -1,7 +1,7 @@
 # Masking / selection / matte stack tour (6 s): bezier roto + star subtract, track matte, per-effect masks, noise dissolve + edge mask.
-import sys, time; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); C=k.call; C("project_set",width=1280,height=720,fps=25)
+import sys, time; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); C=k.call; C("project_set",width=1280,height=720,fps=25)
 PL="/tmp/db/r_9.24.png"; A=C("import_media",path=PL)["asset_id"]
 def trk(): return C("add_track")["track_id"]
 def med(st,d,t=None): return C("add_clip",track_id=t or trk(),source_type="media",asset_id=A,start=st,duration=d,fit="stretch")["clip_id"]

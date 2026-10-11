@@ -65,7 +65,7 @@ pub fn write_tiff(f:&Frame,path:&str,gamut:usize,white:f64)->Result<(),String>{
  if f.w.checked_mul(f.h).and_then(|n|n.checked_mul(4))!=Some(f.d.len())||f.d.iter().any(|v|!v.is_finite())||f.d.chunks_exact(4).any(|v|!(0. ..=1.).contains(&v[3])){return Err("TIFF needs finite RGB and alpha0..1".into())}
  let file=std::fs::File::create(path).map_err(|e|e.to_string())?;let mut enc=TiffEncoder::new(std::io::BufWriter::new(file)).map_err(|e|e.to_string())?;let mut image=enc.new_image::<RGBA32Float>(f.w as u32,f.h as u32).map_err(|e|e.to_string())?;
  image.encoder().write_tag(Tag::ExtraSamples,&[2u16][..]).map_err(|e|e.to_string())?;
- let description=format!("Kino scene-linear working RGB; gamut_id={gamut}; declared_reference_white_nits={white}; no ICC profile applied; no output transform");image.encoder().write_tag(Tag::ImageDescription,description.as_str()).map_err(|e|e.to_string())?;
+ let description=format!("Kimo scene-linear working RGB; gamut_id={gamut}; declared_reference_white_nits={white}; no ICC profile applied; no output transform");image.encoder().write_tag(Tag::ImageDescription,description.as_str()).map_err(|e|e.to_string())?;
  let(p,w)=super::managed::chroma(gamut);if p.iter().flatten().chain(w.iter()).all(|v|*v>=0.){let rat=|v:f64|Rational{n:(v*1000000.).round() as u32,d:1000000};image.encoder().write_tag(Tag::Unknown(318),&[rat(w[0]),rat(w[1])][..]).map_err(|e|e.to_string())?;image.encoder().write_tag(Tag::Unknown(319),&p.iter().flatten().map(|v|rat(*v)).collect::<Vec<_>>()[..]).map_err(|e|e.to_string())?;}
  image.write_data(&f.d).map_err(|e|e.to_string())
 }

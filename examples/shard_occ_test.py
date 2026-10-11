@@ -2,7 +2,7 @@
 # usage: [EX=0.5] shard_occ_test.py <texture>   (reuses the pin_occluder_test scene)
 import sys,os,subprocess,numpy as np
 os.environ.setdefault('OM','adaptive');os.environ.setdefault('OC','1');os.environ.setdefault('OT','3');os.environ.setdefault('MA','0.004');os.environ.setdefault('TH','2')
-src=open('/home/sandbox/kino/examples/pin_occluder_test.py').read().split("tiles=[]")[0]
+src=open('/home/sandbox/kimo/examples/pin_occluder_test.py').read().split("tiles=[]")[0]
 tex=sys.argv[1];sys.argv=['x',tex];exec(src)
 from PIL import Image
 Image.new('RGB',(640,440),(255,0,255)).save('/tmp/mag.png')

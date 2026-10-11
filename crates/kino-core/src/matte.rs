@@ -150,14 +150,14 @@ pub fn track(frames: &[Vec<u8>], w: usize, h: usize, seeds: &[(usize, Vec<[f64; 
     let mut bf: Vec<Fl> = (0..nf).map(|_| Fl { u: vec![], v: vec![], w2: 0, h2: 0 }).collect(); let mut ff: Vec<Fl> = (0..nf).map(|_| Fl { u: vec![], v: vec![], w2: 0, h2: 0 }).collect();
     for t in 1..nf { bf[t] = mk(t, t - 1); } for t in 0..nf - 1 { ff[t] = mk(t, t + 1); }
     let seed_a: Vec<Vec<f32>> = seeds.iter().map(|s| raster_poly(&s.1, w, h)).collect(); let anchors: Vec<(Vec<f32>, Vec<f32>)> = seeds.iter().enumerate().map(|(k, s)| anchor_models(&frames[s.0], &seed_a[k], w, h, o.band)).collect();
-    let aff = std::env::var("KINO_MATTE_MOTION").map(|v| v != "flow").unwrap_or(true);
+    let aff = std::env::var("KIMO_MATTE_MOTION").map(|v| v != "flow").unwrap_or(true);
     let none: Vec<Option<Vec<f32>>> = vec![None; nf]; let mut fwd: Vec<Vec<Option<Vec<f32>>>> = vec![]; let mut bwd: Vec<Vec<Option<Vec<f32>>>> = vec![];
     for (k, s) in seeds.iter().enumerate() {
         let end_f = if k + 1 < seeds.len() { seeds[k + 1].0 } else { nf - 1 }; let mut chain = none.clone(); chain[s.0] = Some(seed_a[k].clone());
-        let sg: Vec<f32> = (0..w*h).map(|i| gray(&frames[s.0], i)).collect(); let mut mt = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; let regs = region_masks(&seed_a[k], w, h, std::env::var("KINO_MATTE_REGIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(6)); let mut mr = vec![[1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; regs.len()];
+        let sg: Vec<f32> = (0..w*h).map(|i| gray(&frames[s.0], i)).collect(); let mut mt = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; let regs = region_masks(&seed_a[k], w, h, std::env::var("KIMO_MATTE_REGIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(6)); let mut mr = vec![[1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; regs.len()];
         for t in s.0 + 1..=end_f { let prev = chain[t - 1].as_ref().unwrap(); let wp = if aff { let g1: Vec<f32> = (0..w*h).map(|i| gray(&frames[t], i)).collect(); pw_step(&sg, &g1, &seed_a[k], &regs, &mut mt, &mut mr, w, h) } else { warp(prev, w, h, &bf[t]) }; chain[t] = Some(refine(&wp, &frames[t], &anchors[k], w, h, o)); } fwd.push(chain);
         let end_b = if k > 0 { seeds[k - 1].0 } else { 0 }; let mut chain = none.clone(); chain[s.0] = Some(seed_a[k].clone());
-        let mut mt = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; let regs = region_masks(&seed_a[k], w, h, std::env::var("KINO_MATTE_REGIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(6)); let mut mr = vec![[1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; regs.len()];
+        let mut mt = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; let regs = region_masks(&seed_a[k], w, h, std::env::var("KIMO_MATTE_REGIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(6)); let mut mr = vec![[1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0]; regs.len()];
         for t in (end_b..s.0).rev() { let prev = chain[t + 1].as_ref().unwrap(); let wp = if aff { let g1: Vec<f32> = (0..w*h).map(|i| gray(&frames[t], i)).collect(); pw_step(&sg, &g1, &seed_a[k], &regs, &mut mt, &mut mr, w, h) } else { warp(prev, w, h, &ff[t]) }; chain[t] = Some(refine(&wp, &frames[t], &anchors[k], w, h, o)); } bwd.push(chain); }
     // blend: between seeds k and k+1 use forward chain of k and backward chain of k+1 by distance
     let mut blended: Vec<Vec<f32>> = Vec::with_capacity(nf); let mut conf = vec![1.0f64; nf]; let mut warnings = vec![];

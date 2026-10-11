@@ -32,7 +32,7 @@ for f in frames[40:101]:
 (out/'controlled.raw').write_bytes(b''.join(frames[:8])+bytes(size*300)+b''.join(post))
 subprocess.run(['ffmpeg','-y','-v','error','-f','rawvideo','-pix_fmt','gray','-s','320x240','-r','25','-i',str(out/'controlled.raw'),'-c:v','libx264','-crf','0','-pix_fmt','yuv420p',str(out/'controlled.mp4')],check=True)
 subprocess.run(['ffmpeg','-y','-v','error','-i',str(out/'faceocc2.webm'),'-an','-c:v','libx264','-crf','0','-pix_fmt','yuv420p',str(out/'natural.mp4')],check=True)
-subprocess.run(['cargo','build','--release','-p','kino-core','--example','long_gap_proof','--example','long_gap_clip'],check=True)
+subprocess.run(['cargo','build','--release','-p','kimo-core','--example','long_gap_proof','--example','long_gap_clip'],check=True)
 gt = [list(map(float,line.replace(',', ' ').split())) for line in (out/'gt.txt').read_text().splitlines()]
 results = {}
 for name, cmd in [('natural',['target/release/examples/long_gap_proof',str(out/'faceocc2.raw'),'320','240','118','57','82','98']),('controlled_command',['target/release/examples/long_gap_clip',str(out/'controlled.mp4')]),('memory_natural',['target/release/examples/long_gap_clip',str(out/'natural.mp4'),'811','memory']),('memory_controlled',['target/release/examples/long_gap_clip',str(out/'controlled.mp4'),'368','memory'])]:

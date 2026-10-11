@@ -1,6 +1,6 @@
 """Build a small graded sequence purely through MCP tool calls."""
-import sys; from mcp_client import Kino
-k = Kino(); print(len(k.tools()), "tools")
+import sys; from mcp_client import Kimo
+k = Kimo(); print(len(k.tools()), "tools")
 k.call("project_set", width=1280, height=720, fps=30)
 a = k.call("import_media", path="/tmp/src_a.mp4")["asset_id"]
 b = k.call("import_media", path="/tmp/src_b.mp4")["asset_id"]
@@ -21,6 +21,6 @@ k.call("set_keyframe", clip_id=c1, property="scale", time=0, value=1.0, ease="in
 k.call("set_keyframe", clip_id=c1, property="scale", time=3, value=1.15)
 k.call("add_transition", clip_id=c2, kind="iris", duration=0.6)
 lb = k.call("add_effect", clip_id=c2, kind="letterbox", params={"ratio": 2.39})
-k.call("save_project", path="/tmp/demo.kino.json")
+k.call("save_project", path="/tmp/demo.kimo.json")
 for t, n in [(1.0, "a"), (2.7, "mid"), (4.0, "b")]: k.call("render_frame", time=t, path=f"/tmp/demo_{n}.png")
 print(k.call("export", path="/tmp/demo.mp4"))

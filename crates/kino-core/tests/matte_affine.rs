@@ -1,4 +1,4 @@
-use kino_core::matte::{aff_step, aff_warp};
+use kimo_core::matte::{aff_step, aff_warp};
 fn tex(x: f64, y: f64) -> f32 { (0.5 + 0.25 * (x * 0.21).sin() * (y * 0.17).cos() + 0.15 * ((x + 2.0 * y) * 0.09).sin() + 0.1 * (x * 0.5 + y * 0.43).sin()) as f32 }
 #[test]
 fn affine_step_recovers_known_motion() {

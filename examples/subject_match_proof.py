@@ -34,7 +34,7 @@ for name,img in [('reference',rgb),('source',source)]:
  Image.fromarray(np.round(img.clip(0,1)*255).astype('uint8')).save(out/(name+'.png'))
 weights.tofile(out/'weights.f32')
 Image.fromarray(np.round(weights*255).astype('uint8')).save(out/'regions.png')
-result=subprocess.run(['cargo','run','-p','kino-core','--release','--example','subject_match_proof','--',str(w),str(h),str(out)],check=True,capture_output=True,text=True)
+result=subprocess.run(['cargo','run','-p','kimo-core','--release','--example','subject_match_proof','--',str(w),str(h),str(out)],check=True,capture_output=True,text=True)
 print(result.stdout);(out/'rust-results.txt').write_text(result.stdout)
 for name in ['matched','creative']:
  img=np.fromfile(out/(name+'.f32'),dtype='<f4').reshape(h,w,4)[...,:3]

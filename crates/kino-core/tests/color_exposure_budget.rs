@@ -1,4 +1,4 @@
-use kino_core::{color::exposure,effects::Frame,guard};
+use kimo_core::{color::exposure,effects::Frame,guard};
 use std::sync::atomic::Ordering::Relaxed;
 #[test]fn exposure_preflights_full_quantile_capacity(){
     let f=Frame{w:16,h:16,d:vec![1.;1024]};

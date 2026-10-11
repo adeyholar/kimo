@@ -1,9 +1,9 @@
 # motion_extract / motion_diff: ground-truth test on a plate with known handheld-style motion, then match-move text and a stabilise.
-import sys,time,math; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
+import sys,time,math; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
 W,H,FPS,D=1280,720,25,4.0; N=int(D*FPS)
 def gt(t): return (40*math.sin(t*2.1)+14*math.sin(t*7.3), 22*math.sin(t*1.7+1)+9*math.sin(t*9.1), 1.0+0.06*math.sin(t*1.3), 2.5*math.sin(t*1.9))
-k=Kino(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
+k=Kimo(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
 if sys.argv[1]=='plate':
     a=C("import_media",path="/tmp/flag.png")["asset_id"]; bg=C("add_track")["track_id"]; C("add_clip",track_id=bg,source_type="solid",color=[0.5,0.6,0.7],start=0,duration=D)
     t=C("add_track")["track_id"]; c=C("add_clip",track_id=t,source_type="media",asset_id=a,start=0,duration=D)["clip_id"]

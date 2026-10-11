@@ -1,6 +1,6 @@
-import sys; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); k.call("project_set",width=1280,height=720,fps=25)
+import sys; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); k.call("project_set",width=1280,height=720,fps=25)
 D=1.9
 bg=k.call("import_media",path="/tmp/sc/kb.png")["asset_id"]; fa=k.call("import_media",path="/tmp/sc/finger.png")["asset_id"]
 def trk(): return k.call("add_track")["track_id"]

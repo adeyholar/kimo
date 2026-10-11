@@ -1,6 +1,6 @@
 """Render every effect in list_effects on one frame via MCP; used as a smoke test."""
-import sys, subprocess; from mcp_client import Kino
-k = Kino(); k.call("project_set", width=320, height=180, fps=30)
+import sys, subprocess; from mcp_client import Kimo
+k = Kimo(); k.call("project_set", width=320, height=180, fps=30)
 a = k.call("import_media", path="/tmp/src_b.mp4")["asset_id"]
 t = k.call("add_track")["track_id"]
 skip = {"lut", "letterbox"}

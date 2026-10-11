@@ -1,5 +1,5 @@
-import sys,time,json;sys.path.insert(0,'/home/sandbox/kino/examples');from mcp_client import Kino
-k=Kino();C=k.call;C('project_set',width=1280,height=720,fps=25)
+import sys,time,json;sys.path.insert(0,'/home/sandbox/kimo/examples');from mcp_client import Kimo
+k=Kimo();C=k.call;C('project_set',width=1280,height=720,fps=25)
 a=C('import_media',path=(sys.argv[1] if len(sys.argv)>1 else '/downloads/city-49844-76b1f705.mp4'))['asset_id'];t=C('add_track')['track_id'];c=C('add_clip',track_id=t,source_type='media',asset_id=a,start=0,duration=4,fit='cover')['clip_id']
 W,H=1280,720
 def n(q): return [v/(W if i%2==0 else H) for i,v in enumerate(q)]

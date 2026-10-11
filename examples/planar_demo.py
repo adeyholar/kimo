@@ -1,6 +1,6 @@
 # Planar tracker proof: synthetic wall plate with a perspective camera move + occluder, ground-truth corner error, then text locked to the sign.
-import sys,time,math,json; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
+import sys,time,math,json; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
 def solve(src,dst):
     A=[]
     for (x,y),(u,v) in zip(src,dst): A.append([x,y,1,0,0,0,-u*x,-u*y,u]); A.append([0,0,0,x,y,1,-v*x,-v*y,v])
@@ -21,7 +21,7 @@ def wallquad(t):
 sign=[tuple(p) for p in json.load(open('/tmp/wall_sign.json'))]
 def gt(i): q=wallquad(i/FPS); h=solve([(0,0),(W,0),(W,H),(0,H)],q); return [ap(h,x,y) for x,y in sign]
 if sys.argv[1]=='plate':
-    k=Kino(); C=k.call; C("project_set",width=W,height=H,fps=FPS); a=C("import_media",path="/tmp/wall.png")["asset_id"]; t=C("add_track")["track_id"]
+    k=Kimo(); C=k.call; C("project_set",width=W,height=H,fps=FPS); a=C("import_media",path="/tmp/wall.png")["asset_id"]; t=C("add_track")["track_id"]
     w=C("add_clip",track_id=t,source_type="media",asset_id=a,start=0,duration=D)["clip_id"]
     for i in range(N+1):
         q=wallquad(i/FPS); C("pin_layer",clip_id=w,time=i/FPS,quad=[v for p in q for v in p])
@@ -30,7 +30,7 @@ if sys.argv[1]=='plate':
     C("set_keyframe",clip_id=o,property="x",time=0,value=-500); C("set_keyframe",clip_id=o,property="x",time=1.3,value=500); C("set_keyframe",clip_id=o,property="y",time=0,value=-20); C("set_keyframe",clip_id=o,property="y",time=1.3,value=60)
     t0=time.time(); C("export",path="/tmp/wallplate.mp4",crf=16); print("plate render s",round(time.time()-t0,1))
 else:
-    k=Kino(); C=k.call; C("project_set",width=W,height=H,fps=FPS); a=C("import_media",path="/tmp/wallplate.mp4")["asset_id"]; t=C("add_track")["track_id"]
+    k=Kimo(); C=k.call; C("project_set",width=W,height=H,fps=FPS); a=C("import_media",path="/tmp/wallplate.mp4")["asset_id"]; t=C("add_track")["track_id"]
     m=C("add_clip",track_id=t,source_type="media",asset_id=a,start=0,duration=D)["clip_id"]
     t2=C("add_track")["track_id"]; tx=C("add_text",track_id=t2,text="LOCKED\nTO WALL",start=0,duration=D,size=230,color=[0.85,0.05,0.35])["clip_id"]
     q0=gt(0); r=C("track_planar",clip_id=m,corners=[v/s for p in q0 for v,s in zip(p,(W,H))],target_clip_id=tx,reanchor=bool(__import__("os").environ.get("RA")),light=0.0,occluder_matte=True,return_quads=True)

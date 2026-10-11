@@ -1,5 +1,5 @@
-use kino_core::color::managed::*;
-use kino_core::{effects::{Frame, Params}, keyframe::Prop};
+use kimo_core::color::managed::*;
+use kimo_core::{effects::{Frame, Params}, keyframe::Prop};
 #[test] fn neutral_adaptation_and_inverse() {
     for a in 0..8 { for b in 0..8 {
         let n=mv(conversion(a,b),[1.;3]);for x in n{assert!((x-1.).abs()<2e-12)}

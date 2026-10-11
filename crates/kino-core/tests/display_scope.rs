@@ -1,4 +1,4 @@
-use kino_core::commands::{dispatch, Session};
+use kimo_core::commands::{dispatch, Session};
 use serde_json::json;
 #[test]
 fn command_writes_png_preserves_project_and_uses_output_domain() {
@@ -11,7 +11,7 @@ fn command_writes_png_preserves_project_and_uses_output_domain() {
     .unwrap();
     let track = dispatch(&mut session, "add_track", &json!({})).unwrap()["track_id"].clone();
     dispatch(&mut session,"add_clip",&json!({"track_id":track,"source_type":"solid","color":[1.,0.,0.],"start":0.,"duration":1.})).unwrap();
-    let path = std::env::temp_dir().join(format!("kino-display-scope-{}.png", std::process::id()));
+    let path = std::env::temp_dir().join(format!("kimo-display-scope-{}.png", std::process::id()));
     let args = json!({"time":0.,"scope":"waveform","path":path.to_str().unwrap()});
     let before = serde_json::to_value(&session.project).unwrap();
     let result = dispatch(&mut session, "render_display_scope", &args).unwrap();

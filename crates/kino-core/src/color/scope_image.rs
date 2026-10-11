@@ -739,7 +739,7 @@ mod tests {
     #[test]
     fn sample_examples() {
         // Opt-in fixture output only. A normal test run has no file writes.
-        let Ok(dir) = std::env::var("KINO_SCOPE_FIXTURES") else {
+        let Ok(dir) = std::env::var("KIMO_SCOPE_FIXTURES") else {
             return;
         };
         std::fs::create_dir_all(&dir).unwrap();

@@ -8,9 +8,9 @@ use std::sync::{Mutex, OnceLock};
 
 static FONTS: OnceLock<Mutex<HashMap<String, std::sync::Arc<FontVec>>>> = OnceLock::new();
 fn norm(s: &str) -> String { let mut n: String = s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect(); for suf in ["variablefont", "var", "regular"] { if n.ends_with(suf) && n.len() > suf.len() { n.truncate(n.len() - suf.len()); } } n }
-pub fn font_dirs() -> Vec<std::path::PathBuf> { let mut v = vec![]; if let Ok(d) = std::env::var("KINO_FONTS") { v.push(d.into()); }
+pub fn font_dirs() -> Vec<std::path::PathBuf> { let mut v = vec![]; if let Ok(d) = std::env::var("KIMO_FONTS") { v.push(d.into()); }
     if let Ok(e) = std::env::current_exe() { let mut p = e.clone(); for _ in 0..4 { p.pop(); v.push(p.join("fonts")); } }
-    v.push("fonts".into()); if let Ok(h) = std::env::var("HOME") { v.push(std::path::Path::new(&h).join("kino/fonts")); } v.push("/usr/share/fonts".into()); v }
+    v.push("fonts".into()); if let Ok(h) = std::env::var("HOME") { v.push(std::path::Path::new(&h).join("kimo/fonts")); } v.push("/usr/share/fonts".into()); v }
 fn scan(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: usize) { if depth > 4 { return; } if let Ok(rd) = std::fs::read_dir(dir) { for e in rd.flatten() { let p = e.path(); if p.is_dir() { scan(&p, out, depth + 1); } else if matches!(p.extension().and_then(|x| x.to_str()), Some("ttf") | Some("otf") | Some("TTF") | Some("OTF")) { out.push(p); } } } }
 pub fn all_fonts() -> Vec<(String, std::path::PathBuf)> { let mut files = vec![]; for d in font_dirs() { scan(&d, &mut files, 0); } let mut seen = std::collections::HashSet::new(); let mut v = vec![];
     for p in files { let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string(); let n = norm(&stem); if seen.insert(n.clone()) { v.push((stem, p)); } } v.sort_by(|a, b| a.0.cmp(&b.0)); v }

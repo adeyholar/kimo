@@ -1,6 +1,6 @@
 """Beat-synced cuts: detect beats via MCP, cut on them, export with mixed audio."""
-from mcp_client import Kino
-k = Kino(); k.call("project_set", width=640, height=360, fps=30)
+from mcp_client import Kimo
+k = Kimo(); k.call("project_set", width=640, height=360, fps=30)
 src = "/tmp/beat.mp4"; a = k.call("import_media", path=src)["asset_id"]
 beats = k.call("detect_beats", path=src, min_gap=0.3); print("bpm", round(beats["bpm"]), "beats", [round(b,2) for b in beats["beats"][:8]])
 t = k.call("add_track")["track_id"]

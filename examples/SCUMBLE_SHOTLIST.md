@@ -1,4 +1,4 @@
-# SCUMBLE reference shot list (62 s, 1280x720, 25 fps, 125 BPM). Status: DONE = exists in kino, PART = partly, TODO.
+# SCUMBLE reference shot list (62 s, 1280x720, 25 fps, 125 BPM). Status: DONE = exists in kimo, PART = partly, TODO.
 0-1     Glass shatter on kebab macro (add_shard_burst + 3D)                PART (examples/scumble_shatter*.py)
 1-3     Shards fly, detection boxes pop in the debris                      PART
 3-4     3 colored cards on dark table (3D scene)                           TODO

@@ -1,4 +1,4 @@
-# kino features
+# kimo features
 
 MCP-first, AI-first video editor in Rust. Every operation (cut, transform, keyframe, effect, transition, grade, track, mix, export) is a registered command. The MCP server's tool list is generated from that registry, so a feature cannot exist without being AI-callable. The AI can also render a frame to PNG and read video scopes, so it can look at its own work and iterate.
 
@@ -14,7 +14,7 @@ Needs `ffmpeg` and `ffprobe` on PATH (decode/encode).
 
 ## Use from an MCP client
 ```json
-{ "mcpServers": { "kino": { "command": "/path/to/kino/target/release/kino-mcp" } } }
+{ "mcpServers": { "kimo": { "command": "/path/to/kimo/target/release/kimo-mcp" } } }
 ```
 Call `tools/list` to see everything. Start with `project_set`, `import_media`, `add_track`, `add_clip`, `add_effect`, `render_frame`, `export`.
 
@@ -145,7 +145,7 @@ Explicit ordered-steps .cube export, with native OCIO space/view steps and manag
 
 - `preview_subject_match` (level 1, preview only, no project mutation; BETA, COLOR): matte-guided per-region matching between two identity-geometry clips at explicit times, returns before/after preview + diagnostics + plan; absent regions disabled, overlapping weights rejected, fit frozen at call time. 4 tests pass here, fuzz 166 tools / 6419 calls / 0 failures. COLOR's real-pair proof on film10 frames: weighted log-luma error 1.331 to 1.180 (a modest gain, one pair). Level 2 (persistent subject_match effect in the render path) is NOT built and needs its own review and render-lane GO.
 
-- `camera_idt` effect + chart-fit IDT profiles (color/idt.rs, COLOR; BETA): gamma + ridge 3x3 matrix fitted from chart patches, save/load kino-idt-v1, identity defaults, alpha untouched. 9 tests; fit error 1e-6 on SYNTHETIC 24-patch data only: no chart-image detection, no white adaptation, no real camera validated, catalog-only (no MCP profile tool). Hint-driven encoding picker selects only on explicit hint plus pixel sanity.
+- `camera_idt` effect + chart-fit IDT profiles (color/idt.rs, COLOR; BETA): gamma + ridge 3x3 matrix fitted from chart patches, save/load kimo-idt-v1, identity defaults, alpha untouched. 9 tests; fit error 1e-6 on SYNTHETIC 24-patch data only: no chart-image detection, no white adaptation, no real camera validated, catalog-only (no MCP profile tool). Hint-driven encoding picker selects only on explicit hint plus pixel sanity.
 
 #### add_acescct_primaries (ACEScct primaries) - BETA
 Native AP1 to ACEScct to AP1 sandwich with per-channel primaries and an inverse, neutral identity, bound gamut 3. Explicit documented formula, NOT Resolve LGG parity. Conflict guard runs before the OCIO domain wrapper dispatch (v2: no double-domain interpretation) with an atomic rejection test. COLOR's proof: known math and inverse, real OCIO reference within 2e-6, determinism, neutral bit-exact incl. signed zero and HDR alpha. Reviewed here: build, cct_grade test, fuzz 169 tools / 6555 calls / 0 failures.
@@ -212,7 +212,7 @@ Read the gaps, pending items and scope qualifications in this module's records, 
 - [~] transform shutter blur, echo/frame blend, speed/time-stretch and posterize time; no flow interpolation/retime or per-effect blur
 - [~] planar homography tracking/corner pin; pending: 3D camera solve and face tracking
 
-#### Motion program (queued, requested: all motion features of Premiere, After Effects, Resolve Studio, plus kino-exclusive)
+#### Motion program (queued, requested: all motion features of Premiere, After Effects, Resolve Studio, plus kimo-exclusive)
 Status honest: nothing below is done unless marked. Existing: motion blur (shutter-angle, per layer), point/ring tracker, stabilizer, speed ramp, particles, physics, Scene3D.
 - [~] 1. Track mattes (alpha/luma/inverted) shipped; collapse transforms pending. DONE V1: precomps (group_clips / ungroup_clip: nested tracks on a local clock, group transform/effects/mask/opacity/keyframes apply to the whole group; gaps: no editing of grouped clips in place, no time remap of the group, no continuous rasterization, nested audio not mixed)
 - [~] 2. Expressions V1 DONE: op stack per property/effect param (wiggle w/ octaves+seed, loop_in/out cycle|pingpong|offset|continue, sin, inertia, posterize_time, clamp, round) via set_expression; cubic-bezier key handles via set_keyframe_bezier (overshoot ok). Gaps: no free-form expression interpreter (linkage, valueAtTime, index), no per-axis 2D wiggle correlation, no handle UI/ separate in/out influence. Spatial paths with auto-orient shipped; text animators still need polish
@@ -237,7 +237,7 @@ Status honest: nothing below is done unless marked. Existing: motion blur (shutt
 - [ ] responsive time / presets, essential properties, data-driven animation (JSON/CSV), scripting hooks
 
 - [ ] 4. Motion blur for Scene3D geometry and 3D layers, per-effect blur
-- [ ] 7. Kino-exclusive ideas: beat-driven motion (bind any property to audio::analyze beats), motion-by-prompt presets (AI writes the curve set), physics-driven layers [x via circle-proxy simulate_physics], motion "diff" tool (compare two clips' motion curves and match one to the other), auto motion-match to reference footage via tracker.
+- [ ] 7. Kimo-exclusive ideas: beat-driven motion (bind any property to audio::analyze beats), motion-by-prompt presets (AI writes the curve set), physics-driven layers [x via circle-proxy simulate_physics], motion "diff" tool (compare two clips' motion curves and match one to the other), auto motion-match to reference footage via tracker.
 - [ ] Infra: HUD timecode as one dynamic text source (currently 2 clips per frame, slow export)
 
 ### Proof level
@@ -247,7 +247,7 @@ Status honest: nothing below is done unless marked. Existing: motion blur (shutt
 
 - Graph editor data tools (V1): get_curve (keys, ease, bezier handles + dense value and SPEED samples for a speed graph), move_key, remove_key, copy_curve (offset, time scale, value scale/offset, reverse, invert), simplify_curve (RDP to a tolerance, e.g. 101 tracker keys -> 45 within 1.0), smooth_curve (Gaussian). With set_keyframe_bezier and set_expression these cover the graph editor's data side. Gaps: no multi-property selection/batch edits, no tangent-mode presets (auto/flow/ease-in-out handle types), no value-graph overlay render.
 
-- Beat-driven motion (kino exclusive, V1): track_beats (BPM + beat grid from any audio/video asset: onset envelope, autocorrelation tempo, grid refinement) and bind_beats (keyframes any numeric property to hit on beats: pulse, kick, swing, flash curves; every-Nth beat; explicit beat lists). Measured on the SCUMBLE reference (true 125 BPM): estimate 127 BPM, beat phase about 90 ms late versus the known hit times, so for frame-tight sync pass explicit beats or an offset. Gaps: no downbeat/bar detection, no per-band (kick vs hat) envelopes, unreliable on rubato audio.
+- Beat-driven motion (kimo exclusive, V1): track_beats (BPM + beat grid from any audio/video asset: onset envelope, autocorrelation tempo, grid refinement) and bind_beats (keyframes any numeric property to hit on beats: pulse, kick, swing, flash curves; every-Nth beat; explicit beat lists). Measured on the SCUMBLE reference (true 125 BPM): estimate 127 BPM, beat phase about 90 ms late versus the known hit times, so for frame-tight sync pass explicit beats or an offset. Gaps: no downbeat/bar detection, no per-band (kick vs hat) envelopes, unreliable on rubato audio.
 
 ## Tracking and rotoscope
 
@@ -280,7 +280,7 @@ Read the gaps, pending items and scope qualifications in this module's records, 
 #### Plane-pose motion model (planar tracker core)
 - `pose_predict`: constant-velocity extrapolation of a tracked plane in pose space (rotation vector + translation, plane size fixed), used to coast through occlusion and when the surface leaves the frame. Unit-tested exact (1e-12 px) on a synthetic rotating plane. Tier: BETA.
 - Measured on the 3D overtake room: coast error at the end of the shot 1407 px -> 1179 px (the sign is fully off-frame there, so this is not visible in the composite). It does NOT extend how far the tracker survives: tracking still ends at about 3% visible, because the data is gone. Using the pose prediction as the always-on prior made tracking worse (noisy pose from 1-2 px quad noise), so it is only used while lost.
-- Focal length is assumed 0.9 x frame width (env KINO_F overrides, for tests). No focal self-calibration yet. Edge-on survival below about 3% visible is a data limit, not solved.
+- Focal length is assumed 0.9 x frame width (env KIMO_F overrides, for tests). No focal self-calibration yet. Edge-on survival below about 3% visible is a data limit, not solved.
 
 #### Real handheld footage test (motion_extract), honest result
 Clip: Wikimedia Commons "Wzwz munich petuelpark 09d" (CC0, 540x720, 3.7 s, handheld tilt with a sudden bright burst filling the frame near the end). motion_extract measured a large move (dy 138 px, roll 13 deg, scale 0.72). Match-moved text sits on the rock through the shot, including the burst. Inverting the motion as a stabiliser cut the residual camera motion from std dx 24.5 / dy 36.8 px / rot 3.8 deg to dx 2.7 / dy 22.6 px / rot 0.89 deg, i.e. roll and sideways motion are mostly gone, but vertical motion is only reduced by ~40 %: the burst and heavy motion blur break the whole-frame track in the second half. Tier stays BETA. Needs a restart/segment mode and a robust exposure-jump gate before it can be called solid on real footage. Track 6.3 s for 93 frames at 540x720.
@@ -392,7 +392,7 @@ Use the quality-tier audit and test notes in the BETA appendix; checklist marks 
 ### What it does
 
 #### C. After Effects effect categories
-(AE category -> kino effect, based on Adobe's effect list)
+(AE category -> kimo effect, based on Adobe's effect list)
 
 #### Blur & Sharpen
 - [x] Gaussian-style blur, directional blur, spin (radial) blur, zoom blur, sharpen (unsharp), tilt-shift (lens blur band)
@@ -562,7 +562,7 @@ Use `tools/list` / `list_effects` for live schemas. Read the source parameter na
 ### Proof level
 
 #### CPU parallelism (std threads, no new dependency) - BETA, measured
-`kino_core::par` splits work by disjoint rows/column strips across `available_parallelism()` threads (override: `KINO_THREADS`). Every output element is computed by one thread with the same arithmetic as before, so results are bit-identical (FNV hash of all output floats equal to the pre-change build).
+`kimo_core::par` splits work by disjoint rows/column strips across `available_parallelism()` threads (override: `KIMO_THREADS`). Every output element is computed by one thread with the same arithmetic as before, so results are bit-identical (FNV hash of all output floats equal to the pre-change build).
 Measured on this 2-vCPU box (examples/bench_cpu.rs, examples/bench2.rs, old = build of e9c4762):
 - box blur x3 passes, 1080p: 0.53-0.60 s old, 0.12-0.13 s on 1 thread (4.1-4.6x: no per-pixel allocs, cache-friendly vertical pass), 0.06-0.07 s on 2 threads (8.5-9.1x).
 - flow_blur 720p: 0.334 s -> 0.201 s (1.7x); optical flow 720p q5: 0.098 -> 0.085 s (1.15x, solver dominated by serial resampling); blur_cov sigma 12: 0.017 -> 0.006 s (2.8x).
@@ -574,7 +574,7 @@ Disjoint-pixel threading (shared `par` module) on four color paths: immutable OC
 
 Static text-layer cache (export only, BETA): text clips with constant text (no `{}` tokens), no text animators/fx, no keyframes or expressions on reveal or effect params, no mask/echo/posterize, and only pure-pixel effects (exposure, contrast, saturation, temperature, tint, color_wheels, curves, teal_orange, vignette, blur, glow, invert, sharpen, posterize, sepia, outline, outer_glow, long_shadow, choker, feather_alpha, silhouette_fill) are rendered once per export and rebuilt by pasting a bit-exact non-zero crop (grain and anything seeded or time-varying is never cached; single-frame renders never use it). Measured, same 4 s 1080p30 benchmark: full export 42.2 s (before this session) to 29.9 s (1.41x); output frame-md5-identical to the pre-change export (tests/export_bench.py). Gain is modest because source image copy, background effects and the x264 encode dominate; media/still/solid layers are not cached yet.
 
-- Layer transform parallelism (export/render speed, bit-identical): the scale/rotate/translate resampler splits rows over the `par` threads. Measured on 2 vCPU, 8 scaled+rotated 1280x720 layers: 0.942 s to 0.558 s per frame (1.69x), output PNG md5 identical for KINO_THREADS=1 and 2. Real film profile showed transform as the dominant stage.
+- Layer transform parallelism (export/render speed, bit-identical): the scale/rotate/translate resampler splits rows over the `par` threads. Measured on 2 vCPU, 8 scaled+rotated 1280x720 layers: 0.942 s to 0.558 s per frame (1.69x), output PNG md5 identical for KIMO_THREADS=1 and 2. Real film profile showed transform as the dominant stage.
 
 Film finishing speed (COLOR): scoped f32 sRGB transfer math for film_finish
 only, decode |input|<=1, encode |linear|<=16; f64 reference fallback outside.
@@ -600,7 +600,7 @@ speed mode. These samples do not certify all finite inputs or export speed.
 ### What it does
 
 #### Sandbox layer (guard.rs, built into every tool call)
-- [x] V1: argument sanitizer (finite numbers, magnitude +-1e8, array/string size, nesting), project limits checked after every mutation with automatic rollback (canvas pixels, fps, clip count, timeline duration), memory budget via counting allocator (default 70% of RAM or cgroup limit; Frame allocations and the render loop fail the call instead of OOMing; hard backstop refuses allocations far above budget), cooperative cancel plus wall-clock time limit per call (default 600 s, export 7200 s) with a last-resort clean server exit if a call cannot be stopped, panics caught with project rollback. Env overrides: KINO_MEM_MB, KINO_TIMEOUT_S, KINO_EXPORT_TIMEOUT_S, KINO_MAX_PIXELS, KINO_MAX_FPS, KINO_MAX_CLIPS, KINO_MAX_DURATION_S, KINO_MAX_NUM. Test: tests/sandbox_test.py.
+- [x] V1: argument sanitizer (finite numbers, magnitude +-1e8, array/string size, nesting), project limits checked after every mutation with automatic rollback (canvas pixels, fps, clip count, timeline duration), memory budget via counting allocator (default 70% of RAM or cgroup limit; Frame allocations and the render loop fail the call instead of OOMing; hard backstop refuses allocations far above budget), cooperative cancel plus wall-clock time limit per call (default 600 s, export 7200 s) with a last-resort clean server exit if a call cannot be stopped, panics caught with project rollback. Env overrides: KIMO_MEM_MB, KIMO_TIMEOUT_S, KIMO_EXPORT_TIMEOUT_S, KIMO_MAX_PIXELS, KIMO_MAX_FPS, KIMO_MAX_CLIPS, KIMO_MAX_DURATION_S, KIMO_MAX_NUM. Test: tests/sandbox_test.py.
 
 ### Parameters and controls
 

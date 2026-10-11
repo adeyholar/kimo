@@ -16,7 +16,7 @@ ideal=tex(xx,yy)
 raw=(D*255+0.5).astype(np.uint8).tobytes()
 open("/tmp/dist.rgb","wb").write(raw*24)
 subprocess.run(["ffmpeg","-y","-loglevel","error","-f","rawvideo","-pix_fmt","rgb24","-s",f"{W}x{H}","-r","24","-i","/tmp/dist.rgb","-c:v","libx264","-crf","10","-pix_fmt","yuv420p","/tmp/dist.mp4"])
-srv=subprocess.Popen(["target/release/kino-mcp"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True);m=[0]
+srv=subprocess.Popen(["target/release/kimo-mcp"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True);m=[0]
 def rpc(n,p=None):
     m[0]+=1;srv.stdin.write(json.dumps({"jsonrpc":"2.0","id":m[0],"method":n,"params":p or {}})+"\n");srv.stdin.flush();return json.loads(srv.stdout.readline())
 def call(n,a):

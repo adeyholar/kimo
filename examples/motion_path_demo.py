@@ -1,7 +1,7 @@
 # Spatial motion paths + auto-orient: arrows riding a figure-8 / wave / spiral, constant speed, eased progress, motion blur, echo trail.
-import sys, time; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); C=k.call; C("project_set",width=1280,height=720,fps=25); D=4.0
+import sys, time; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); C=k.call; C("project_set",width=1280,height=720,fps=25); D=4.0
 bg=C("add_track")["track_id"]; C("add_clip",track_id=bg,source_type="gradient",c1=[0.05,0.06,0.12],c2=[0.12,0.08,0.2],start=0,duration=D) if False else C("add_clip",track_id=bg,source_type="solid",color=[0.06,0.06,0.1],start=0,duration=D)
 def arrow(col,size=70):
     t=C("add_track")["track_id"]; c=C("add_shape",track_id=t,shape="polygon",sides=3,start=0,duration=D,width=size,height=size,fill=col)["clip_id"]; return c

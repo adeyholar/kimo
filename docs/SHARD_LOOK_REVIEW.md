@@ -35,6 +35,6 @@ Synthetic burst scene only. No source footage supplied here, so no claim about r
 ## Reproduce
 
 ```sh
-cargo test -p kino-core --lib shard_look
-SHARD_LOOK_EVIDENCE=/tmp/shards cargo test --release -p kino-core --test shard_look_render -- --nocapture --test-threads=1
+cargo test -p kimo-core --lib shard_look
+SHARD_LOOK_EVIDENCE=/tmp/shards cargo test --release -p kimo-core --test shard_look_render -- --nocapture --test-threads=1
 ```

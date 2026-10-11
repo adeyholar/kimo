@@ -99,7 +99,7 @@ actual modulated PCM and ambiguity refusal, verify non-drop timecodes, continuou
 multicam audio, cue editing/persistence/undo and registry uniqueness. An impulse
 reverb test verifies diffuse tail, channel decorrelation, and finite samples.
 
-`python3 tests/gap4_proof.py --binary target/debug/kino-mcp --output /tmp/gap4-proof`
+`python3 tests/gap4_proof.py --binary target/debug/kimo-mcp --output /tmp/gap4-proof`
 runs a stdio MCP session, renders a red-to-blue multicam switch and caption burn-in
 on/off, exports audio and saves the project. Requires FFmpeg and Pillow. These are
 synthetic behavior proofs, not a commercial-editor parity claim or a listening

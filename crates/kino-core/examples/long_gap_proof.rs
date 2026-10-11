@@ -1,6 +1,6 @@
 //! Usage: long_gap_proof gray.raw width height x y width height [threshold margin]
 //! Raw uint8 grayscale frames from ffmpeg. Outputs JSON for independent scoring.
-use kino_core::long_gap::{BoxPx, Sample, Tracker};
+use kimo_core::long_gap::{BoxPx, Sample, Tracker};
 use std::io::{BufReader, Read};
 fn main() {
     let a: Vec<String> = std::env::args().collect();

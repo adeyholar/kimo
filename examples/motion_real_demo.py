@@ -1,8 +1,8 @@
 # Real handheld footage (CC0 Wikimedia clip): motion_extract measures camera motion; match-move text and a stabilise, then re-measure the stabilised result.
-import sys,time; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
+import sys,time; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
 W,H,FPS=540,720,25
-k=Kino(); C=k.call; C("project_set",width=W,height=H,fps=FPS); ph=sys.argv[1]
+k=Kimo(); C=k.call; C("project_set",width=W,height=H,fps=FPS); ph=sys.argv[1]
 def rng(r): return {a:[round(x,2) for x in b] for a,b in r["range"].items()}
 if ph=='stab':
     a=C("import_media",path="/tmp/petuel.mp4")["asset_id"]; t=C("add_track")["track_id"]; m=C("add_clip",track_id=t,source_type="media",asset_id=a,start=0,duration=3.7)["clip_id"]

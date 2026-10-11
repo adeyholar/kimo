@@ -1,7 +1,7 @@
 # Native OCIO CPU API (review-only implementation)
 
 This is an opt-in Rust/C++ CPU adapter to installed OpenColorIO 2. It does not
-replace Kino's defaults, output transform, Python ACES reference, renderer, or
+replace Kimo's defaults, output transform, Python ACES reference, renderer, or
 project model. Configs are not called ACES-certified or production-validated.
 
 ## Build
@@ -10,7 +10,7 @@ Supply compatible OCIO 2 headers and a shared library, then build with:
 
 ```
 OCIO_INCLUDE_DIR=/opt/ocio/include OCIO_LIB_DIR=/opt/ocio/lib \
-LD_LIBRARY_PATH=/opt/ocio/lib cargo test -p kino-core --features native-ocio \
+LD_LIBRARY_PATH=/opt/ocio/lib cargo test -p kimo-core --features native-ocio \
   --test color_ocio_config
 ```
 
@@ -104,7 +104,7 @@ ACES output view, the full ACES 2 suite, hostile-parser sandboxing, GPU output,
 render-wide integration, throughput or industry parity.
 
 An optional integration test loads the official built-in ACES2 CG config when
-`KINO_TEST_NATIVE_ACES_CONFIG` points to its serialized .ocio file. It checks
+`KIMO_TEST_NATIVE_ACES_CONFIG` points to its serialized .ocio file. It checks
 space/view discovery and ACEScg-to-ACEScct gray, not its output display views.
 
 
@@ -136,7 +136,7 @@ Native library2.5.1 proof uses its official built-in
 cg-config-v4.0.0_aces-v2.0_ocio-v2.5 serialized config, sourceACEScg,
 display "sRGB - Display", view "ACES 2.0 - SDR 100 nits (Rec.709)".
 The real-footage still is SDR-origin, explicitly decoded sRGB then converted to
-AP1 by Kino before the selected display-view transform. Actual pixels inspected.
+AP1 by Kimo before the selected display-view transform. Actual pixels inspected.
 A separate1280x720 declared-AP1 float fixture matches Python DisplayViewTransform
 from the SAME OCIO library exactly (3,686,400 RGBA samples). That is API parity,
 not an independent ACES implementation, full conformance suite or camera proof.

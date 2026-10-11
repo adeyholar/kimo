@@ -1,7 +1,7 @@
 // Native OCIO CPU adapter. No global/current config or environment mutation.
 #include <OpenColorIO/OpenColorIO.h>
 #if OCIO_VERSION_MAJOR != 2
-#error "Kino native OCIO adapter requires OpenColorIO 2"
+#error "Kimo native OCIO adapter requires OpenColorIO 2"
 #endif
 #include <sstream>
 #include <string>
@@ -10,8 +10,8 @@
 #include <cstring>
 #include <stdexcept>
 namespace OCIO = OCIO_NAMESPACE;
-struct KinoConfig { OCIO::ConstConfigRcPtr config; std::vector<std::string> spaces, displays, views; };
-struct KinoProcessor { OCIO::ConstCPUProcessorRcPtr cpu; };
+struct KimoConfig { OCIO::ConstConfigRcPtr config; std::vector<std::string> spaces, displays, views; };
+struct KimoProcessor { OCIO::ConstCPUProcessorRcPtr cpu; };
 static void error(char *out, size_t cap, const char *message) noexcept {
     if (cap) { std::strncpy(out, message, cap - 1); out[cap - 1] = 0; }
 }
@@ -27,8 +27,8 @@ static void check_transform(const OCIO::ConstTransformRcPtr &t, unsigned depth=0
     }
 }
 extern "C" {
-const char *kino_ocio_version() noexcept { return OCIO::GetVersion(); }
-void *kino_ocio_load(const char *text, char *err, size_t cap) noexcept {
+const char *kimo_ocio_version() noexcept { return OCIO::GetVersion(); }
+void *kimo_ocio_load(const char *text, char *err, size_t cap) noexcept {
     try {
         std::istringstream stream(text);
         auto c = OCIO::Config::CreateFromStream(stream)->createEditableCopy();
@@ -38,7 +38,7 @@ void *kino_ocio_load(const char *text, char *err, size_t cap) noexcept {
         int count = c->getNumColorSpaces(OCIO::SEARCH_REFERENCE_SPACE_ALL, OCIO::COLORSPACE_ALL);
         if (count > 4096 || c->getNumLooks()>4096 || c->getNumNamedTransforms(OCIO::NAMEDTRANSFORM_ALL)>4096 || c->getNumViewTransforms()>4096)
             throw std::runtime_error("OCIO catalog size limit");
-        auto result = std::make_unique<KinoConfig>();
+        auto result = std::make_unique<KimoConfig>();
         for (int i=0;i<count;++i) {
             auto name=c->getColorSpaceNameByIndex(OCIO::SEARCH_REFERENCE_SPACE_ALL, OCIO::COLORSPACE_ALL, i);
             auto space=c->getColorSpace(name);
@@ -74,21 +74,21 @@ void *kino_ocio_load(const char *text, char *err, size_t cap) noexcept {
       catch(...) { error(err,cap,"unknown OCIO load error"); }
     return nullptr;
 }
-void kino_ocio_config_free(void *p) noexcept { delete static_cast<KinoConfig*>(p); }
-size_t kino_ocio_count(const void *p, int catalog) noexcept {
-    auto c=static_cast<const KinoConfig*>(p); return catalog==0 ? c->spaces.size() : c->views.size();
+void kimo_ocio_config_free(void *p) noexcept { delete static_cast<KimoConfig*>(p); }
+size_t kimo_ocio_count(const void *p, int catalog) noexcept {
+    auto c=static_cast<const KimoConfig*>(p); return catalog==0 ? c->spaces.size() : c->views.size();
 }
-const char *kino_ocio_name(const void *p, int catalog, size_t i) noexcept {
-    auto c=static_cast<const KinoConfig*>(p);
+const char *kimo_ocio_name(const void *p, int catalog, size_t i) noexcept {
+    auto c=static_cast<const KimoConfig*>(p);
     auto &v=catalog==0 ? c->spaces : catalog==1 ? c->displays : c->views;
     return i<v.size() ? v[i].c_str() : "";
 }
-void *kino_ocio_processor(const void *p, const char *src, const char *dst, char *err, size_t cap) noexcept {
+void *kimo_ocio_processor(const void *p, const char *src, const char *dst, char *err, size_t cap) noexcept {
     try {
-        auto c=static_cast<const KinoConfig*>(p);
+        auto c=static_cast<const KimoConfig*>(p);
         if(!c->config->getColorSpace(src) || !c->config->getColorSpace(dst))
             throw std::runtime_error("unknown OCIO colorspace");
-        auto result=std::make_unique<KinoProcessor>();
+        auto result=std::make_unique<KimoProcessor>();
         // Disable approximate optimized CPU math for reproducible reference comparisons.
         result->cpu=c->config->getProcessor(src,dst)->getOptimizedCPUProcessor(OCIO::OPTIMIZATION_NONE);
         return result.release();
@@ -96,9 +96,9 @@ void *kino_ocio_processor(const void *p, const char *src, const char *dst, char 
       catch(...) { error(err,cap,"unknown OCIO processor error"); }
     return nullptr;
 }
-void *kino_ocio_display_processor(const void *p, const char *src, const char *display, const char *view, char *err, size_t cap) noexcept {
+void *kimo_ocio_display_processor(const void *p, const char *src, const char *display, const char *view, char *err, size_t cap) noexcept {
     try {
-        auto c=static_cast<const KinoConfig*>(p);
+        auto c=static_cast<const KimoConfig*>(p);
         if(!c->config->getColorSpace(src)) throw std::runtime_error("unknown OCIO source colorspace");
         bool found=false;
         for(int i=0;i<c->config->getNumDisplaysAll();++i) {
@@ -111,22 +111,22 @@ void *kino_ocio_display_processor(const void *p, const char *src, const char *di
         auto transform=OCIO::DisplayViewTransform::Create();
         transform->setSrc(src); transform->setDisplay(display); transform->setView(view);
         transform->setLooksBypass(false);
-        auto result=std::make_unique<KinoProcessor>();
+        auto result=std::make_unique<KimoProcessor>();
         result->cpu=c->config->getProcessor(transform)->getOptimizedCPUProcessor(OCIO::OPTIMIZATION_NONE);
         return result.release();
     } catch(const std::exception &e) { error(err,cap,e.what()); }
       catch(...) { error(err,cap,"unknown OCIO display processor error"); }
     return nullptr;
 }
-void *kino_ocio_cdl(const double *slope,const double *offset,const double *power,double sat,char *err,size_t cap) noexcept {
- try{auto t=OCIO::CDLTransform::Create();t->setSlope(slope);t->setOffset(offset);t->setPower(power);t->setSat(sat);t->setStyle(OCIO::CDL_ASC);auto r=std::make_unique<KinoProcessor>();r->cpu=OCIO::Config::CreateRaw()->getProcessor(t)->getOptimizedCPUProcessor(OCIO::OPTIMIZATION_NONE);return r.release();}
+void *kimo_ocio_cdl(const double *slope,const double *offset,const double *power,double sat,char *err,size_t cap) noexcept {
+ try{auto t=OCIO::CDLTransform::Create();t->setSlope(slope);t->setOffset(offset);t->setPower(power);t->setSat(sat);t->setStyle(OCIO::CDL_ASC);auto r=std::make_unique<KimoProcessor>();r->cpu=OCIO::Config::CreateRaw()->getProcessor(t)->getOptimizedCPUProcessor(OCIO::OPTIMIZATION_NONE);return r.release();}
  catch(const std::exception &e){error(err,cap,e.what());}catch(...){error(err,cap,"unknown nativeCDLerror");}return nullptr;
 }
-void kino_ocio_processor_free(void *p) noexcept { delete static_cast<KinoProcessor*>(p); }
-int kino_ocio_noop(const void *p) noexcept { return static_cast<const KinoProcessor*>(p)->cpu->isNoOp(); }
-int kino_ocio_apply(const void *p, float *rgba, size_t pixels, char *err, size_t cap) noexcept {
+void kimo_ocio_processor_free(void *p) noexcept { delete static_cast<KimoProcessor*>(p); }
+int kimo_ocio_noop(const void *p) noexcept { return static_cast<const KimoProcessor*>(p)->cpu->isNoOp(); }
+int kimo_ocio_apply(const void *p, float *rgba, size_t pixels, char *err, size_t cap) noexcept {
     try {
-        auto cpu=static_cast<const KinoProcessor*>(p)->cpu;
+        auto cpu=static_cast<const KimoProcessor*>(p)->cpu;
         // RGB-only: alpha is bit-preserved, even if a config embeds alpha matrix terms.
         if(!cpu->isNoOp()) for(size_t i=0;i<pixels;++i) cpu->applyRGB(rgba+4*i);
         return 1;

@@ -1,8 +1,8 @@
 # SCUMBLE 7.6-9.2 s v2: constant-speed box expansion, 2-frame flash, then boxes at the reference's measured coordinates,
 # filled with crops taken from the reference frames themselves via top-down scan wipes with a white scan line.
-import sys; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); k.call("project_set",width=1280,height=720,fps=25)
+import sys; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); k.call("project_set",width=1280,height=720,fps=25)
 def trk(): return k.call("add_track")["track_id"]
 D=1.6
 imp=lambda n: k.call("import_media",path=f"/tmp/ex2/{n}.png")["asset_id"]

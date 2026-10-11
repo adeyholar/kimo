@@ -1,4 +1,4 @@
-use kino_core::{
+use kimo_core::{
     color::scope_image::{render, Kind, Options},
     effects::Frame,
     guard,

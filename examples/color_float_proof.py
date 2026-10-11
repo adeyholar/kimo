@@ -14,7 +14,7 @@ for source in ['/downloads/float-source.exr','/downloads/float-source32.tiff']:
  # separate projects to avoid overlapping prior clips
  # each source uses isolated clip scopes and previous track removal
  if 'prev' in globals():
-  p.terminate();p=subprocess.Popen(['target/release/kino-mcp'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=open('/tmp/color-float-stderr.log','w'),text=True)
+  p.terminate();p=subprocess.Popen(['target/release/kimo-mcp'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=open('/tmp/color-float-stderr.log','w'),text=True)
  call('project_set',width=32,height=32,fps=25)
  asset=call('import_media',path=source)['asset_id'];tr=call('add_track')['track_id'];a=call('add_clip',track_id=tr,source_type='media',asset_id=asset,start=0,duration=.08)['clip_id'];prev=a
  call('set_color_pipeline',settings=dict(enabled=True,working_gamut=3,input_gamut=3,input_transfer=0,output_gamut=0,output_transfer=1,reference_white=100))

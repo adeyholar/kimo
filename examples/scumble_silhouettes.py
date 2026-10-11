@@ -1,8 +1,8 @@
 # SCUMBLE 11.8-12.52 s: three 6-frame segmentation-style shots. Plate = reference frame (confetti partly inpainted by tools/sil_prep.py),
 # silhouette = alpha mask keyed from the reference, filled with the new silhouette_fill effect, plus add_glitch_confetti.
-import sys, time; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); C=k.call; C("project_set",width=1280,height=720,fps=25); O=11.8; D=0.72
+import sys, time; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); C=k.call; C("project_set",width=1280,height=720,fps=25); O=11.8; D=0.72
 def trk(): return C("add_track")["track_id"]
 def media(path,st,d):
     a=C("import_media",path=path)["asset_id"]; return C("add_clip",track_id=trk(),source_type="media",asset_id=a,start=st,duration=d,fit="stretch")["clip_id"]

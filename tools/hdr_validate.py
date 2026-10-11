@@ -115,7 +115,7 @@ def main():
         d=args.directory;d.mkdir(parents=True,exist_ok=True);pixels=list(reference_pixels())
         with (d/'oracle.rgba32f').open('wb') as out:
             for rgb in pixels:out.write(struct.pack('<4f',*(v/100 for v in rgb),1))
-        run(['cargo','run','-q','-p','kino-core','--example','hdr_fixture','--',str(d/'oracle.rgba32f'),str(d)],stderr=subprocess.PIPE)
+        run(['cargo','run','-q','-p','kimo-core','--example','hdr_fixture','--',str(d/'oracle.rgba32f'),str(d)],stderr=subprocess.PIPE)
         result={name:audit(d/name,expected=pixels) for name in ['pq-lossless.mkv','pq-hevc.mp4']}
         # Independent ideal code quantization evidence, distinct from codec loss.
         result['ideal_quantization']={str(levels):max(abs(pq_decode(round(pq_encode(v)*levels)/levels)-v) for rgb in pixels for v in rgb if 0<=v<=10000) for levels in [65535,876]}

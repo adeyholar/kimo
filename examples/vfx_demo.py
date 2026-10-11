@@ -1,6 +1,6 @@
 """VFX layer smoke test: shapes, adjustment layer, corner pin, luma key, ripple, glitch, time reverse."""
-from mcp_client import Kino
-k = Kino(); k.call("project_set", width=640, height=360, fps=30)
+from mcp_client import Kimo
+k = Kimo(); k.call("project_set", width=640, height=360, fps=30)
 A = k.call("import_media", path="/tmp/src_a.mp4")["asset_id"]; B = k.call("import_media", path="/tmp/src_b.mp4")["asset_id"]; S = k.call("import_media", path="/tmp/sticker.png")["asset_id"]
 tr = [k.call("add_track")["track_id"] for _ in range(6)]
 base = k.call("add_clip", track_id=tr[0], source_type="media", asset_id=B, start=0, duration=3)["clip_id"]

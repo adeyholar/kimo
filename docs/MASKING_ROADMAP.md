@@ -18,20 +18,20 @@ Everything below is callable over MCP. Tiers: SOLID = works at full strength and
 | Scribble select (foreground/background points) | kind=scribble | BASIC | color + spatial distance model, not a graph cut; no ML |
 | Edge mask (Sobel band, thickness) | kind=edge | SOLID | |
 | Own-alpha mask (threshold, softness) for shrink/grow/outline work | kind=alpha | SOLID | |
-| Procedural noise mask, animated threshold (organic dissolves) | kind=noise | SOLID | kino extra |
+| Procedural noise mask, animated threshold (organic dissolves) | kind=noise | SOLID | kimo extra |
 | Track mattes: alpha, luma, inverted alpha, inverted luma, hide source | set_track_matte | SOLID | matte clip is rendered with its own transforms, effects, masks |
 | Per-effect masks: any effect gated by any mask layer | set_effect_mask | SOLID | |
 | Masks on adjustment layers keyed on the image below | add_mask on adjustment clip | SOLID | power-window + qualifier workflow |
 | Mask inspection (matte / overlay / cutout PNG) | render_mask | SOLID | |
 
 ## Queued (not built, in priority order)
-1. ML segmentation (SAM-class, point/box/text prompt) and portrait/depth matte. Needs an ONNX runtime and a bundled model; no model is shipped today, so nothing in kino claims ML roto.
+1. ML segmentation (SAM-class, point/box/text prompt) and portrait/depth matte. Needs an ONNX runtime and a bundled model; no model is shipped today, so nothing in kimo claims ML roto.
 2. Mask tracking: attach a mask to a point/planar track so it follows footage (tracking.rs has a point tracker; no planar tracker yet).
 3. Roto assist: optical-flow in-betweening between path keys, edge snapping.
 4. Per-point variable feather (AE Mask Feather tool) and per-point easing.
 5. Edge-aware refine (guided filter), despill, clean-plate keyer with core/edge/shadow split (Primatte / Ultra Key class).
 6. Euclidean expand/choke, GPU path for all coverage ops (currently CPU, about 30-80 ms per full-HD layer).
-7. Kino-exclusive ideas not yet built: motion mask (frame-difference), audio-reactive masks, mask math between clips, prompt-by-text selection once ML lands.
+7. Kimo-exclusive ideas not yet built: motion mask (frame-difference), audio-reactive masks, mask math between clips, prompt-by-text selection once ML lands.
 
 ## Quality pass (commit "Masking quality")
 - Exact-area path rasterizer (signed-area accumulation): sub-pixel accurate, no shimmer on moving edges (was 4x4 supersampling).

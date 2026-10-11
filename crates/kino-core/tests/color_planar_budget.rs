@@ -1,4 +1,4 @@
-use kino_core::{color::interchange,effects::Frame,guard};
+use kimo_core::{color::interchange,effects::Frame,guard};
 use std::sync::atomic::Ordering::Relaxed;
 #[test]fn planar_pack_unpack_preflight_destination(){
     let f=Frame{w:16,h:16,d:vec![0.25;1024]};let bytes=interchange::pack(&f).unwrap();

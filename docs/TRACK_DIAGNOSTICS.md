@@ -13,7 +13,7 @@ Workflow: `track_features` (raw tracks stored) -> `fit_track_homography` (soft-L
 - Frame 0 of a fit is pinned to identity (features are anchored to the first frame). Analysis runs at project resolution; coordinates are project pixels.
 
 ## Differences from the original scripts
-Hardcoded ROIs, corners and paths are parameters (`roi`, `corners`, `out_dir`, `render_dir`). Features are detected with Kino's Shi-Tomasi + pyramidal LK, not OpenCV's, so numbers are not bit-identical to the originals. The soft-L1 fit uses Levenberg-Marquardt with the scipy `soft_l1` loss definition.
+Hardcoded ROIs, corners and paths are parameters (`roi`, `corners`, `out_dir`, `render_dir`). Features are detected with Kimo's Shi-Tomasi + pyramidal LK, not OpenCV's, so numbers are not bit-identical to the originals. The soft-L1 fit uses Levenberg-Marquardt with the scipy `soft_l1` loss definition.
 
 ## Validation
-`cargo test -p kino-core --lib trackmath`; `python3 tests/track_diag_gen_plate.py` then `python3 tests/track_diag_proof.py <dir>` (synthetic plate with known corners); `python3 tests/tool_fuzz.py` (248 tools, 0 failures).
+`cargo test -p kimo-core --lib trackmath`; `python3 tests/track_diag_gen_plate.py` then `python3 tests/track_diag_proof.py <dir>` (synthetic plate with known corners); `python3 tests/tool_fuzz.py` (248 tools, 0 failures).

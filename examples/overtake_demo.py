@@ -1,6 +1,6 @@
 # Stress test (3D room, sign on the left wall): camera moves forward and overtakes a sign on the left; sign goes edge-on and leaves frame. Ground truth from a 3D pinhole projection.
-import sys,time,math,json; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
+import sys,time,math,json; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
 W,H,FPS,D=1280,720,25,5.5; N=int(D*FPS); F=900.0
 def cam_z(t): s=t/D; return 1.0+3.6*(0.4*s+0.6*s*s)
 def proj(X,Y,Z,cz): d=Z-cz; return (W/2+F*X/d, H/2+F*Y/d)
@@ -13,7 +13,7 @@ def quad(P,t):
     return [proj(x,y,zz,z) for x,y,zz in P]
 def inframe(q): xs=[p[0] for p in q]; ys=[p[1] for p in q]; return max(0,min(W,max(xs))-max(0,min(xs)))*max(0,min(H,max(ys))-max(0,min(ys)))
 def width_ratio(t): q=quad(SIGN,t); return (math.hypot(q[1][0]-q[0][0],q[1][1]-q[0][1]))
-k=Kino(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
+k=Kimo(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
 if sys.argv[1]=='plate':
     A={k:C("import_media",path=p)["asset_id"] for k,p in (("L","/tmp/r_left.png"),("R","/tmp/r_right.png"),("F","/tmp/r_floor.png"),("C","/tmp/r_ceil.png"),("B","/tmp/r_back.png"),("S","/tmp/sign.png"))}
     layers=[]; tb=C("add_track")["track_id"]; bk=C("add_clip",track_id=tb,source_type="media",asset_id=A["B"],start=0,duration=D)["clip_id"]

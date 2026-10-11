@@ -1,7 +1,7 @@
 # SCUMBLE 8.92-11.8 s: photo + boxes, ink-threshold flash, DRAW ME A BOX word slams, hard cut to FILL UP A SPOT.
-import sys, time; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
-k=Kino(); C=k.call; C("project_set",width=1280,height=720,fps=25); D=2.88; O=8.92
+import sys, time; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
+k=Kimo(); C=k.call; C("project_set",width=1280,height=720,fps=25); D=2.88; O=8.92
 def trk(): return C("add_track")["track_id"]
 def media(path,t,st,d,**kw):
     a=C("import_media",path=path)["asset_id"]; return C("add_clip",track_id=t,source_type="media",asset_id=a,start=st,duration=d,fit="stretch",**kw)["clip_id"]

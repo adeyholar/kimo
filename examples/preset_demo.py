@@ -1,8 +1,8 @@
 # apply_motion_preset demo: words animated in by plain-language prompts, one per beat.
-import sys,time; sys.path.insert(0,'/home/sandbox/kino/examples')
-from mcp_client import Kino
+import sys,time; sys.path.insert(0,'/home/sandbox/kimo/examples')
+from mcp_client import Kimo
 W,H,FPS,D=1280,720,25,6.0
-k=Kino(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
+k=Kimo(); C=k.call; C("project_set",width=W,height=H,fps=FPS)
 bg=C("add_track")["track_id"]; C("add_clip",track_id=bg,source_type="solid",color=[0.06,0.07,0.1],start=0,duration=D)
 rows=[("BOUNCE","bounce in from above, then shake",-340,-200,0.0),("ELASTIC","elastic spring",340,-200,0.5),("WHIP","whip in fast",-340,0,1.0),("SPIN","spin in",340,0,1.5),("SLAM","slam punch",-340,200,2.0),("HEART","heartbeat",340,200,2.5)]
 out=[]

@@ -24,7 +24,7 @@ fn build_ocio() {
     let include = std::env::var("OCIO_INCLUDE_DIR").expect("native-ocio requires OCIO_INCLUDE_DIR (OCIO 2 headers)");
     let lib = std::env::var("OCIO_LIB_DIR").expect("native-ocio requires OCIO_LIB_DIR (shared OCIO 2 library)");
     cc::Build::new().cpp(true).std("c++17").include(include)
-        .file("src/color/ocio_native.cpp").compile("kino_ocio_native");
+        .file("src/color/ocio_native.cpp").compile("kimo_ocio_native");
     println!("cargo:rustc-link-search=native={lib}");
     println!("cargo:rustc-link-lib=dylib=OpenColorIO");
 }

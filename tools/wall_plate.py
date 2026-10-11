@@ -1,5 +1,5 @@
 # Synthetic wall plate with known camera motion (ground truth) for planar tracker testing.
-import sys,random,json,math; sys.path.insert(0,'/home/sandbox/kino/examples')
+import sys,random,json,math; sys.path.insert(0,'/home/sandbox/kimo/examples')
 from PIL import Image,ImageDraw,ImageFilter,ImageFont
 random.seed(4); W,H=1280,720
 im=Image.new('RGB',(W,H),(90,60,50)); d=ImageDraw.Draw(im)
