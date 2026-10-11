@@ -25,7 +25,7 @@ The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve
 - **MCP first.** Add a tool in the registry and it is in the MCP server, the fuzz test and the schema automatically.
 - **CPU, small memory.** The renderer is CPU only and tuned for a 2 GB machine. GPU code is off by default with a CPU fallback.
 - **Measured, not claimed.** Every "better than X" line in FEATURES.md has a stated baseline and a measured number, including the cases where we lost.
-- **Few entry points.** `tools/list` returns 17 grouped tools (16.7 KB) instead of 255 (185 KB), measured 11.1x smaller. Every individual tool is still callable by its own name.
+- **Few entry points.** `tools/list` returns 16 grouped tools (16.3 KB) instead of 255 (185 KB), measured 11.4x smaller. Every individual tool is still callable by its own name.
 - **Fuzzed.** 255 tools, 9359 calls, 0 failures, before anything is published.
 
 ## Quick start
