@@ -30,12 +30,15 @@ pub const GROUPS: &[Group] = &[
 pub fn group_of(n: &str) -> &'static str {
     const EXACT: &[(&str, &[&str])] = &[
         ("project", &["project_set", "import_media", "save_project", "load_project", "undo", "redo", "get_project", "ext_list"]),
+        ("tracking", &["fit_info"]),
         ("output", &["render_frame", "export", "export_alpha", "export_gif", "export_audio", "export_preset", "inspect_export_preset", "export_with_subtitles", "burn_in", "export_camera_solve", "export_grade_lut", "export_asc_cdl", "export_color_pipeline_lut", "set_ocio_view_delivery", "export_ocio_view_video", "export_high_bit", "export_aces2_reference_video", "render_float_tiff", "render_float_exr", "render_high_bit_still", "render_ocio_display_view", "render_aces2_reference"]),
         ("effects", &["list_effects", "add_effect", "set_effect_param", "remove_effect", "list_transitions", "add_transition", "set_effect_mask", "add_adjustment_layer", "set_echo", "set_posterize_time", "add_speed_lines", "add_glitch_confetti", "add_managed_linear_effect", "set_effect_encoding"]),
         ("masks", &["set_mask", "set_mask_keyframe", "remove_mask", "add_mask", "update_mask", "remove_mask_layer", "reorder_mask", "list_masks", "set_mask_prop_key", "set_mask_path_key", "roto_propagate", "set_track_matte", "remove_track_matte", "track_matte", "render_mask", "refine_matte"]),
         ("text", &["add_text", "set_text", "set_text_style", "add_text_animator", "set_animator_keyframe", "add_title", "set_text_weight", "set_text_path", "list_fonts", "import_srt", "add_captions", "list_captions", "set_caption_style", "edit_caption", "transcribe"]),
         ("graphics", &["add_shape", "add_path_shape", "set_path", "path_info", "add_path_key", "clear_path_keys", "add_shape_modifier", "list_shape_modifiers", "remove_shape_modifier", "add_modifier", "list_modifiers", "remove_modifier", "list_layer_styles", "set_layer_style", "remove_layer_style", "add_box_expand", "add_detection_box", "add_hud_frame", "add_counter", "add_prompt_box"]),
         ("vfx3d", &["add_scene3d", "add_shard_burst", "add_particles", "add_emitter", "shards_project", "set_light", "remove_light", "list_lights", "set_material", "list_materials", "remove_material", "set_relight", "preview_material", "simulate_physics"]),
+        ("color_science", &["evaluate_hlg_reference_display"]),
+        ("color_grade", &["preview_subject_match"]),
         ("scopes", &["get_scopes", "render_scope", "render_display_scope", "analyze_exposure", "analyze_exposure_sequence", "render_exposure_false_color", "render_gamut_excursions", "measure_loudness", "analyze_color", "inspect_grade_scopes", "set_grade_scopes"]),
         ("audio", &["set_audio", "set_audio_volume_key", "set_audio_pan", "add_audio_effect", "remove_audio_effect", "normalize_loudness", "auto_duck", "detect_beats", "add_audio_clip"]),
         ("animate", &["set_property", "set_keyframe", "set_keyframe_bezier", "set_expression", "get_curve", "move_key", "remove_key", "copy_curve", "simplify_curve", "smooth_curve", "set_motion_path", "remove_motion_path", "apply_motion_preset", "set_motion_blur", "set_flow_blur", "render_flow", "add_camera_shake", "motion_extract", "motion_diff", "bind_beats", "track_beats", "set_corner_pin", "set_mesh_pin", "set_blend", "set_camera", "set_camera_keyframe"]),
@@ -93,12 +96,14 @@ pub fn search(q: &str, limit: usize) -> Value {
     let mut words: Vec<String> = q.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty()).map(|w| w.to_string()).collect();
     let kept: Vec<String> = words.iter().filter(|w| !STOP.contains(&w.to_lowercase().as_str())).cloned().collect(); if !kept.is_empty() { words = kept; }
     let words: Vec<String> = words.iter().map(|w| stem(w)).collect();
+    fn alts<'a>(w: &'a str) -> Vec<&'a str> { let mut v = vec![w]; match w { "slow" | "slowmo" | "fast" => v.push("speed"), "shatter" | "break" | "smash" => { v.push("fracture"); v.push("shard"); } "green" | "greenscreen" => { v.push("chroma"); v.push("key"); } "shake" | "shaky" => { v.push("stabilize"); v.push("shake"); } "fade" => { v.push("volume"); v.push("opacity"); } "subtitle" => v.push("caption"), "cut" => { v.push("split"); v.push("trim"); } _ => {} } v }
     let mut hits: Vec<(usize, usize, &Command)> = reg().iter().filter_map(|c| {
         let nm = c.name.to_lowercase(); let ds = c.description.to_lowercase();
         let args: String = c.schema.get("properties").and_then(|p| p.as_object()).map(|o| o.iter().map(|(k, v)| format!("{} {}", k, v.get("description").and_then(|d| d.as_str()).unwrap_or(""))).collect::<Vec<_>>().join(" ").to_lowercase()).unwrap_or_default();
         let arg_names: String = c.schema.get("properties").and_then(|p| p.as_object()).map(|o| o.keys().cloned().collect::<Vec<_>>().join(" ").to_lowercase()).unwrap_or_default();
         let (mut sc, mut matched) = (0usize, 0usize);
-        for w in &words { let w = w.as_str(); let mut m = 0; if nm.contains(w) { m = 3; } else if arg_names.contains(w) { m = 2; } else if ds.contains(w) || args.contains(w) { m = 1; } if m > 0 { sc += m; matched += 1; } }
+        let toks: Vec<&str> = nm.split('_').collect();
+        for w in &words { let mut m = 0; for a in alts(w.as_str()) { let v = if toks.iter().any(|t| *t == a || stem(t) == a) { 4 } else if nm.contains(a) { 3 } else if arg_names.contains(a) { 2 } else if ds.contains(a) || args.contains(a) { 1 } else { 0 }; m = m.max(v); } if m > 0 { sc += m; matched += 1; } }
         if matched > 0 { Some((matched, sc, c)) } else { None } }).collect();
     hits.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)).then(a.2.name.cmp(b.2.name)));
     json!({"matches": hits.iter().take(limit.clamp(1, 50)).map(|(_, _, c)| json!({"group": group_of(c.name), "action": c.name, "summary": first_sentence(c.description)})).collect::<Vec<_>>(), "total": hits.len()})
@@ -107,7 +112,7 @@ pub fn search(q: &str, limit: usize) -> Value {
 pub fn describe(args: &Value) -> Result<Value, String> {
     if let Some(a) = args.get("action").and_then(|v| v.as_str()) {
         let c = reg().iter().find(|c| c.name == a).ok_or_else(|| format!("unknown action '{a}'; try kimo_search"))?;
-        return Ok(json!({"group": group_of(c.name), "action": c.name, "description": c.description, "mutates": c.mutates, "args_schema": c.schema, "call": {"tool": group_of(c.name), "arguments": {"action": c.name, "args": "{...per args_schema}"}}}));
+        return Ok(json!({"group": group_of(c.name), "action": c.name, "description": c.description, "mutates": c.mutates, "args_schema": enrich(c.schema.clone()), "call": {"tool": group_of(c.name), "arguments": {"action": c.name, "args": "{...per args_schema}"}}}));
     }
     if let Some(g) = args.get("group").and_then(|v| v.as_str()) {
         let gi = GROUPS.iter().find(|x| x.name == g).ok_or_else(|| format!("unknown group '{g}'; groups: {}", GROUPS.iter().map(|x| x.name).collect::<Vec<_>>().join(", ")))?;
@@ -140,4 +145,16 @@ pub fn search_catalog(q: &str, effects: &Value, transitions: &Value, limit: usiz
         if sc > 0 { out.push((sc, json!({"type": "effect", "kind": e["kind"], "summary": e["description"], "use": format!("effects/add_effect with kind=\"{}\"", kind)}))); } }
     for t in transitions.as_array().into_iter().flatten() { let n = t.as_str().unwrap_or("").to_lowercase(); if words.iter().any(|w| n.contains(w.as_str())) { out.push((3, json!({"type": "transition", "kind": n, "use": format!("effects/add_transition with kind=\"{}\"", n)}))); } }
     out.sort_by(|a, b| b.0.cmp(&a.0)); out.into_iter().take(limit).map(|x| x.1).collect()
+}
+
+/// Fills in the shape of colour arguments, which many tools take as plain arrays with no description. Only facts verified in the
+/// code are added (colours are [r,g,b] or [r,g,b,a] floats in 0..1); other untyped arguments are left as they are.
+fn enrich(mut schema: Value) -> Value {
+    if let Some(props) = schema.get_mut("properties").and_then(|p| p.as_object_mut()) {
+        for (k, v) in props.iter_mut() {
+            let is_color = k.contains("color") || matches!(k.as_str(), "accent" | "albedo" | "emissive");
+            if is_color && v.get("type").and_then(|t| t.as_str()) == Some("array") && v.get("description").is_none() { v["description"] = json!("color [r,g,b] or [r,g,b,a], floats 0..1"); }
+        }
+    }
+    schema
 }
