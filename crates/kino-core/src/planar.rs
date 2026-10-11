@@ -293,10 +293,11 @@ fn build_seq(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f64) -> Op
     let (w, h) = (sp.w, sp.h); let n = ((c.duration * fps).ceil() as usize).clamp(1, 4000); let t_of = |i: usize| sp.src_start + (sp.f0 + i) as f64 / fps - c.start;
     let q0 = pin_quad(c, t_of(0).max(0.0))?; let len = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
     let (lw, lh) = ((len(q0[0], q0[1]) + len(q0[3], q0[2])) / 2.0, (len(q0[0], q0[3]) + len(q0[1], q0[2])) / 2.0); let pw = 256usize; let ph = ((pw as f64 * lh / lw.max(1.0)).round() as usize).clamp(48, 512);
-    let mut child = std::process::Command::new("ffmpeg").args(["-v", "error", "-ss", &format!("{:.6}", sp.src_time), "-i", &sp.path, "-vf", &format!("setpts=PTS/{},fps={},scale={}:{}", sp.speed.max(0.01), fps, w, h), "-frames:v", &n.to_string(), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
+    let mut child = std::process::Command::new("ffmpeg").args(["-v", "error", "-ss", &format!("{:.6}", sp.src_time), "-i", &sp.path, "-vf", &if sp.ramp.is_empty() { format!("setpts=PTS/{},fps={},scale={}:{}", sp.speed.max(0.01), fps, w, h) } else { format!("fps={},scale={}:{}", fps, w, h) }, "-frames:v", &n.to_string(), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
     let mut out = child.stdout.take()?; let mut buf = vec![0u8; w * h * 4]; let mut mats: Vec<Vec<u8>> = vec![]; let mut model: Vec<f32> = vec![]; use std::io::Read;
     let (lo, hi) = (0.07 / sp.soft.max(0.2), 0.16 / sp.soft.max(0.2));
-    for i in 0..n { if out.read_exact(&mut buf).is_err() { break; } crate::guard::check();
+    let mut cur: i64 = -1;
+    'o: for i in 0..n { if !sp.ramp.is_empty() { let idx = ((sp.ramp[(sp.f0 + i).min(sp.ramp.len() - 1)] * fps) as i64).max(0); while cur < idx { if out.read_exact(&mut buf).is_err() { break 'o; } cur += 1; } } else if out.read_exact(&mut buf).is_err() { break; } crate::guard::check();
         let q = match pin_quad(c, t_of(i).max(0.0)) { Some(q) => q, None => break }; let m8 = crate::shards::sq2quad([(q[0][0], q[0][1]), (q[1][0], q[1][1]), (q[2][0], q[2][1]), (q[3][0], q[3][1])]);
         let mut rect = vec![0f32; pw * ph * 3]; for y in 0..ph { for x in 0..pw { let (px, py) = crate::shards::hmap(&m8, (x as f64 + 0.5) / pw as f64, (y as f64 + 0.5) / ph as f64); let (px, py) = (px.clamp(0.0, w as f64 - 1.001), py.clamp(0.0, h as f64 - 1.001)); let (ix, iy) = (px as usize, py as usize); let (fx, fy) = ((px - ix as f64) as f32, (py - iy as f64) as f32);
             for j in 0..3 { let s = |xx: usize, yy: usize| buf[(yy * w + xx) * 4 + j] as f32 / 255.0; rect[(y * pw + x) * 3 + j] = s(ix, iy) * (1.0 - fx) * (1.0 - fy) + s(ix + 1, iy) * fx * (1.0 - fy) + s(ix, iy + 1) * (1.0 - fx) * fy + s(ix + 1, iy + 1) * fx * fy; } } }
@@ -327,7 +328,8 @@ fn build_seq(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f64) -> Op
             let d = win(&occ, true); occ = win(&d, false); }
         // dilate the occluder by 2 plane px before deciding what may update the model, so soft finger edges never leak into it
         let mut upd = vec![0f32; pw * ph]; for y in 0..ph { for x in 0..pw { let mut mx = 0f32; for dy in -2i32..=2 { for dx in -2i32..=2 { let (xx, yy) = ((x as i32 + dx).clamp(0, pw as i32 - 1) as usize, (y as i32 + dy).clamp(0, ph as i32 - 1) as usize); mx = mx.max(occ[yy * pw + xx]); } } upd[y * pw + x] = mx; } }
-        for k in 0..pw * ph { let a = (1.0 - 0.65f32.powf(sp.speed.clamp(0.01, 4.0) as f32)) * (1.0 - upd[k]); for j in 0..3 { model[k * 3 + j] += (rect[k * 3 + j] - model[k * 3 + j]) * a; } }
+        let spd = if sp.ramp.is_empty() { sp.speed as f32 } else { let k = (sp.f0 + i).min(sp.ramp.len() - 1); let k2 = (k + 1).min(sp.ramp.len() - 1); ((sp.ramp[k2] - sp.ramp[k]) * fps) as f32 };
+        for k in 0..pw * ph { let a = (1.0 - 0.65f32.powf(spd.clamp(0.01, 4.0) as f32)) * (1.0 - upd[k]); for j in 0..3 { model[k * 3 + j] += (rect[k * 3 + j] - model[k * 3 + j]) * a; } }
         mats.push(occ.iter().map(|&o| ((1.0 - o) * 255.0).round() as u8).collect()); }
     if sp.temporal > 0 && mats.len() > 2 { let r = sp.temporal; let src = mats.clone(); let nn = src.len(); for i in 0..nn { let (a, b) = (i.saturating_sub(r), (i + r).min(nn - 1)); let mut win = vec![0u8; b - a + 1]; for k in 0..mats[i].len() { for (t, f) in (a..=b).enumerate() { win[t] = src[f][k]; } win.sort_unstable(); mats[i][k] = win[win.len() / 2]; } } }
     let _ = child.kill(); let _ = child.wait(); if mats.is_empty() { None } else { Some(MatteSeq { pw, ph, mats }) }
