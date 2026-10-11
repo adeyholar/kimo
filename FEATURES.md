@@ -334,3 +334,6 @@ fracture_glass v1.1 (BETA): ring budget planner (rings always reach the frame ed
 - Measured (2 vCPU, 1080p30, 4 s project: image background with vignette+grain and 6 text layers, crf 0): full export 42.2 s to 32.0 s (1.32x); a 1 s range export takes 8.6 s.
 - Per-frame cost is still dominated by full-frame float layers and the x264 encode; a static-layer cache is designed but NOT built (needs strict invalidation for time-varying effects and hash-verification against uncached output).
 fracture_glass v1.1.1: far slab face now shares face_opacity (it was an opaque grey polygon behind translucent faces), more ring jitter so the outer pane stops reading concentric.
+
+## add_acescct_primaries (ACEScct primaries) - BETA
+Native AP1 to ACEScct to AP1 sandwich with per-channel primaries and an inverse, neutral identity, bound gamut 3. Explicit documented formula, NOT Resolve LGG parity. Conflict guard runs before the OCIO domain wrapper dispatch (v2: no double-domain interpretation) with an atomic rejection test. COLOR's proof: known math and inverse, real OCIO reference within 2e-6, determinism, neutral bit-exact incl. signed zero and HDR alpha. Reviewed here: build, cct_grade test, fuzz 169 tools / 6555 calls / 0 failures.

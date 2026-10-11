@@ -7,6 +7,7 @@ pub(crate) mod frame;
 pub mod curves;
 pub mod lut;
 pub mod bake;
+pub mod cct_grade;
 pub mod scopes;
 pub mod scope_image;
 pub mod scope_command;
@@ -84,6 +85,7 @@ pub fn catalog3() -> &'static [Entry] {
         v.extend(linear::catalog());
         v.extend(shoulder::catalog());
         v.extend(finish::catalog());
+        v.extend(cct_grade::catalog());
         v.extend(printstock::catalog());
         v.extend(denoise::catalog());
         v.extend(adaptation::catalog());

@@ -550,3 +550,29 @@ saturation~6.7->5.2ms (~1.29x). Separate patched1worker comparisons included.
 Exact rawRGBAfloat SHA256 matches prepatch/patched1/patched8 for all4paths.
 Timing is thisbox/thisfixture, includes existingpreflight/clone work, excludes
 filewrites, no realtime/crosshardwarepromise. LUTfirstcall parse slower thanwarm.
+
+## Native ACEScct lift/gamma/gain/offset
+
+`add_acescct_primaries` adds an opt-in effect to managed AP1/D60 scene-linear
+clips (working_gamut3). Required: clip_id, config_path, linear_space, cct_space.
+Caller declares the config's AP1linear/ACEScctspaces; names alone are not encoding
+proof. NativeOCIO2 required, self-containedconfigs. No defaults/outputchanges.
+
+Numeric params: lift_r/g/b(default0, -1..1exclusive), gamma_r/g/b(default1,
+0.1..10), gain_r/g/b(default1,0.01..10), offset_r/g/b(default0,+-1), inverse0/1.
+Exact Kino formula in encodedACEScct: y=signedpow(x+lift*(1-x),1/gamma)*gain+offset.
+Inverse: x=(signedpow((y-offset)/gain,gamma)-lift)/(1-lift).
+This black-pivot/white-anchor lift, signedgamma, gain thenoffset is explicit,
+NOT a promise of Resolve/Baselight wheel semantics or perceptual hue preservation.
+Neutral controls are bit-exact identity after config/processor validation.
+
+RealOCIO convertsAP1->ACEScct beforegrade, ACEScct->AP1after. Alpha unchanged;
+invalid parameters/config and nonfinite/overflow outputs fail transactionally.
+Boundlinear gamut3 prevents staleprojectworkingdomain use. Separate encoding or
+OCIOdomain wrappers rejected; effect owns its sandwich. Config reloaded/recompiled
+percall (not cached/throughput-qualified). RGBnotclipped, laterdeliverymayclip.
+
+Knowninputs include signed/toe/HDRsamples; independentLGG math verified to2e-6,
+forward/inverse to2e-5 float tolerances, repeatedoutputstable. ActualSDRfootage
+explicitlydecoded sRGB->AP1, graded, viewed through officialnativeACES2sRGBview;
+before/afterpixels visually inspected. No camera/HDR/displaycertification.
