@@ -699,3 +699,9 @@ Measurements: 100001point shoulder sweep0..10 monotone/bounded, maxf32rounding
 Seed-repeat exact, transparent pixels/alpha/zeroamount exactidentity. Grain
 sampling error is stochastic evidence, not an all-image occupancy guarantee.
 No calibrated stock, ACES/look superiority or display certification claim.
+
+## Gap #3: shape modifiers, layer styles, typed modifiers (all MCP)
+- `add_modifier` / `list_modifiers` / `remove_modifier`: wiggle (per-layer derived seed), loop, bounce, overshoot on any property.
+- `add_shape_modifier` / `remove_shape_modifier` / `list_shape_modifiers`: trim paths, repeater, offset paths, merge paths, gradient stroke (shape_* effects, keyframable).
+- `set_layer_style` / `remove_layer_style` / `list_layer_styles`: inner shadow, bevel, stroke (inside/center/outside).
+- Proof: `python3 tests/gap3_proof.py`.

@@ -32,6 +32,10 @@ pub enum Op {
     Clamp { min: f64, max: f64 },
     /// Quantize the value to multiples of `step`.
     Round { step: f64 },
+    /// Rebound after the LAST key: value springs back toward the previous value, |sin| bounces with exponential decay. amp ~0.3 of the last segment's delta.
+    Bounce { amp: f64, freq: f64, decay: f64 },
+    /// Spring overshoot past EVERY key (proper damped spring on the segment delta): amp as a fraction of the delta.
+    Overshoot { amp: f64, freq: f64, decay: f64 },
 }
 fn d_oct() -> u32 { 1 }
 fn hash(mut x: u64) -> f64 { x = x.wrapping_add(0x9E3779B97F4A7C15); x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9); x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 31; (x >> 11) as f64 / (1u64 << 53) as f64 }
@@ -61,6 +65,8 @@ impl Prop {
             Op::Inertia { amp, freq, decay } => { for w in self.keys.windows(2).map(|w| (w[0].t, w[0].v, w[1].t, w[1].v)).chain(std::iter::empty()) { let (_, _, tb, vb) = w; if tt > tb { let _ = vb; } }
                 // spring after each key based on the velocity of the segment arriving at it
                 for i in 1..self.keys.len() { let (ta, va, tb, vb) = (self.keys[i - 1].t, self.keys[i - 1].v, self.keys[i].t, self.keys[i].v); if tt > tb { let vel = (vb - va) / (tb - ta).max(1e-6); let dt = tt - tb; v += amp * vel * 0.1 * (-decay * dt).exp() * (std::f64::consts::TAU * freq * dt).sin() / (std::f64::consts::TAU * freq).max(1e-6) * 10.0; } } }
+            Op::Bounce { amp, freq, decay } => { let n = self.keys.len(); if n >= 2 { let (ta, va, tb, vb) = (self.keys[n - 2].t, self.keys[n - 2].v, self.keys[n - 1].t, self.keys[n - 1].v); let _ = ta; if tt > tb { let dt = tt - tb; v -= (vb - va) * amp * (-decay * dt).exp() * (std::f64::consts::TAU * freq * dt).sin().abs(); } } }
+            Op::Overshoot { amp, freq, decay } => { for i in 1..self.keys.len() { let (va, tb, vb) = (self.keys[i - 1].v, self.keys[i].t, self.keys[i].v); if tt > tb { let dt = tt - tb; v += (vb - va) * amp * (-decay * dt).exp() * (std::f64::consts::TAU * freq * dt).sin(); } } }
             Op::Clamp { min, max } => v = v.clamp(*min, *max),
             Op::Round { step } => if *step > 0.0 { v = (v / step).round() * step },
             _ => {} } }

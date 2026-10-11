@@ -240,14 +240,13 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         Source::Precomp { tracks } => { let mut sub = Project { ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: tracks.clone(), assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 }; sub.name = c.id.clone(); match render_frame_opts(&sub, lt, cache, true) {Ok(fr)=>f=fr,Err(_)=>f.d.fill(f32::NAN)} }
         Source::Shape { shape, width, height, fill, stroke_width, stroke_color, sides, corner_radius } => {
             let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0); let (hw, hh) = (width / 2.0, height / 2.0);
-            // signed distance (negative inside)
-            let sd = |x: f64, y: f64| -> f64 { let (px, py) = (x - cx, y - cy); match shape.as_str() {
-                "ellipse" => { let k = ((px / hw).powi(2) + (py / hh).powi(2)).sqrt(); (k - 1.0) * hw.min(hh) }
-                "polygon" => { let n = (*sides).max(3) as f64; let r = hw.min(hh); let a = py.atan2(px) + std::f64::consts::FRAC_PI_2; let seg = std::f64::consts::TAU / n; let aa = (a.rem_euclid(seg)) - seg / 2.0; (px * px + py * py).sqrt() * aa.cos() - r * (seg / 2.0).cos() }
-                "line" => (py.abs() - hh.max(1.0)).max(px.abs() - hw),
+            // signed distance (negative inside), then shape modifiers (offset/repeater/merge) from shapemods.rs
+            let base = |x: f64, y: f64| -> f64 { let (px, py) = (x - cx, y - cy); match shape.as_str() {
+                "ellipse" | "polygon" | "line" => crate::shapemods::sd(shape, *sides, hw, hh, *corner_radius, px, py),
                 _ => { let (qx, qy) = (px.abs() - hw + corner_radius, py.abs() - hh + corner_radius); (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - corner_radius } } };
+            let stack = crate::shapemods::build(&c.effects, base, cx, cy, lt); let sd = |x: f64, y: f64| (stack.dist)(x, y);
             for y in 0..h { for x in 0..w { let d = sd(x as f64 + 0.5, y as f64 + 0.5); let inside = (0.5 - d).clamp(0.0, 1.0); if inside <= 0.0 && *stroke_width <= 0.0 { continue; }
-                let sk = if *stroke_width > 0.0 { (0.5 - (d.abs() - stroke_width / 2.0)).clamp(0.0, 1.0) } else { 0.0 }; let fl = if fill[0] < 0.0 { 0.0 } else if *stroke_width > 0.0 { (0.5 - (d + stroke_width / 2.0)).clamp(0.0, 1.0) } else { inside };
+                let sk = if *stroke_width > 0.0 { (0.5 - (d.abs() - stroke_width / 2.0)).clamp(0.0, 1.0) * stack.trim_gate(x as f64 + 0.5 - cx, y as f64 + 0.5 - cy) } else { 0.0 }; let stroke_color = &stack.stroke_color(x as f64 + 0.5 - cx, y as f64 + 0.5 - cy, *width, *height, *stroke_color); let fl = if fill[0] < 0.0 { 0.0 } else if *stroke_width > 0.0 { (0.5 - (d + stroke_width / 2.0)).clamp(0.0, 1.0) } else { inside };
                 let i = (y * w + x) * 4; let a = (fl + sk * (1.0 - fl)).clamp(0.0, 1.0); if a <= 0.0 { continue; }
                 for j in 0..3 { f.d[i + j] = ((fill[j] * fl + stroke_color[j] * sk * (1.0 - fl)) / a) as f32; } f.d[i + 3] = a as f32; } }
         }
