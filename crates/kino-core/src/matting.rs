@@ -66,13 +66,15 @@ pub fn matte(img: &[f32], trimap: &[u8], w: usize, h: usize, o: &Opts) -> Matte 
     // colour-distance sanity bounds from the local background model: a pixel that is nearly background colour cannot be solid foreground,
     // and one far from it cannot be mostly background. Kills wall residue and holes the sampler gets wrong when F and B are similar.
     let bgm0: Vec<bool> = trimap.iter().map(|&t| t == 0).collect(); let model0 = bg_model(img, &bgm0, w, h, 40);
-    if o.bg_bounds { for i in 0..n { if trimap[i] == 128 { let d = ((img[i * 3] - model0[i * 3]).powi(2) + (img[i * 3 + 1] - model0[i * 3 + 1]).powi(2) + (img[i * 3 + 2] - model0[i * 3 + 2]).powi(2)).sqrt(); let ceil = ((d - 0.02) / 0.06).clamp(0.0, 1.0); let floor = ((d - 0.08) / 0.12).clamp(0.0, 1.0); alpha[i] = alpha[i].min(ceil).max(floor); } } }
+    if o.bg_bounds { for i in 0..n { if trimap[i] == 128 { let d = cdist([img[i * 3], img[i * 3 + 1], img[i * 3 + 2]], [model0[i * 3], model0[i * 3 + 1], model0[i * 3 + 2]]); let ceil = ((d - 0.02) / 0.06).clamp(0.0, 1.0); let floor = ((d - 0.08) / 0.12).clamp(0.0, 1.0); alpha[i] = alpha[i].min(ceil).max(floor); } } }
     // decontaminate: F = (C - (1-a) B) / a with B = local background model from the sure-background pixels; opaque pixels keep their colour
     let bgm: Vec<bool> = trimap.iter().map(|&t| t == 0).collect(); let model = bg_model(img, &bgm, w, h, 40);
     for i in 0..n { if trimap[i] == 255 || alpha[i] > 0.98 { for c in 0..3 { fg[i * 3 + c] = img[i * 3 + c]; } } else if trimap[i] == 128 { let a = alpha[i].max(0.08); let mut dec = [0f32; 3]; for c in 0..3 { let f = ((img[i * 3 + c] - (1.0 - alpha[i]) * model[i * 3 + c]) / a).clamp(0.0, 1.0); dec[c] = f; } let sm = [fg[i * 3], fg[i * 3 + 1], fg[i * 3 + 2]]; let dd = ((dec[0] - sm[0]).powi(2) + (dec[1] - sm[1]).powi(2) + (dec[2] - sm[2]).powi(2)).sqrt(); let t = (1.0 - (dd - 0.1) / 0.15).clamp(0.0, 1.0); for c in 0..3 { fg[i * 3 + c] = dec[c] * t + sm[c] * (1.0 - t); } } }
     Matte { alpha, fg, unknown, trimap: trimap.to_vec() }
 }
 
+/// Colour distance that weights chroma 2.5x over luminance, so a shadowed pale garment is not mistaken for a pink wall of similar brightness.
+pub fn cdist(a: [f32; 3], b: [f32; 3]) -> f32 { let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; let y = 0.299 * d[0] + 0.587 * d[1] + 0.114 * d[2]; let c = [d[0] - y, d[1] - y, d[2] - y]; (y * y + 6.25 * (c[0] * c[0] + c[1] * c[1] + c[2] * c[2])).sqrt() }
 /// Local background colour model by normalised convolution of the pixels where `mask` is true (radius `r`). Pixels with no nearby
 /// support fall back to the global mean of the masked pixels.
 pub fn bg_model(img: &[f32], mask: &[bool], w: usize, h: usize, r: usize) -> Vec<f32> {
@@ -89,7 +91,7 @@ pub fn auto_background(img: &[f32], seed: &[f32], w: usize, h: usize, band: usiz
     let n = w * h; let tri = trimap_from_alpha(seed, w, h, band); let bgm: Vec<bool> = tri.iter().map(|&t| t == 0).collect();
     if !bgm.iter().any(|&b| b) { return (seed.to_vec(), 0); }
     let model = bg_model(img, &bgm, w, h, 70);
-    let like: Vec<bool> = (0..n).map(|i| { let d = ((img[i * 3] - model[i * 3]).powi(2) + (img[i * 3 + 1] - model[i * 3 + 1]).powi(2) + (img[i * 3 + 2] - model[i * 3 + 2]).powi(2)).sqrt(); d < thr }).collect();
+    let like: Vec<bool> = (0..n).map(|i| { let d = cdist([img[i * 3], img[i * 3 + 1], img[i * 3 + 2]], [model[i * 3], model[i * 3 + 1], model[i * 3 + 2]]); d < thr }).collect();
     // erode by 1 px so thin colour-matching bridges do not leak into the subject
     let er: Vec<bool> = (0..n).map(|i| { let (x, y) = (i % w, i / w); if !like[i] { return false; } for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] { let (xx, yy) = (x as i32 + dx, y as i32 + dy); if xx < 0 || yy < 0 || xx >= w as i32 || yy >= h as i32 { continue; } if !like[yy as usize * w + xx as usize] { return false; } } true }).collect();
     let mut out = seed.to_vec(); let mut stack: Vec<usize> = vec![]; let mut seen = vec![false; n];
