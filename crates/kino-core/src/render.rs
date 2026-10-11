@@ -479,7 +479,7 @@ pub fn export_alpha(p: &Project, path: &str, format: &str, t_in: f64, t_out: f64
     let f0 = (t_in * p.fps).round() as usize; let f1 = ((t_out * p.fps).round() as usize).max(f0 + 1); let n = f1 - f0;
     let mut cmd = Command::new("ffmpeg"); cmd.args(["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{}x{}", p.width, p.height), "-r", &p.fps.to_string(), "-i", "-"]);
     match format {
-        "prores4444" => { if !path.ends_with(".mov") { return Err("prores4444 path must end in .mov".into()); } cmd.args(["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", "-vendor", "apl0", path]); }
+        "prores4444" => { if !path.ends_with(".mov") { return Err("prores4444 path must end in .mov".into()); } cmd.args(["-vf", "scale=in_range=pc:out_color_matrix=bt709:out_range=tv,format=yuva444p10le", "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", "-alpha_bits", "16", "-vendor", "apl0", "-color_range", "tv", "-color_primaries", "bt709", "-color_trc", "iec61966-2-1", "-colorspace", "bt709", "-bsf:v", "prores_metadata=color_primaries=bt709:color_trc=13:colorspace=bt709", "-movflags", "+write_colr", path]); }
         "webm" => { if !path.ends_with(".webm") { return Err("webm path must end in .webm".into()); } cmd.args(["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-crf", "18", "-b:v", "0", path]); }
         "png" => { if !path.contains('%') { return Err("png path must be a pattern such as /dir/frame_%05d.png".into()); } cmd.args(["-c:v", "png", "-pix_fmt", "rgba", path]); }
         _ => return Err("format must be prores4444, webm or png".into()),

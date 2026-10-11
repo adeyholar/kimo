@@ -44,7 +44,7 @@ Command { name: "export_preset", description: "Export with a named preset: web-1
                 if ok { std::fs::rename(&tmp, path).map_err(|e| e.to_string())?; } else { let _ = std::fs::remove_file(&tmp); }
                 Ok(json!({"path":path,"duration":d,"preset":preset,"output_size":[w,h]})) }
             "alpha-prores" => { check_ext(path, ".mov")?; if p.color_pipeline.enabled { return Err("alpha-prores supports the display-sRGB Rec709 project only for now; disable the managed color pipeline".into()); }
-                let mut cmd = Cmd::new("ffmpeg"); cmd.args(["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{}x{}", p.width, p.height), "-r", &p.fps.to_string(), "-i", "-", "-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", "yuva444p10le", "-alpha_bits", "16", "-vendor", "apl0", "-color_primaries", "bt709", "-color_trc", "iec61966-2-1", "-colorspace", "bt709", path]);
+                let mut cmd = Cmd::new("ffmpeg"); cmd.args(["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{}x{}", p.width, p.height), "-r", &p.fps.to_string(), "-i", "-", "-vf", "scale=in_range=pc:out_color_matrix=bt709:out_range=tv,format=yuva444p10le", "-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", "yuva444p10le", "-alpha_bits", "16", "-vendor", "apl0", "-color_range", "tv", "-color_primaries", "bt709", "-color_trc", "iec61966-2-1", "-colorspace", "bt709", "-bsf:v", "prores_metadata=color_primaries=bt709:color_trc=13:colorspace=bt709", "-movflags", "+write_colr", path]);
                 let d = crate::render::export_range_cmd(p, path, f0, f1, cmd, true, false)?; Ok(json!({"path":path,"duration":d,"preset":preset})) }
             _ => Err("unknown preset".into()),
         } } },
