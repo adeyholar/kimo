@@ -3,6 +3,7 @@
 //! Every tool call runs on a worker thread under the sandbox layer (kimo_core::guard): argument sanitizer, project limits with
 //! rollback, memory budget, panic catching, and a wall-clock time limit with cooperative cancel (hard exit as the last resort).
 use kimo_core::commands::{dispatch, registry, Session};
+use kimo_core::toolgroups;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::sync::{mpsc, Arc, Mutex};
@@ -50,11 +51,21 @@ fn main() {
         let result: Option<Result<Value, (i64, String)>> = match method {
             "initialize" => Some(Ok(json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"kimo","version":env!("CARGO_PKG_VERSION")}}))),
             "ping" => Some(Ok(json!({}))),
-            "tools/list" => Some(Ok(json!({"tools": registry().iter().map(|c| json!({"name":c.name,"description":c.description,"inputSchema":c.schema})).collect::<Vec<_>>()}))),
+            "tools/list" => {
+                // grouped by default (about 16 entry points); mode "flat" or KIMO_TOOLS=flat lists every tool. Every tool stays callable by name either way.
+                let flat = params.get("mode").and_then(|v| v.as_str()).map(|m| m == "flat").unwrap_or_else(|| std::env::var("KIMO_TOOLS").map(|v| v == "flat").unwrap_or(false));
+                Some(Ok(json!({"tools": if flat { registry().iter().map(|c| json!({"name":c.name,"description":c.description,"inputSchema":c.schema})).collect::<Vec<_>>() } else { toolgroups::grouped_list() }})))
+            }
             "tools/call" => {
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
-                Some(Ok(run_guarded(&ss, name, &args, &mut out, &id)))
+                let text = |r: Result<Value, String>| match r { Ok(v) => json!({"content":[{"type":"text","text":serde_json::to_string(&v).unwrap()}],"isError":false}), Err(e) => json!({"content":[{"type":"text","text":e}],"isError":true}) };
+                Some(Ok(match name {
+                    "kimo_search" => text(Ok(toolgroups::search(args.get("query").and_then(|v| v.as_str()).unwrap_or(""), args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize))),
+                    "kimo_describe" => text(toolgroups::describe(&args)),
+                    n if toolgroups::is_group(n) => match toolgroups::resolve_group_call(n, &args) { Ok((a, ia)) => run_guarded(&ss, &a, &ia, &mut out, &id), Err(e) => text(Err(e)) },
+                    _ => run_guarded(&ss, name, &args, &mut out, &id),
+                }))
             }
             m if m.starts_with("notifications/") => None,
             _ => Some(Err((-32601, format!("method not found: {method}")))),

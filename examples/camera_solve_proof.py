@@ -50,7 +50,7 @@ def call(name, args):
     if r.get("isError"): raise SystemExit(f"{name} failed: {txt}")
     return json.loads(txt)
 rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "proof", "version": "0"}})
-names = [t["name"] for t in rpc("tools/list")["result"]["tools"]]
+names = [t["name"] for t in rpc("tools/list", {"mode": "flat"})["result"]["tools"]]
 for t in ["solve_camera", "camera_solve_info", "apply_camera_solve", "export_camera_solve", "list_camera_solves"]: assert t in names, f"{t} not exposed over MCP"
 call("project_set", {"width": W, "height": H, "fps": 24}); a = call("import_media", {"path": mp4})["asset_id"]; tr = call("add_track", {})["track_id"]
 cid = call("add_clip", {"track_id": tr, "source_type": "media", "asset_id": a, "start": 0, "duration": N / 24})["clip_id"]

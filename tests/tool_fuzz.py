@@ -19,7 +19,7 @@ def vals(sc):
     if "enum" in sc: return [sc["enum"][0]]
     return {"number": [0, -1, 1e12, 0.5], "integer": [0, -1, 2**40], "string": ["", "nope", "x" * 5000], "boolean": [True, False], "array": [[], [1, 2, 3], ["a"]], "object": [{}, {"a": 1}]}.get(t, [None, 0, "x"])
 def main():
-    s = S(); tools = s.rpc("tools/list", {})["result"]["tools"]; bad = []; n = 0
+    s = S(); tools = s.rpc("tools/list", {"mode": "flat"})["result"]["tools"]; bad = []; n = 0
     def ok(n, **a):
         r = s.rpc("tools/call", {"name": n, "arguments": a}); return json.loads(r["result"]["content"][0]["text"])
     ids = {}
