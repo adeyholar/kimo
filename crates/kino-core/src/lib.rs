@@ -5,6 +5,8 @@ pub mod ext;
 pub mod shapemods;
 pub mod layerstyles;
 pub mod lighting;
+pub mod sfm;
+pub mod matting;
 pub mod matte;
 pub mod keyframe;
 pub mod hud;
