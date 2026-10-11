@@ -810,3 +810,7 @@ nonlinear grades. Node RGB-only semantics preserve first-input alpha exactly;
 this differs from alpha-blurring clip blur. Node masks blend after spatial op,
 not before. Radius0..512, sharpenamount0..3 evaluated-time guards; effect scratch
 still under globalmemory budget, not included in node cachedframecap.
+
+## validate_planar_track (BETA, read-only diagnostic)
+Re-tracks a plane from N independent anchor frames (each template built from the base track's own quad at that frame) and reports per-frame, per-corner px disagreement vs the base track (p50/p95/max, first flagged frame, full per-frame arrays for export). Measured on the licensed city plate (Mixkit 49844, 4 s, SHOWCASE fixture): base track confidence min 0.73 / mean 0.85, zero lost frames, yet anchored re-tracks disagree 0.9 px at frame 30, 3.2 at 40, 17.5 at 60, 46.8 at 90 (p95 47.6, 57 of 75 checked frames over 3 px; 14 s for 100 frames). So a high-confidence track is flagged as unreliable. Usage: tests/validate_track_real_plate.py <plate.mp4>.
+Honest limits: disagreement proves unreliability but does not say which track is right; agreement does NOT prove pixel lock (all anchors can share the same wrong, identical window); only forward re-tracks, no reverse or line-convergence constraint yet; this is a detector, not a better tracker. Constrained feature identities, hold-out patches and line constraints are not built.
