@@ -59,6 +59,7 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
 ];
 
 pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f: &mut Frame, t: f64, seed: u64) -> Result<(), String> {
+    if strings.contains_key("ocio_domain") {return crate::color::effect_domain::apply(kind,params,strings,f,t,seed)}
     if strings.contains_key("wrapper_working_gamut") {return crate::color::wrapper::apply(kind,params,strings,f,t,seed)}
     match kind {
         "exposure" => { let g = 2f32.powf(p(params, "stops", 0.0, t)); px(f, |c| [c[0]*g, c[1]*g, c[2]*g]); }

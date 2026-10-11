@@ -11,3 +11,10 @@ serde_json = "1"
 tiff = "0.10"
 
 exr = "1.74"
+
+[features]
+default = []
+native-ocio = []
+
+[build-dependencies]
+cc = "1"

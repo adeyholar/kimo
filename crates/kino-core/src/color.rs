@@ -199,3 +199,7 @@ pub fn apply3(kind: &str, pr: &Params, f: &mut Frame, t: f64, _seed: u64) -> Res
     if f.d.iter().any(|v| !v.is_finite()) { return Err(format!("color effect '{kind}' produced nonfinite pixels; reduce extreme parameters")); }
     Ok(())
 }
+
+#[cfg(feature = "native-ocio")]
+pub mod ocio_config;
+pub mod effect_domain;
