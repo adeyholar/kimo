@@ -32,6 +32,7 @@ pub mod exposure;
 pub mod output_audit;
 pub mod shoulder;
 pub mod finish;
+pub mod film_response;
 pub mod printstock;
 pub mod denoise;
 pub mod subject_match;
@@ -89,6 +90,7 @@ pub fn catalog3() -> &'static [Entry] {
         v.extend(linear::catalog());
         v.extend(shoulder::catalog());
         v.extend(finish::catalog());
+        v.extend(film_response::catalog());
         v.extend(cct_grade::catalog());
         v.extend(printstock::catalog());
         v.extend(denoise::catalog());
@@ -144,6 +146,7 @@ pub fn apply3(kind: &str, pr: &Params, f: &mut Frame, t: f64, _seed: u64) -> Res
     let g = |k: &str, d: f64| p(pr, k, d, t); let (w, h) = (f.w, f.h); let n = w * h;
     match kind {
         "film_finish" => return finish::apply(pr,f,t,_seed),
+        "film_soft_shoulder"|"film_luma_grain" => return film_response::apply(kind,pr,f,t,_seed),
         "linear_grade" => return linear::apply(pr, f, t),
         "luminance_shoulder" => return shoulder::apply(pr,f,t),
         "print_stock" => return printstock::apply(pr,f,t),

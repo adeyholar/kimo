@@ -678,3 +678,24 @@ User bar: every feature best in class. Tiers: **PRO** = matches or beats the pro
 - Alpha ProRes color fix (export_preset alpha-prores and export_alpha prores4444): they previously converted RGB to YUV with ffmpeg's default BT601 matrix and wrote no color tags (found by COLOR: Y12 2060 vs expected 2137). Now explicit RGB to BT709 limited-range conversion, colr atom written, and a ProRes bitstream metadata pass so ffprobe reports bt709 / iec61966-2-1 / bt709 / tv. Measured on RGB [0.2,0.6,230/255]: Y12 = 2136 (expected 2137, within 1 code). Input to the encoder is still RGBA8 (8-bit alpha and color precision, not the 16-bit pipe); the output is 10-bit ProRes 4444 (ffprobe reports a 12-bit pix_fmt, the decoder's container for it).
 
 - Static shape cache (export only, bit-exact): constant shape layers (no keyframes/expressions, no mask/echo/posterize, effects from the same safe list as text) render once per export like static text. Verified frame-md5 identical on the film stand-in (10-12 s range). Measured effect: per-frame source-stage CPU 0.07 s to 0.026 s on that project; wall per frame 0.40 to 0.39 s (within noise), so this is a small win. Media/still layers are not cached.
+Film-style response (explicit opt-in): film_soft_shoulder uses a per-channel
+C1 exponential above knee, identity below; default knee0.75/peak1 maps1 to
+0.90803014 and2 to0.99831551. Amount1 approaches peak without hard clipping;
+partial amount is not bounded HDR delivery. RGB ratios/hue are not preserved.
+film_luma_grain uses display-Rec709 luma and monotonically decreasing grain
+occupancy: default shadow0.9/highlight0.08, falloff1.5. Independent seeded
+amplitude is zero-mean before clipping, max0.025 default; output is NOT clipped.
+Grain is monochrome and block-sized in output pixels, not a scanned film stock.
+Generic add_effect exposes both; inspect_film_response exposes exact response.
+
+On managed projects declare native OCIO effect-domain spaces explicitly for a
+colorspace sandwich; do not invert an ACES display/view. For scene-linear
+luminance/ray compression use existing luminance_shoulder. These new effects
+may run after a real forward native display transform in an explicit finishing
+workflow; ordinary export/nativeviewvideo is not automatically changed.
+Measurements: 100001point shoulder sweep0..10 monotone/bounded, maxf32rounding
+2.981e-8 vs f64curve on f32input. Grain512x512 occupancy at luma0.05/0.5/0.95
+0.83850/0.36893/0.08911, within0.001 of declaredcurve; mean signednoise<1.44e-5.
+Seed-repeat exact, transparent pixels/alpha/zeroamount exactidentity. Grain
+sampling error is stochastic evidence, not an all-image occupancy guarantee.
+No calibrated stock, ACES/look superiority or display certification claim.

@@ -654,3 +654,35 @@ Integer outputs clamp 0..1; the result reports excursion pixel count across
 frames. No alpha channel is retained in the video codecs. Source gamut/white
 and output encoding are declarations, not validated measurements of a custom
 OCIO config. Math/reference agreement does not certify a display or HDR mastering.
+
+## Film-style tone response
+
+Explicit `add_effect` kinds: `film_soft_shoulder`, `film_luma_grain`. Params are
+keyframable. `inspect_film_response` reports curve/density samples. This is a
+parametric look, not measured stock. Shoulder is per-channel signal math:
+for x>knee, knee+(peak-knee)*(1-exp(-(x-knee)/(peak-knee))). Identity otherwise.
+C1 at knee, monotone, asymptotic; amount1 bounds positive output, partial amount
+only blends. Negative signal is unchanged. It can shift hue; use the existing
+scene-linear luminance_shoulder when preserving RGB ratios is desired.
+
+Grain occupancy = highlight_density+(shadow_density-highlight_density)*
+(1-clamp(luma,0,1))^falloff. Rec709 display-signal luma is used, shadow>=highlight
+required. Independent deterministic uniform hash chooses occupied cells then
+symmetric additive amplitude. The expected unclipped mean is zero, not the
+exact mean of a finite frame. Output is unbounded and integer encoders may clip
+negative grain or highlights, shifting the mean. `grain_size` makes blocks, not
+filtered scanned texture. Alpha0 pixels skipped, alpha untouched; seed is outer
+frame (nested precomp uses local frame seed), so time changes the pattern.
+
+Native OCIO applies when explicitly chosen: add_effect strings
+ocio_domain=display-referred, ocio_config=<self-containedconfig>,
+ ocio_working_space=<actualcurrentspace>, ocio_linear_space=<linearsource>,
+ ocio_display_space=<invertiblecolorspace>. Existing native OCIO processor
+sandwich is reused; this is not an inverse ACES display/view and cannot undo
+ODT clipping. Alternatively an explicit finishing workflow applies these effects
+after a real forward native display transform. Existing exports, native view
+video and legacy film_finish are unchanged. Only caller declarations set the
+domain. Measured f32 shoulder rounding max2.981e-8 on100001samples0..10;
+grain additive amplitude is bounded by amount before f32 rounding, tested
+[-4,4] default delta<=0.0250003. These are sampled numerical checks, not a
+calibration or all-finite-input proof.
