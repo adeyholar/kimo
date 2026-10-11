@@ -11,6 +11,7 @@ pub mod motion;
 pub mod masks;
 pub mod confetti;
 pub mod shards;
+pub mod shard_look;
 pub mod scene3d;
 pub mod physics;
 pub mod presets;

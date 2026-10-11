@@ -4,6 +4,7 @@
 use crate::effects::Frame;
 use crate::three_d::{rot_matrix, CamView, Camera};
 use serde::{Deserialize, Serialize};
+use crate::shard_look::{self, Material};
 
 fn d_count() -> u32 { 450 } fn d_origin() -> [f64; 3] { [0.0, 40.0, 0.0] } fn d_speed() -> f64 { 520.0 } fn d_smin() -> f64 { 5.0 } fn d_smax() -> f64 { 58.0 } fn d_seed() -> u64 { 7 }
 fn d_tint() -> [f64; 3] { [0.78, 0.9, 1.0] } fn d_drag() -> f64 { 1.1 } fn d_spin() -> f64 { 260.0 } fn d_dof() -> f64 { 1.0 } fn d_one() -> f64 { 1.0 } fn d_light() -> [f64; 3] { [-0.5, -0.6, -0.62] }
@@ -16,6 +17,11 @@ pub struct ShardBurst {
     #[serde(default)] pub toward_camera: f64, #[serde(default)] pub spread_time: f64, #[serde(default)] pub fade_out: f64, #[serde(default)] pub dispersion: f64, #[serde(default)] pub origin_spread: f64,
     #[serde(default)] pub physics: bool, #[serde(default = "d_rest")] pub restitution: f64, #[serde(default = "d_fric")] pub friction: f64, #[serde(default)] pub floor: Option<f64>, #[serde(default)] pub ang_drag: f64, #[serde(default = "d_tr")] pub collide: bool,
     #[serde(default)] pub thickness: Option<[f64; 2]>, #[serde(default)] pub glass: f64, #[serde(default)] pub aspect: Option<[f64; 2]>, #[serde(default)] pub fresnel: f64, #[serde(default)] pub refract: f64, #[serde(default)] pub falloff: f64,
+    /// Opt-in looks. Legacy preserves the existing shader. Size controls affect free-burst geometry and physics, not pane cells.
+    #[serde(default)] pub material: Material,
+    #[serde(default = "d_one")] pub size_bias: f64, #[serde(default = "d_one")] pub size_scale: f64,
+    /// World-space analytic sky/ground reflection. Zero leaves the selected look exactly unchanged; roughness widens the softbox.
+    #[serde(default)] pub env_reflection: f64, #[serde(default)] pub env_roughness: f64,
     #[serde(default)] pub plane: Option<Plane>,
     /// Contact shadows cast onto the receiving surface (the z = `shadow_plane_z` plane, i.e. the plate the pane sat in): strength 0..1 (0 = off), falls off with height over `shadow_reach` (720p px, 0 = 220), blur grows with height.
     /// Motion blur: shutter angle in degrees (180 = the previous fixed half-frame shutter, 0 = off) and temporal samples (0 = automatic: 4, or 8 with a texture). More samples remove the stepped ghost copies of fast shards (cost is linear).
@@ -78,11 +84,11 @@ pub fn plane_cells(p: &Plane, seed: u64, k: f64) -> Vec<Cell> {
 fn h(a: u64, i: u64, k: u64) -> f64 { let mut x = a.wrapping_mul(0x9E3779B97F4A7C15) ^ i.wrapping_mul(0xBF58476D1CE4E5B9) ^ k.wrapping_mul(0x94D049BB133111EB); x ^= x >> 30; x = x.wrapping_mul(0xBF58476D1CE4E5B9); x ^= x >> 27; x = x.wrapping_mul(0x94D049BB133111EB); x ^= x >> 31; (x >> 11) as f64 / (1u64 << 53) as f64 }
 fn sstep(x: f64) -> f64 { let t = x.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) }
 
-struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64, n3: [f64; 3], tex: Option<[f64; 6]>, id: u64, flat: f64 }
+struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64, n3: [f64; 3], tex: Option<[f64; 6]>, id: u64, flat: f64, env: ([f64; 3], f64) }
 
 pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
     let (w, hh) = (f.w, f.h); let cv = CamView::new(w, hh, cam); let fl = cv.focal(); let k = w.min(hh) as f64 / 720.0;
-    let nsub = if e.shutter_deg <= 0.0 { 1usize } else if e.blur_samples > 0 { (e.blur_samples as usize).clamp(1, 64) } else if e.plane.as_ref().map(|p| p.texture.is_some()).unwrap_or(false) { 8usize } else { 4usize }; let shutter = (e.shutter_deg.clamp(0.0, 720.0) / 360.0) / fps.max(1.0); let mut accc = vec![0f32; w * hh * 3]; let mut acca = vec![0f32; w * hh]; let rf = e.refract > 0.0; let mut dacc = vec![0f32; if rf { w * hh * 2 } else { 0 }]; let mut dsum = vec![0f32; if rf { w * hh * 2 } else { 0 }];
+    let nsub = if e.shutter_deg <= 0.0 { 1usize } else if e.blur_samples > 0 { (e.blur_samples as usize).clamp(1, 64) } else if e.plane.as_ref().map(|p| p.texture.is_some()).unwrap_or(false) { 8usize } else { 4usize }; let shutter = (e.shutter_deg.clamp(0.0, 720.0) / 360.0) / fps.max(1.0); let mut accc = vec![0f32; w * hh * 3]; let mut acca = vec![0f32; w * hh]; let rf = e.refract > 0.0 && e.material.transmissive(); let mut dacc = vec![0f32; if rf { w * hh * 2 } else { 0 }]; let mut dsum = vec![0f32; if rf { w * hh * 2 } else { 0 }];
     let lg = { let l = e.light; let m = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt().max(1e-9); [l[0] / m, l[1] / m, l[2] / m] };
     let focus = if e.focus > 0.0 { e.focus } else { fl };
     let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));
@@ -98,7 +104,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             let pdist = pc.map(|(p, c)| { let (li, _) = plane_impact(p, k); ((c.lc.0 - li.0).powi(2) + (c.lc.1 - li.1).powi(2)).sqrt() });
             let birth = match (pc, pdist) { (Some((p, _)), Some(d)) => (d / (p.wave_speed * k)).min(p.max_delay), _ => r(40) * e.spread_time };
             if ts < birth && pc.map(|(p, _)| p.hidden_until_birth).unwrap_or(true) { continue; } let age = (ts - birth).max(0.0);
-            let size = if let Some((_, c)) = pc { (c.area.sqrt() / 1.8).max(1.0) } else { (e.size_min * (e.size_max / e.size_min.max(0.1)).powf(r(1).powf(1.0))) * k }; // heavy toward small, a few large
+            let size = if let Some((_, c)) = pc { (c.area.sqrt() / 1.8).max(1.0) } else { shard_look::size(e.size_min, e.size_max, e.size_bias, e.size_scale, r(1)) * k }; // heavy toward small, a few large
             let (th, ph) = (r(2) * std::f64::consts::TAU, (r(3) * 2.0 - 1.0).acos()); let dir = [ph.sin() * th.cos(), ph.sin() * th.sin() * 0.8, ph.cos()];
             let sp = e.speed * k * (0.35 + 1.1 * r(4).powf(1.2)) / (0.6 + size / (30.0 * k)).sqrt(); let dr = e.drag.max(1e-3); let travel = (1.0 - (-dr * age).exp()) / dr;
             let mut vz = dir[2] * sp; vz -= e.toward_camera * sp * (0.3 + r(5)); // negative z = toward camera
@@ -112,7 +118,9 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             let life_fade = if e.fade_out > 0.0 { 1.0 - sstep((age - (total - e.fade_out - birth).max(0.1)) / e.fade_out) } else { 1.0 }; let born = if ts < birth { 1.0 } else { sstep(age / 0.05) }; let fl = if pc.is_some() && e.plane.is_some() { if ts < birth { 1.0 } else { 1.0 - sstep(age / 0.1) } } else { 0.0 };
             let mut loc = [(0.0, 0.0); 6]; if let Some((_, c)) = pc { for v in 0..nv { loc[v] = c.poly[v]; } } else { for v in 0..nv { let a = v as f64 / nv as f64 * std::f64::consts::TAU + (h(e.seed, i, 20 + v as u64) - 0.5) * 1.1; let rr = size * (0.62 + 0.42 * h(e.seed, i, 30 + v as u64)); loc[v] = (a.cos() * rr, a.sin() * rr * aspect); } }
             let mut shard: Vec<([(f64, f64); 6], f64, f64, f64, f64)> = vec![]; // per face
-            let nrm = [rm[0][2], rm[1][2], rm[2][2]]; let mut zsum = 0.0; let mut ok = true;
+            let nrm = [rm[0][2], rm[1][2], rm[2][2]];
+            let eye = cv.eye(); let to_eye = [eye[0]-pos[0], eye[1]-pos[1], eye[2]-pos[2]];
+            let env_for = |normal| if e.env_reflection.is_finite() && e.env_reflection > 0.0 { shard_look::environment(normal, to_eye, e.env_roughness, WORK_LINEAR.load(std::sync::atomic::Ordering::Relaxed)) } else { ([0.0;3],0.0) }; let mut zsum = 0.0; let mut ok = true;
             for face in 0..2 { let zoff = if face == 0 { thick * 0.5 } else { -thick * 0.5 }; let mut pts = [(0.0, 0.0); 6]; let mut dz = 0.0;
                 for v in 0..nv { let l = [loc[v].0, loc[v].1, zoff]; let wp = [pos[0] + rm[0][0] * l[0] + rm[0][1] * l[1] + rm[0][2] * l[2], pos[1] + rm[1][0] * l[0] + rm[1][1] * l[1] + rm[1][2] * l[2], pos[2] + rm[2][0] * l[0] + rm[2][1] * l[1] + rm[2][2] * l[2]];
                     match cv.project(wp) { Some((sx, sy, zv)) => { pts[v] = (sx, sy); dz += zv; } None => { ok = false; } } }
@@ -124,12 +132,15 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                 let hm = hs / nv as f64; if okp && hm > 0.5 * k { shp.push((poly, e.contact_shadow.clamp(0.0, 1.0) * (-hm / sreach).exp() * life_fade * born, (1.5 + hm * 0.10).min(40.0 * k))); } }
             if !ok || shard.len() < 2 { continue; } let zv = zsum / 2.0; let coc = (e.dof * ((zv - focus).abs() / zv) * fl * 0.035 * k).min(10.0 * k); let ndl = nrm[0] * lg[0] + nrm[1] * lg[1] + nrm[2] * lg[2];
             let refl = [lg[0] - 2.0 * ndl * nrm[0], lg[1] - 2.0 * ndl * nrm[1], lg[2] - 2.0 * ndl * nrm[2]]; let spec = refl[2].max(0.0).powi(18) + 0.35 * (-refl[2]).max(0.0).powi(18);
-            let dim = 1.0 / (1.0 + coc * 0.12) * (-e.falloff * ((zv - fl).max(0.0) / fl)).exp(); let fres = 0.04 + 0.96 * (1.0 - nrm[2].abs()).powi(5); let al = life_fade * born * dim;
+            // Legacy shadows the focal length with flatness (`fl`), producing NaN at flatness=0.
+            // Preserve its output for old projects; opt-in materials use the true focal depth.
+            let focal_depth = if e.material == Material::Legacy { fl } else { cv.focal() };
+            let dim = 1.0 / (1.0 + coc * 0.12) * (-e.falloff * ((zv - focal_depth).max(0.0) / focal_depth)).exp(); let fres = 0.04 + 0.96 * (1.0 - nrm[2].abs()).powi(5); let al = life_fade * born * dim;
             { let (fp, bp) = (shard[0].0, shard[1].0); for v in 0..nv { let w2 = (v + 1) % nv; let (ex, ey) = (loc[w2].0 - loc[v].0, loc[w2].1 - loc[v].1); let l = (ex * ex + ey * ey).sqrt().max(1e-9); let nl = [ey / l, -ex / l, 0.0];
                 let nw = [rm[0][0] * nl[0] + rm[0][1] * nl[1], rm[1][0] * nl[0] + rm[1][1] * nl[1], rm[2][0] * nl[0] + rm[2][1] * nl[1]]; let nd = nw[0] * lg[0] + nw[1] * lg[1] + nw[2] * lg[2]; let rf = [lg[0] - 2.0 * nd * nw[0], lg[1] - 2.0 * nd * nw[1], lg[2] - 2.0 * nd * nw[2]];
                 let sp2 = rf[2].max(0.0).powi(14) + 0.4 * (-rf[2]).max(0.0).powi(14); let mut q = [(0.0, 0.0); 6]; q[0] = fp[v]; q[1] = fp[w2]; q[2] = bp[w2]; q[3] = bp[v];
-                prims.push(Prim { depth: (shard[0].1 + shard[1].1) / 2.0 - 0.01, pts: q, n: 4, nz: nw[2].abs(), spec: sp2 + 0.12, rim_c: coc, blur: coc, alpha: al * 0.8 * (1.0 - fl), face: 2, u: r(15), tx: nw[0] * thick * 1.6, ty: nw[1] * thick * 1.6, n3: nw, tex: None, id: i, flat: fl }); } }
-            for (fi, (pts, dz, _, _, _)) in shard.into_iter().enumerate() { let tex_aff = match (pc, &tex) { (Some((_, c)), Some(_)) if nv >= 3 => uv_affine(&pts, &c.uv), _ => None }; prims.push(Prim { depth: dz, pts, n: nv, nz: nrm[2].abs(), spec, rim_c: fres, blur: coc, alpha: if fi == 1 { al * (1.0 - fl) } else { al }, face: fi, u: r(15), tx: nrm[0] * thick, ty: nrm[1] * thick, n3: nrm, tex: tex_aff, id: i, flat: fl }); }
+                prims.push(Prim { depth: (shard[0].1 + shard[1].1) / 2.0 - 0.01, pts: q, n: 4, nz: nw[2].abs(), spec: sp2 + 0.12, rim_c: coc, blur: coc, alpha: al * 0.8 * (1.0 - fl), face: 2, u: r(15), tx: nw[0] * thick * 1.6, ty: nw[1] * thick * 1.6, n3: nw, tex: None, id: i, flat: fl, env: env_for(nw) }); } }
+            for (fi, (pts, dz, _, _, _)) in shard.into_iter().enumerate() { let tex_aff = match (pc, &tex) { (Some((_, c)), Some(_)) if nv >= 3 => uv_affine(&pts, &c.uv), _ => None }; prims.push(Prim { depth: dz, pts, n: nv, nz: nrm[2].abs(), spec, rim_c: fres, blur: coc, alpha: if fi == 1 { al * (1.0 - fl) } else { al }, face: fi, u: r(15), tx: nrm[0] * thick, ty: nrm[1] * thick, n3: nrm, tex: tex_aff, id: i, flat: fl, env: env_for(nrm) }); }
         }
         for (poly, sa, sb) in &shp { if sa < &0.003 { continue; } let n = poly.len(); if n < 3 { continue; }
             let mut area = 0.0; for v in 0..n { let (a, b) = (poly[v], poly[(v + 1) % n]); area += a.0 * b.1 - b.0 * a.1; } if area.abs() < 0.5 { continue; } let sg = if area >= 0.0 { 1.0 } else { -1.0 };
@@ -157,11 +168,15 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
                     let strip = (-((ax - c0) / 0.16).powi(2)).exp(); let strip2 = (-((ax + 0.55 - 0.3 * c0) / 0.07).powi(2)).exp(); let sky = 0.1 + 0.3 * (ry * 0.5 + 0.5).clamp(0.0, 1.0); (sky + 1.3 * strip + 0.9 * strip2) * (0.5 + 0.5 * (1.0 - n2.abs() * 0.6)) } else { 0.0 };
                 let rw = |c: f64, t: f64| c * (1.0 - 0.6 * gl) + c * t * 0.6 * gl; let glint = gl * pr.spec * pr.spec * 1.2 * rim + gl * envl * 0.55; let cr = ((base[0] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rr, base[0]) + glint) * br; let cg = ((base[1] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rg, base[1]) + glint) * br; let cb = ((base[2] * (0.35 + 0.45 * grad) + sp) * (1.0 - rim) + rw(rb, base[2]) + glint) * br;
                 let a = (a + gl * envl * 0.3 * cov * pr.alpha).min(0.95);
+                let (rgb, a) = shard_look::shade(e.material, [cr,cg,cb], a, base, br, pr.n3, lg, pr.spec, rim, pr.u, cov*pr.alpha);
+                let (cr,cg,cb) = (rgb[0],rgb[1],rgb[2]);
                 let (cr, cg, cb, a) = match (&pr.tex, &tex) { (Some(m), Some(t)) => { let (u, v) = (m[0] * px + m[1] * py + m[2], m[3] * px + m[4] * py + m[5]); let s = t.sample(u, v); let mo = e.plane.as_ref().map(|p| p.opaque).unwrap_or(1.0).clamp(0.0, 1.0);
                         let sh = (0.62 + 0.38 * grad) * if pr.face == 1 { 0.7 } else { 1.0 }; let sh = sh * (1.0 - pr.flat) + pr.flat; let hl = (sp * 0.35 + rim * 0.22) * (1.0 - pr.flat); let br = br * (1.0 - pr.flat) + pr.flat;
                         let (tr, tg, tb) = ((s[0] * sh + hl) * br, (s[1] * sh + hl) * br, (s[2] * sh + hl) * br); let oa = (cov * pr.alpha * 0.985).min(0.985);
                         (cr * (1.0 - mo) + tr * mo, cg * (1.0 - mo) + tg * mo, cb * (1.0 - mo) + tb * mo, a * (1.0 - mo) + oa * mo) } (None, Some(t)) if pr.face == 2 => { let mo = e.plane.as_ref().map(|p| p.opaque).unwrap_or(1.0).clamp(0.0, 1.0); let sd = 0.16 + 0.5 * sp + 0.1 * grad; let m = t.mean; let oa = (cov * pr.alpha * 0.985).min(0.985);
                         (cr * (1.0 - mo) + (m[0] * sd) * br * mo, cg * (1.0 - mo) + (m[1] * sd) * br * mo, cb * (1.0 - mo) + (m[2] * sd) * br * mo, a * (1.0 - mo) + oa * mo) } _ => (cr, cg, cb, a) }; if a <= 0.002 { continue; }
+                let rgb = shard_look::reflect([cr,cg,cb], pr.env, e.env_reflection*(1.0-pr.flat), e.material, base);
+                let (cr,cg,cb) = (rgb[0],rgb[1],rgb[2]);
                 let (ca, aa) = (a as f32, acca[o]); // over (premultiplied accumulation)
                 accc[o * 3] = accc[o * 3] * (1.0 - ca) + cr as f32 * ca; accc[o * 3 + 1] = accc[o * 3 + 1] * (1.0 - ca) + cg as f32 * ca; accc[o * 3 + 2] = accc[o * 3 + 2] * (1.0 - ca) + cb as f32 * ca; acca[o] = ca + aa * (1.0 - ca); if rf { let k2 = e.refract as f32 * k as f32 * (1.0 + 0.5 * rim as f32); dacc[o * 2] = dacc[o * 2] * (1.0 - ca) + (pr.tx as f32 * k2) * ca; dacc[o * 2 + 1] = dacc[o * 2 + 1] * (1.0 - ca) + (pr.ty as f32 * k2) * ca; } } } }
         // fold sub-frame into frame accumulators happens after all subs; keep running average via scaling below
@@ -192,7 +207,7 @@ fn bake_cached(e: &ShardBurst, k: f64, total: f64, hh: usize) -> std::sync::Arc<
         let par = crate::physics::Params { gravity: [0.0, e.gravity * k, 0.0], drag: e.drag, ang_drag: e.ang_drag, restitution: e.restitution, friction: e.friction, floor_y: e.floor.map(|f| f * k), collide: false };
         let tj = Arc::new(crate::physics::bake(bodies, &par, total + 0.1)); m.lock().unwrap().insert(key, tj.clone()); return tj; }
     for i in 0..e.count as u64 { let r = |kk: u64| h(e.seed, i, kk);
-        let size = (e.size_min * (e.size_max / e.size_min.max(0.1)).powf(r(1))) * k; let (th, ph) = (r(2) * std::f64::consts::TAU, (r(3) * 2.0 - 1.0).acos()); let dir = [ph.sin() * th.cos(), ph.sin() * th.sin() * 0.8, ph.cos()];
+        let size = shard_look::size(e.size_min, e.size_max, e.size_bias, e.size_scale, r(1)) * k; let (th, ph) = (r(2) * std::f64::consts::TAU, (r(3) * 2.0 - 1.0).acos()); let dir = [ph.sin() * th.cos(), ph.sin() * th.sin() * 0.8, ph.cos()];
         let sp = e.speed * k * (0.35 + 1.1 * r(4).powf(1.2)) / (0.6 + size / (30.0 * k)).sqrt(); let mut vz = dir[2] * sp; vz -= e.toward_camera * sp * (0.3 + r(5)); let os = e.origin_spread * k;
         let p = [e.origin[0] * k + (r(50) - 0.5) * 2.0 * os, e.origin[1] * k + (r(51) - 0.5) * 2.0 * os * 0.6, e.origin[2] + (r(52) - 0.5) * 2.0 * os];
         let sd = e.spin.to_radians(); let w = [(r(60) - 0.5) * 2.0 * sd, (r(61) - 0.5) * 2.0 * sd, (r(62) - 0.5) * 2.0 * sd];
