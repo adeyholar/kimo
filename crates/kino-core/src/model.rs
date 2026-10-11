@@ -161,6 +161,14 @@ impl Clip {
 }
 
 impl Project {
+    /// Collision-safe id counter after loading: one past the largest trailing number in any id-like string (keys and string values), never below 1000.
+    pub fn recompute_next_id(&mut self) {
+        fn walk(v: &serde_json::Value, m: &mut u64) {
+            let tail = |s: &str| { let d: String = s.chars().rev().take_while(|c| c.is_ascii_digit()).collect::<Vec<_>>().into_iter().rev().collect(); if d.is_empty() || d.len() > 12 || s.len() > 64 { 0 } else { d.parse::<u64>().unwrap_or(0) } };
+            match v { serde_json::Value::String(s) => *m = (*m).max(tail(s)), serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, m)), serde_json::Value::Object(o) => for (k, x) in o { *m = (*m).max(tail(k)); walk(x, m); }, _ => {} }
+        }
+        let mut m = 999u64; if let Ok(v) = serde_json::to_value(&*self) { walk(&v, &mut m); } self.next_id = m + 1;
+    }
     pub fn gen_id(&mut self, p: &str) -> String { let i = self.next_id; self.next_id += 1; format!("{p}{i}") }
     pub fn duration(&self) -> f64 {
         self.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.start + c.duration).fold(0.0, f64::max)

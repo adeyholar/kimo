@@ -646,7 +646,7 @@ pub fn registry() -> Vec<Command> {
     Command { name: "load_project", description: "Load a project JSON file.", mutates: true,
         schema: obj(vec![("path", s("file path"))], &["path"]),
         run: |ss, a| { let t = std::fs::read_to_string(str_arg(a, "path")?).map_err(|e| e.to_string())?; ss.project = serde_json::from_str(&t).map_err(|e| e.to_string())?;
-            ss.project.next_id = 1000; Ok(json!({"tracks":ss.project.tracks.len()})) } },
+            ss.project.recompute_next_id(); Ok(json!({"tracks":ss.project.tracks.len(),"next_id":ss.project.next_id})) } },
     Command { name: "undo", description: "Undo the last mutating operation.", mutates: false,
         schema: obj(vec![], &[]),
         run: |ss, _| { let prev = ss.undo.pop().ok_or("nothing to undo")?; let cur = std::mem::replace(&mut ss.project, prev); ss.redo.push(cur); Ok(json!({"ok":true})) } },

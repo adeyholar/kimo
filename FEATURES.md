@@ -741,3 +741,15 @@ Honest limits: sync is 5 ms RMS correlation, not sample-accurate; timecode label
 ## Shared light and material model (BETA, all MCP)
 Project-level lights (directional/point/spot, colour, intensity, falloff, cone, time keys) and named PBR materials (albedo, roughness, metal, ior, clearcoat, emissive; presets plastic, rubber, brushed_metal, chrome, gold, glass, concrete, wet_stone, car_paint, skin). Tools: set_light, remove_light, list_lights, set_material, remove_material, list_materials, set_relight, preview_material. First consumer: the `relight` effect, which builds a normal field from alpha and/or luma height and shades with GGX + Smith + Schlick, a clearcoat lobe and soft height-field self shadows, on any layer. Proof: tests/lighting_proof.py (moving the light moves the highlight, bad inputs rejected). Default render paths are unchanged (film frame md5s identical).
 Honest limits: 2D layers only (a height-field relief, not real geometry); no environment/IBL reflections, so chrome and glass show only light highlights; no light-to-light shadows or bounce; self shadows are a 10-step height march; fracture_glass and shards do not read the shared lights yet (next step); sRGB-encoded values are shaded as given, not in linear light.
+Adjust-stage CPU follow-up: film_finish caches the exact seeded grain lattice
+and column interpolation terms once per frame. Color halo blur processes vertical
+columns in64-column cache-friendly blocks, preserving each column's original
+f64 running-sum update order. No math/transfer approximation added. Release
+real1080p isolated median5: finish0.5443s->0.3730s (1.46x), exact float32bytes.
+Prior concurrent run1.43x; host/export contention may differ. Small/signed/fractional
+grain/seed grid and blocked-blur radius1..512 checks exact. Grain lattice adds
+at most roughly one4bytevalue/pixel atgrain_size1 plus row/column terms.
+Print_stock measured~0.112s/frame but unchanged in this follow-up; prior constants/
+projection optimization already landed. No GPU/threading/default/output change.
+
+- load_project no longer resets the id counter to 1000: it is set one past the largest id-like number in the loaded project (never below 1000), so resumed projects cannot overwrite existing clips/assets. Proof: tests/load_ids_proof.py.

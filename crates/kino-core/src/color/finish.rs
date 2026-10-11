@@ -6,10 +6,6 @@ fn noise(x:usize,y:usize,seed:u64)->f32 {
     (v>>40) as f32/16777216.-0.5
 }
 fn smooth(v:f32)->f32{let v=v.clamp(0.,1.);v*v*(3.-2.*v)}
-fn grain(x:usize,y:usize,size:f32,seed:u64)->f32{
-    let (u,v)=(x as f32/size,y as f32/size);let(a,b)=(u.floor() as usize,v.floor() as usize);let(s,t)=(smooth(u-u.floor()),smooth(v-v.floor()));
-    let lo=noise(a,b,seed)*(1.-s)+noise(a+1,b,seed)*s;let hi=noise(a,b+1,seed)*(1.-s)+noise(a+1,b+1,seed)*s;lo*(1.-t)+hi*t
-}
 pub fn apply(pr:&Params,f:&mut Frame,t:f64,seed:u64)->Result<(),String>{
     super::frame::validate(f)?;
     let get=|k:&str,d:f64,lo:f32,hi:f32|->Result<f32,String>{let v=p(pr,k,d,t);if !v.is_finite()||v<lo||v>hi{return Err(format!("invalid film_finish {k}"))}Ok(v)};
@@ -27,13 +23,17 @@ pub fn apply(pr:&Params,f:&mut Frame,t:f64,seed:u64)->Result<(),String>{
         crate::guard::check();super::blur::blur(&mut b,r);crate::guard::check();Some(b)
     }else{None};
     crate::guard::reserve(f.w.saturating_mul(4));let xs:Vec<f32>=(0..f.w).map(|x|(x as f32+0.5)/f.w as f32*2.-1.).collect();
-    for y in 0..f.h{crate::guard::check();let dy=(y as f32+0.5)/f.h as f32*2.-1.;for x in 0..f.w{
+    // Each grain lattice value is identical to the old per-pixel hash, computed once.
+    let nw=((f.w.saturating_sub(1) as f32/size).floor() as usize)+2;let nh=((f.h.saturating_sub(1) as f32/size).floor() as usize)+2;
+    let lattice=if ga>0.{crate::guard::reserve(nw.saturating_mul(nh).saturating_mul(4));Some((0..nh).flat_map(|y|{crate::guard::check();(0..nw).map(move |x|noise(x,y,seed))}).collect::<Vec<_>>())}else{None};
+    crate::guard::reserve(f.w.saturating_mul(16));let grain_x:Vec<_>=(0..f.w).map(|x|{let u=x as f32/size;(u.floor() as usize,smooth(u-u.floor()))}).collect();
+    for y in 0..f.h{crate::guard::check();let v=y as f32/size;let gy=v.floor() as usize;let gt=smooth(v-v.floor());let dy=(y as f32+0.5)/f.h as f32*2.-1.;for x in 0..f.w{
         let i=(y*f.w+x)*4;let c=&f.d[i..i+4];if c[3]==0.{continue}
         let l=(0.2126*c[0]+0.7152*c[1]+0.0722*c[2]).clamp(0.,1.);
         let bright=smooth((l-threshold)/knee);
         let dx=xs[x];let r=(dx*dx+dy*dy).sqrt()/std::f32::consts::SQRT_2;let fall=1.-vig*smooth((r-(1.-soft))/soft);
         // PRE-GRAIN extraction above; zero-mean monochrome grain is added LAST.
-        let n=if ga>0.{grain(x,y,size,seed)*ga*(0.2+0.8*(4.*l*(1.-l)).sqrt())}else{0.};
+        let n=if ga>0.{({let (gx,gs)=grain_x[x];let l=lattice.as_ref().unwrap();let lo=l[gy*nw+gx]*(1.-gs)+l[gy*nw+gx+1]*gs;let hi=l[(gy+1)*nw+gx]*(1.-gs)+l[(gy+1)*nw+gx+1]*gs;lo*(1.-gt)+hi*gt})*ga*(0.2+0.8*(4.*l*(1.-l)).sqrt())}else{0.};
         let halo_luma=scattered.as_ref().map(|b|0.2126*b.d[i]+0.7152*b.d[i+1]+0.0722*b.d[i+2]).unwrap_or(0.);
         for j in 0..3{
             let v=if let Some(b)=&scattered{let tint=[1.,0.22,0.04][j];let scatter=(b.d[i+j]*bloom+halo_luma*halo*tint*(1.-bright)) as f64;super::fast_transfer::encode(linear.as_ref().unwrap()[i/4][j]+scatter)}else{c[j] as f64};

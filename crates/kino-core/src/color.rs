@@ -221,3 +221,6 @@ pub mod fast_transfer;
 #[cfg(test)] mod finish_reference;
 #[cfg(test)] mod printstock_reference;
 #[cfg(test)] mod film_fast_proof;
+#[cfg(test)] mod finish_v2_reference;
+#[cfg(test)] mod blur_v2_reference;
+#[cfg(test)] mod adjust_v2_proof;
