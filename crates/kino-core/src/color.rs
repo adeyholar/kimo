@@ -212,3 +212,8 @@ pub fn apply3(kind: &str, pr: &Params, f: &mut Frame, t: f64, _seed: u64) -> Res
 #[cfg(feature = "native-ocio")]
 pub mod ocio_config;
 pub mod effect_domain;
+
+pub mod fast_transfer;
+#[cfg(test)] mod finish_reference;
+#[cfg(test)] mod printstock_reference;
+#[cfg(test)] mod film_fast_proof;

@@ -395,11 +395,11 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
             for i in 0..w*h { let k = op * mk.as_ref().map(|m| m.d[i*4+3]).unwrap_or(1.0); for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - k) + adj.d[i*4+j] * k; } }
             continue;
         }
-        if c.effects.iter().any(|e| crate::effects2::needs_backdrop(&e.kind)) { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); }
         let mut f = if let Some(fr) = static_layer(p, c, lt, seed, t, cache)? { fr } else {
         let tp=std::time::Instant::now(); let mut f = source_frame(p, c, lt, cache); prof("source", tp);
-        let tp=std::time::Instant::now(); apply_effects_masked(p, c, &mut f, lt, seed, t, cache)?; prof("effects", tp); f };
-        BACKDROP.with(|b| *b.borrow_mut() = None);
+        // set only now: nested precomp children render inside source_frame and would otherwise clear it
+        if c.effects.iter().any(|e| crate::effects2::needs_backdrop(&e.kind)) { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); }
+        let tp=std::time::Instant::now(); let r = apply_effects_masked(p, c, &mut f, lt, seed, t, cache); BACKDROP.with(|b| *b.borrow_mut() = None); r?; prof("effects", tp); f };
         if let Some(m) = &c.mask { apply_mask(&mut f, m, lt); if !m.layers.is_empty() { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut f, &m.layers, lt, &ctx); } }
         let mut op = prop(c, "opacity", lt) as f32;
         let mut c_blend = c.blend.as_str();
@@ -465,6 +465,36 @@ fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Result<Command,String>{
     let q=&p.color_pipeline;
     let transfer=if q.enabled{q.validate()?;if q.output_gamut!=0{return Err("ordinary video export requires Rec709 output gamut=0; select a supported delivery output or export_high_bit".into())}match q.output_transfer{0=>"linear",1=>"iec61966-2-1",8=>"bt709",_=>return Err("ordinary video export requires exactly taggable linear/sRGB/BT709 output transfer; select a supported delivery output or export_high_bit".into())}}else{"iec61966-2-1"};
     let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v","libx264","-vf","scale=out_color_matrix=bt709:out_range=tv","-pix_fmt","yuv420p","-color_range","tv","-color_primaries","bt709","-color_trc",transfer,"-colorspace","bt709","-crf",&crf.to_string(),path]);Ok(cmd)
+}
+
+
+/// Export with alpha: `format` is "prores4444" (.mov), "webm" (VP9 + alpha) or "png" (RGBA PNG sequence; `path` must contain %05d or %d).
+/// Frames render with a transparent canvas (straight alpha). Audio is not muxed. Requires the managed color pipeline to be off.
+pub fn export_alpha(p: &Project, path: &str, format: &str, t_in: f64, t_out: f64) -> Result<f64, String> {
+    if !t_in.is_finite() || !t_out.is_finite() || t_in < 0.0 || t_out <= t_in { return Err("range must satisfy 0 <= start < end".into()); }
+    if p.color_pipeline.enabled { return Err("alpha export does not support the managed color pipeline yet; disable it (display-sRGB project) or export RGB".into()); }
+    let t_out = t_out.min(p.duration()); if t_in >= t_out { return Err("range starts after the end of the timeline".into()); }
+    let f0 = (t_in * p.fps).round() as usize; let f1 = ((t_out * p.fps).round() as usize).max(f0 + 1); let n = f1 - f0;
+    let mut cmd = Command::new("ffmpeg"); cmd.args(["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{}x{}", p.width, p.height), "-r", &p.fps.to_string(), "-i", "-"]);
+    match format {
+        "prores4444" => { if !path.ends_with(".mov") { return Err("prores4444 path must end in .mov".into()); } cmd.args(["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", "-vendor", "apl0", path]); }
+        "webm" => { if !path.ends_with(".webm") { return Err("webm path must end in .webm".into()); } cmd.args(["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-crf", "18", "-b:v", "0", path]); }
+        "png" => { if !path.contains('%') { return Err("png path must be a pattern such as /dir/frame_%05d.png".into()); } cmd.args(["-c:v", "png", "-pix_fmt", "rgba", path]); }
+        _ => return Err("format must be prores4444, webm or png".into()),
+    }
+    let frame_bytes = (p.width as usize).checked_mul(p.height as usize).and_then(|v| v.checked_mul(4)).ok_or("frame overflow")?;
+    let mut encoder = crate::color::process::EncodeStream::new(&mut cmd, frame_bytes, crate::color::process::encode_deadline(n))?;
+    let mut cache = Cache::new_export(); let nt = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1); let mut i = 0;
+    while i < n {
+        crate::guard::check(); let mut end = (i + nt * 4).min(n);
+        loop { let last = (f0 + end - 1) as f64 / p.fps; match prepare_export_range(p, &mut cache, (f0 + i) as f64 / p.fps, last) { Ok(()) => break, Err(e) if end - i > 1 && (e.contains("cache budget") || e.contains("memory cap") || e.contains("bounded cache")) => { end = i + (end - i).div_ceil(2); cache = Cache::new_export(); }, Err(e) => return Err(e) } }
+        let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
+        std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
+            let res = render_frame_opts(p, (f0 + k) as f64 / p.fps, cache, true).map(|f| to_rgba8(&f)); *slots[k - i].lock().unwrap() = Some(res); }); } });
+        for m in slots { encoder.write(m.into_inner().unwrap().unwrap()?)?; }
+        i = end;
+    }
+    encoder.finish()?; Ok(n as f64 / p.fps)
 }
 
 pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> { export_range(p, path, crf, 0.0, p.duration()) }

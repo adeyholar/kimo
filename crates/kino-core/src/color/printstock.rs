@@ -41,11 +41,13 @@ pub fn apply(pr:&Params,f:&mut Frame,t:f64)->Result<(),String>{
     if stock.fract()!=0.||!(0. ..=(STOCKS.len()-1) as f64).contains(&stock)||!amount.is_finite()||!(0. ..=1.).contains(&amount)||!pivot.is_finite()||!(0.05..=0.95).contains(&pivot)||!pts.is_finite()||pts.abs()>12.{
         return Err("invalid print_stock params (stock 0..2 integer, amount 0..1, pivot 0.05..0.95, print_light -12..12)".into())}
     if amount==0.{return Ok(())}
-    let si=stock as usize;
+    let si=stock as usize;let s=&STOCKS[si];let dr=s.dmax-s.dmin;let k=4.*s.gamma/dr;
+    let shifts:[f64;3]=std::array::from_fn(|c|{let sa=((s.aim[c]-s.dmin)/dr).clamp(1e-6,1.-1e-6);(sa/(1.-sa)).ln()/k});
+    let projection=-std::f64::consts::LN_10/PROJ_GAMMA;
     for(i,px) in f.d.chunks_exact_mut(4).enumerate(){
         if i%65536==0{crate::guard::check()}
         if px[3]==0.{continue}
-        for c in 0..3{ let v=px[c] as f64; let o=curve(si,c,v,pivot,pts); px[c]=(v+(o-v)*amount) as f32; }
+        for c in 0..3{ let v=px[c] as f64; let e=-(v-pivot)*SPAN+pts*0.025;let density_delta=dr/(1.+(-k*(e+shifts[c])).exp());let o=(projection*density_delta).exp(); px[c]=(v+(o-v)*amount) as f32; }
     }
     Ok(())
 }

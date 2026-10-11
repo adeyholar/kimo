@@ -366,3 +366,19 @@ these declarations. Existing mastering metadata is NOT inherited. No native
 HDR mastering certification. Integer outputs clip 0..1 and HEVC uses YUV420.
 
 - Backdrop access for effects (BETA, engine capability): an effect can declare `needs_backdrop` (effects2::needs_backdrop); the renderer then gives it a read-only copy of the composite below its layer via render::backdrop() (one frame copy, built only for clips carrying such an effect; thread-local so parallel export is safe). First user: fracture_glass `transmission` (0..1, default 0, so existing output is unchanged): shard faces mix in the real background, refracted with per-channel dispersion. Verified visually on the test rig (faces show the background instead of flat source chips); not yet verified on the film, and refraction is a distortion offset, not a ray-traced lens. Limit: only fracture_glass uses it so far.
+Film finishing speed (COLOR): scoped f32 sRGB transfer math for film_finish
+only, decode |input|<=1, encode |linear|<=16; f64 reference fallback outside.
+Bloom extraction and main pass share one decoded pixel; coordinates and halo
+luma are hoisted. Print_stock hoists stock curve constants and combines two
+powers into one exp, still f64. Managed transfer math/defaults unchanged.
+Measured, not mathematical all-input bounds: million-sample signed transfer
+sweep max decode error2.060e-7, encode5.649e-7; finish extreme signed[-4,4]
+parameter grid max7.153e-7, real1080p max2.384e-7. Print_stock real frame and
+stock/pivot/light grid[-16,16] are bit-identical after f32 output rounding.
+Release isolated real1080p median3 runs: finish1.37-1.47x, print_stock3.25-3.60x faster on
+this host. Zero-strength identity, alpha, seed determinism unchanged. Tiny
+non-bit-identical finish changes are opt-in effect math, not a global pipeline
+speed mode. These samples do not certify all finite inputs or export speed.
+
+- export_alpha (BETA): timeline or range with transparency as ProRes 4444 .mov (10-bit 4:4:4:4), WebM VP9 + alpha, or RGBA PNG sequence. Verified: all three decode clean, PNG sequence has alpha 0 at empty pixels and opaque text pixels, ffprobe reports prores yuva444p. Straight alpha, no audio, managed color pipeline must be off (errors otherwise). Named export presets are not done.
+- Backdrop fix: the backdrop is now set right before a layer's own effects, so it also works on precomp layers (nested render of children no longer clears it). Verified: a precomp-wrapped fracture_glass with transmission renders pixel-identical to the flat clip, and transmission 0.9 differs from 0.0 in the nested case.
