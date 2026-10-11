@@ -119,12 +119,8 @@ Put this in `opencode.json` in your project, or in `~/.config/opencode/opencode.
 }
 ```
 
-### Any other MCP client (Claude Desktop, Windsurf, Zed, Cline, ...)
-Most clients use the same shape. Register a stdio server whose command is the path to `kimo-mcp`, no arguments:
-
-```json
-{ "mcpServers": { "kimo": { "command": "/home/you/.local/bin/kimo-mcp", "args": [] } } }
-```
+### Any other MCP client
+kimo is a standard MCP stdio server (protocol 2024-11-05, `initialize`, `tools/list`, `tools/call`). Any client that can register a stdio server by command works: give it the absolute path to `kimo-mcp` and no arguments. Many clients use the `mcpServers` JSON shape shown for Cursor; some (for example Zed) use a different key, so check your client's MCP docs for the exact file and format. Only the four clients above were checked against their docs.
 
 Windows and macOS: there are no prebuilt binaries in v1.0.0; build from source (below) and use the path to `target/release/kimo-mcp`.
 
