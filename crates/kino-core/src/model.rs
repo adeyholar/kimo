@@ -147,6 +147,8 @@ impl Clip {
     /// Map clip-local time to the local time whose frame should be shown (reverse/freeze).
     pub fn display_time(&self, lt: f64) -> f64 { match self.time_mode { TimeMode::Normal => lt, TimeMode::Reverse => (self.duration - lt).max(0.0), TimeMode::Freeze { at } => at } }
     /// Source-media time consumed after `lt` seconds of clip time.
+    /// Source frame index shown at clip time `lt`; the 1e-6 frame epsilon absorbs quadrature rounding (0.36*25 -> 8.9999999) so boundaries pick the intended frame.
+    pub fn source_index(&self, lt: f64, fps: f64) -> usize { ((self.source_time(lt.max(0.0)) * fps) + 1e-6).floor() as usize }
     pub fn source_time(&self, lt: f64) -> f64 {
         match &self.speed_curve { None => lt * self.speed, Some(p) => { let n = (lt * 240.0).ceil().max(1.0) as usize; let dt = lt / n as f64; (0..n).map(|i| p.at((i as f64 + 0.5) * dt).max(0.0) * dt).sum() } }
     }
