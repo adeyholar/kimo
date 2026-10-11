@@ -8,7 +8,8 @@ class Kimo:
         self.i += 1
         self.p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": self.i, "method": m, "params": params}) + "\n"); self.p.stdin.flush()
         return json.loads(self.p.stdout.readline())["result"]
-    def tools(self): return self.rpc("tools/list", {})["tools"]
+    def tools(self, flat=True): return self.rpc("tools/list", {"mode": "flat"} if flat else {})["tools"]
+    def group_call(self, group, action, **args): return self.call(group, action=action, args=args)
     def call(self, tool, **args):
         r = self.rpc("tools/call", {"name": tool, "arguments": args}); t = r["content"][0]["text"]
         if r["isError"]: raise RuntimeError(f"{tool}: {t}")

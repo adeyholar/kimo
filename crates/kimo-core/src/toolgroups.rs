@@ -1,0 +1,118 @@
+//! Tool groups: an access layer over the flat command registry. An AI client sees ~17 entry points (one per group plus
+//! search/describe) instead of every tool. Every individual tool stays callable by its own name, so nothing is removed.
+//! A tool's group comes from `group_of`: exact names first, then name rules, so most new tools land in the right group on
+//! their own. The unit test fails if any registry tool falls through to "extras", which makes adding a tool without a
+//! group a visible build failure rather than a silent drift.
+use crate::commands::{registry, Command};
+use std::sync::OnceLock;
+fn reg() -> &'static Vec<Command> { static R: OnceLock<Vec<Command>> = OnceLock::new(); R.get_or_init(registry) }
+use serde_json::{json, Value};
+
+pub struct Group { pub name: &'static str, pub about: &'static str }
+pub const GROUPS: &[Group] = &[
+    Group { name: "project", about: "Project settings, media import, save/load, undo/redo, inspect the project." },
+    Group { name: "timeline", about: "Tracks and clips: add, move, trim, split, ripple/roll/slip/slide, speed, markers, multicam, silence cuts." },
+    Group { name: "animate", about: "Properties, keyframes and curves, expressions, motion paths and presets, camera, blend, corner/mesh pin, physics, motion blur, beat binding." },
+    Group { name: "effects", about: "Video effects, transitions, adjustment layers, effect masks and effect presets." },
+    Group { name: "masks", about: "Masks, roto, track mattes, matte refinement and keying." },
+    Group { name: "text", about: "Text, titles, text animators and paths, captions, subtitles, fonts, transcription." },
+    Group { name: "graphics", about: "Shapes, bezier paths, shape modifiers, layer styles, HUD frames, counters, detection boxes." },
+    Group { name: "vfx3d", about: "3D scenes, lights and materials, relight, particles, shard bursts and fracture glass." },
+    Group { name: "tracking", about: "Point/planar/mesh/feature tracking, stabilize, camera solve, lens undistort, track validation and diagnostics." },
+    Group { name: "color_grade", about: "Grading: primaries, curves, wheels, node graphs, LUTs, CDL, match grade, white balance, shared grades." },
+    Group { name: "color_science", about: "Color pipeline: ACES, OCIO, HDR, float and high bit depth, color management, delivery checks and film response." },
+    Group { name: "scopes", about: "Scopes and measurement: waveform/vectorscope, exposure analysis, false color, gamut checks, loudness." },
+    Group { name: "audio", about: "Audio levels, effects, pan, ducking, loudness normalize, beat detection, audio export." },
+    Group { name: "output", about: "Render a frame or export video, GIF, alpha, presets, EXR/TIFF, LUTs, camera solves." },
+    Group { name: "extras", about: "Tools not yet assigned to a group (should stay empty)." },
+];
+
+pub fn group_of(n: &str) -> &'static str {
+    const EXACT: &[(&str, &[&str])] = &[
+        ("project", &["project_set", "import_media", "save_project", "load_project", "undo", "redo", "get_project", "ext_list"]),
+        ("output", &["render_frame", "export", "export_alpha", "export_gif", "export_audio", "export_preset", "inspect_export_preset", "export_with_subtitles", "burn_in", "export_camera_solve", "export_grade_lut", "export_asc_cdl", "export_color_pipeline_lut", "set_ocio_view_delivery", "export_ocio_view_video", "export_high_bit", "export_aces2_reference_video", "render_float_tiff", "render_float_exr", "render_high_bit_still", "render_ocio_display_view", "render_aces2_reference"]),
+        ("effects", &["list_effects", "add_effect", "set_effect_param", "remove_effect", "list_transitions", "add_transition", "set_effect_mask", "add_adjustment_layer", "set_echo", "set_posterize_time", "add_speed_lines", "add_glitch_confetti", "add_managed_linear_effect", "set_effect_encoding"]),
+        ("masks", &["set_mask", "set_mask_keyframe", "remove_mask", "add_mask", "update_mask", "remove_mask_layer", "reorder_mask", "list_masks", "set_mask_prop_key", "set_mask_path_key", "roto_propagate", "set_track_matte", "remove_track_matte", "track_matte", "render_mask", "refine_matte"]),
+        ("text", &["add_text", "set_text", "set_text_style", "add_text_animator", "set_animator_keyframe", "add_title", "set_text_weight", "set_text_path", "list_fonts", "import_srt", "add_captions", "list_captions", "set_caption_style", "edit_caption", "transcribe"]),
+        ("graphics", &["add_shape", "add_path_shape", "set_path", "path_info", "add_path_key", "clear_path_keys", "add_shape_modifier", "list_shape_modifiers", "remove_shape_modifier", "add_modifier", "list_modifiers", "remove_modifier", "list_layer_styles", "set_layer_style", "remove_layer_style", "add_box_expand", "add_detection_box", "add_hud_frame", "add_counter", "add_prompt_box"]),
+        ("vfx3d", &["add_scene3d", "add_shard_burst", "add_particles", "add_emitter", "shards_project", "set_light", "remove_light", "list_lights", "set_material", "list_materials", "remove_material", "set_relight", "preview_material", "simulate_physics"]),
+        ("scopes", &["get_scopes", "render_scope", "render_display_scope", "analyze_exposure", "analyze_exposure_sequence", "render_exposure_false_color", "render_gamut_excursions", "measure_loudness", "analyze_color", "inspect_grade_scopes", "set_grade_scopes"]),
+        ("audio", &["set_audio", "set_audio_volume_key", "set_audio_pan", "add_audio_effect", "remove_audio_effect", "normalize_loudness", "auto_duck", "detect_beats", "add_audio_clip"]),
+        ("animate", &["set_property", "set_keyframe", "set_keyframe_bezier", "set_expression", "get_curve", "move_key", "remove_key", "copy_curve", "simplify_curve", "smooth_curve", "set_motion_path", "remove_motion_path", "apply_motion_preset", "set_motion_blur", "set_flow_blur", "render_flow", "add_camera_shake", "motion_extract", "motion_diff", "bind_beats", "track_beats", "set_corner_pin", "set_mesh_pin", "set_blend", "set_camera", "set_camera_keyframe"]),
+        ("timeline", &["add_track", "add_clip", "move_clip", "trim_clip", "split_clip", "delete_clip", "set_speed", "set_speed_ramp", "set_time_mode", "freeze_frame", "ripple_delete", "ripple_trim", "roll_edit", "slip_clip", "slide_clip", "insert_gap", "lift_range", "duplicate_clip", "rate_stretch", "set_track", "delete_track", "split_all_at", "remove_silence_cuts", "group_clips", "ungroup_clip", "add_marker", "list_markers", "remove_marker", "snap_time", "list_edit_points", "add_multicam", "switch_angle", "list_multicam", "sync_clips"]),
+    ];
+    for (g, names) in EXACT { if names.contains(&n) { return g; } }
+    // rules for tools added later: the first match wins
+    let has = |p: &[&str]| p.iter().any(|x| n.contains(x));
+    if has(&["track_", "_track", "stabiliz", "camera_solve", "solve_camera", "undistort", "homography", "jitter", "residual", "pin_layer", "planar", "corner_disagreement", "error_field", "lk_", "ecc_"]) { return "tracking"; }
+    if has(&["scope", "exposure", "gamut", "loudness"]) { return "scopes"; }
+    if has(&["ocio", "aces", "hdr", "float", "high_bit", "color_pipeline", "color_metadata", "color_delivery", "film_response", "linear", "color_output", "color_frame", "input_color", "delivery_contract"]) { return "color_science"; }
+    if has(&["grade", "color", "cdl", "lut", "node", "white_balance", "curve"]) { return "color_grade"; }
+    if has(&["audio", "beat", "duck"]) { return "audio"; }
+    if has(&["caption", "text", "title", "subtitle", "font", "srt"]) { return "text"; }
+    if has(&["mask", "matte", "roto", "key"]) { return "masks"; }
+    if has(&["scene3d", "light", "material", "particle", "emitter", "shard", "fracture", "relight", "glass"]) { return "vfx3d"; }
+    if has(&["shape", "path", "hud", "layer_style", "modifier"]) { return "graphics"; }
+    if has(&["effect", "transition", "adjustment"]) { return "effects"; }
+    if n.starts_with("export") || n.starts_with("render") { return "output"; }
+    if has(&["keyframe", "expression", "motion", "camera", "blend"]) { return "animate"; }
+    if has(&["clip", "marker", "multicam", "ripple", "speed"]) { return "timeline"; }
+    "extras"
+}
+
+fn first_sentence(d: &str) -> String { let e = d.find(". ").map(|i| i + 1).unwrap_or(d.len()); let s = &d[..e]; if s.len() > 150 { format!("{}...", &s[..s.char_indices().map(|c| c.0).take_while(|&i| i <= 147).last().unwrap_or(0)]) } else { s.to_string() } }
+
+pub fn members(group: &str) -> Vec<&'static Command> { reg().iter().filter(|c| group_of(c.name) == group).collect() }
+
+/// The grouped tools/list: one tool per non-empty group plus kimo_search and kimo_describe.
+pub fn grouped_list() -> Vec<Value> {
+    let mut out = vec![];
+    for g in GROUPS { let m = members(g.name); if m.is_empty() { continue; }
+        let names: Vec<&str> = m.iter().map(|c| c.name).collect();
+        out.push(json!({"name": g.name, "description": format!("{} {} actions: {}. Call with action and args. Use kimo_describe for an action's arguments.", g.about, names.len(), names.join(", ")),
+            "inputSchema": {"type":"object","properties":{"action":{"type":"string","enum":names,"description":"which action to run"},"args":{"type":"object","description":"arguments for that action (see kimo_describe)"}},"required":["action"]}})); }
+    out.push(json!({"name":"kimo_search","description":"Find actions by keyword across every group (names and descriptions). Returns group, action and a one-line summary.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}}));
+    out.push(json!({"name":"kimo_describe","description":"Full description and argument schema of one action, or the action list of a group. Pass action (a tool name) or group.","inputSchema":{"type":"object","properties":{"action":{"type":"string"},"group":{"type":"string"}}}}));
+    out
+}
+
+/// Resolve a grouped call to (tool name, args). Err carries a message for the client.
+pub fn resolve_group_call(group: &str, args: &Value) -> Result<(String, Value), String> {
+    let Some(action) = args.get("action").and_then(|v| v.as_str()) else { return Err(format!("group '{group}' needs 'action' (one of: {})", members(group).iter().map(|c| c.name).collect::<Vec<_>>().join(", "))); };
+    let Some(c) = reg().iter().find(|c| c.name == action) else { return Err(format!("unknown action '{action}' in group '{group}'")); };
+    if group_of(c.name) != group { return Err(format!("action '{action}' belongs to group '{}', not '{group}'", group_of(c.name))); }
+    Ok((action.to_string(), args.get("args").cloned().unwrap_or(json!({}))))
+}
+
+pub fn is_group(n: &str) -> bool { GROUPS.iter().any(|g| g.name == n && !members(n).is_empty()) }
+
+pub fn search(q: &str, limit: usize) -> Value {
+    let words: Vec<String> = q.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
+    let mut hits: Vec<(usize, &Command)> = reg().iter().filter_map(|c| { let (nm, ds) = (c.name.to_lowercase(), c.description.to_lowercase());
+        let sc: usize = words.iter().map(|w| (if nm.contains(w.as_str()) { 3 } else { 0 }) + (if ds.contains(w.as_str()) { 1 } else { 0 })).sum(); if sc > 0 && words.iter().all(|w| nm.contains(w.as_str()) || ds.contains(w.as_str())) { Some((sc, c)) } else { None } }).collect();
+    hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(b.1.name)));
+    json!({"matches": hits.iter().take(limit.clamp(1, 50)).map(|(_, c)| json!({"group": group_of(c.name), "action": c.name, "summary": first_sentence(c.description)})).collect::<Vec<_>>(), "total": hits.len()})
+}
+
+pub fn describe(args: &Value) -> Result<Value, String> {
+    if let Some(a) = args.get("action").and_then(|v| v.as_str()) {
+        let c = reg().iter().find(|c| c.name == a).ok_or_else(|| format!("unknown action '{a}'; try kimo_search"))?;
+        return Ok(json!({"group": group_of(c.name), "action": c.name, "description": c.description, "mutates": c.mutates, "args_schema": c.schema, "call": {"tool": group_of(c.name), "arguments": {"action": c.name, "args": "{...per args_schema}"}}}));
+    }
+    if let Some(g) = args.get("group").and_then(|v| v.as_str()) {
+        let gi = GROUPS.iter().find(|x| x.name == g).ok_or_else(|| format!("unknown group '{g}'; groups: {}", GROUPS.iter().map(|x| x.name).collect::<Vec<_>>().join(", ")))?;
+        return Ok(json!({"group": g, "about": gi.about, "actions": members(g).iter().map(|c| json!({"action": c.name, "summary": first_sentence(c.description)})).collect::<Vec<_>>()}));
+    }
+    Err("pass 'action' or 'group'".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test] fn every_tool_has_a_real_group() { let bad: Vec<_> = reg().iter().filter(|c| group_of(c.name) == "extras").map(|c| c.name).collect(); assert!(bad.is_empty(), "tools without a group, add them to toolgroups.rs: {bad:?}"); }
+    #[test] fn groups_partition_the_reg() { let n: usize = GROUPS.iter().map(|g| members(g.name).len()).sum(); assert_eq!(n, reg().len()); }
+    #[test] fn group_call_resolves_and_rejects_wrong_group() {
+        let (n, a) = resolve_group_call("project", &json!({"action":"project_set","args":{"width":640}})).unwrap(); assert_eq!(n, "project_set"); assert_eq!(a["width"], 640);
+        assert!(resolve_group_call("audio", &json!({"action":"project_set"})).is_err()); assert!(resolve_group_call("audio", &json!({})).is_err()); }
+    #[test] fn grouped_list_is_small() { let l = grouped_list(); assert!(l.len() <= 20, "{}", l.len()); }
+}
