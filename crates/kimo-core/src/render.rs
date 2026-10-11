@@ -252,14 +252,14 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
                 let i = (y * w + x) * 4; let a = (fl + sk * (1.0 - fl)).clamp(0.0, 1.0); if a <= 0.0 { continue; }
                 for j in 0..3 { f.d[i + j] = ((fill[j] * fl + stroke_color[j] * sk * (1.0 - fl)) / a) as f32; } f.d[i + 3] = a as f32; } }
         }
-        Source::Emitter(e) => { let alpha_of = |id: &str| silhouette_alpha(p, id, c.start + lt, cache).map(|(w, h, a)| (w, h, (*a).clone()));
+        Source::Emitter(e) => { let alpha_of = |id: &str| silhouette_alpha(p, id, c.start + lt, cache);
             let emit = e.shape == "layer" && !e.emit_clip.is_empty(); if emit { crate::particles::set_emit_mask(alpha_of(&e.emit_clip), e.emit_edge);
                 if e.emit_follow { let bw = crate::particles::EMIT_BIN; let lmax = e.life + e.life_var.abs(); let b1 = (lt / bw).floor() as i64; let b0 = if e.prewarm { ((lt - lmax) / bw).floor() as i64 } else { ((lt - lmax).max(0.0) / bw).floor() as i64 };
-                    let bins = (b0..=b1).map(|b| (b, silhouette_alpha(p, &e.emit_clip, c.start + ((b as f64 + 0.5) * bw).max(0.0), cache).map(|(w, h, a)| (w, h, (*a).clone())))).collect(); crate::particles::set_emit_bins(bins, e.emit_edge); } }
+                    let bins = (b0..=b1).map(|b| (b, silhouette_alpha(p, &e.emit_clip, c.start + ((b as f64 + 0.5) * bw).max(0.0), cache))).collect(); crate::particles::set_emit_bins(bins, e.emit_edge); } }
             let has = e.colliders.iter().any(|c| c.kind == "layer");
-            if has { let ms = e.colliders.iter().map(|cc| if cc.kind == "layer" { silhouette_alpha(p, &cc.clip_id, c.start + lt, cache).map(|(w, h, a)| (w, h, (*a).clone())) } else { None }).collect(); crate::particles::set_layer_masks(ms);
+            if has { let ms = e.colliders.iter().map(|cc| if cc.kind == "layer" { silhouette_alpha(p, &cc.clip_id, c.start + lt, cache) } else { None }).collect(); crate::particles::set_layer_masks(ms);
                 if e.colliders.iter().any(|c| c.kind == "layer" && c.follow) { let bw = crate::particles::EMIT_BIN; let lmax = e.life + e.life_var.abs(); let b1 = (lt / bw).floor() as i64; let b0 = if e.prewarm { ((lt - lmax) / bw).floor() as i64 } else { ((lt - lmax).max(0.0) / bw).floor() as i64 };
-                    let mut bins = vec![]; for (ci, cc) in e.colliders.iter().enumerate() { if cc.kind == "layer" && cc.follow { for b in b0..=b1 { bins.push((ci, b, silhouette_alpha(p, &cc.clip_id, c.start + ((b as f64 + 0.5) * bw).max(0.0), cache).map(|(w, h, a)| (w, h, (*a).clone())))); } } } crate::particles::set_layer_bins(bins); } }
+                    let mut bins = vec![]; for (ci, cc) in e.colliders.iter().enumerate() { if cc.kind == "layer" && cc.follow { for b in b0..=b1 { bins.push((ci, b, silhouette_alpha(p, &cc.clip_id, c.start + ((b as f64 + 0.5) * bw).max(0.0), cache))); } } } crate::particles::set_layer_bins(bins); } }
             crate::particles::render_fps(e, &mut f, lt, p.fps); if has { crate::particles::set_layer_masks(Vec::new()); crate::particles::clear_layer_bins(); } if emit { crate::particles::set_emit_mask(None, false); crate::particles::clear_emit_bins(); } }
         Source::SpeedLines(s) => crate::speedlines::render(s, &mut f, lt),
         Source::GlitchConfetti(s) => crate::confetti::render(s, &mut f, lt),
