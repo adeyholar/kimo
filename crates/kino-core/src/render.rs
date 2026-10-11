@@ -177,7 +177,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         Source::SpeedLines(s) => crate::speedlines::render(s, &mut f, lt),
         Source::GlitchConfetti(s) => crate::confetti::render(s, &mut f, lt),
         Source::Scene3D(e) => crate::scene3d::render(e, &mut f, lt, &crate::three_d::Camera::from_props(&p.camera, c.start + lt)),
-        Source::ShardBurst(e) => { if let Some(tid) = e.plane.as_ref().and_then(|pl| pl.occlusion_target.as_ref()) { let hit = crate::shards::TARGET_MATTE.with(|m| m.borrow().get(tid).filter(|(tt, _)| (*tt - (c.start + lt)).abs() < 1e-9).map(|(_, o)| o.clone())); if let Some(occ) = hit { crate::shards::EXT_OCC.with(|cell| *cell.borrow_mut() = Some(occ)); } else { let tc = flat_clips(&p.tracks, 0.0).into_iter().find(|x| &x.id == tid); if let (Some(tc), Some(sp)) = (tc, p.occluders.get(tid)) { if let Some(vis) = crate::planar::adaptive_matte(&tc, sp, p.fps, c.start + lt, f.w, f.h) { let occ: Vec<f32> = vis.iter().map(|v| 1.0 - v).collect(); crate::shards::EXT_OCC.with(|cell| *cell.borrow_mut() = Some(std::sync::Arc::new(occ))); } } } } crate::shards::WORK_LINEAR.store(p.color_pipeline.enabled && p.color_pipeline.linear_resample, std::sync::atomic::Ordering::Relaxed); crate::shards::render(e, &mut f, lt, &crate::three_d::Camera::from_props(&p.camera, c.start + lt), p.fps, c.duration) }
+        Source::ShardBurst(e) => { if let Some(tid) = e.plane.as_ref().and_then(|pl| pl.occlusion_target.as_ref()) { if let Some(occ) = target_screen_occ(p, tid, c.start + lt) { crate::shards::EXT_OCC.with(|cell| *cell.borrow_mut() = Some(occ)); } } crate::shards::WORK_LINEAR.store(p.color_pipeline.enabled && p.color_pipeline.linear_resample, std::sync::atomic::Ordering::Relaxed); crate::shards::render(e, &mut f, lt, &crate::three_d::Camera::from_props(&p.camera, c.start + lt), p.fps, c.duration) }
         Source::Particles { kind, count, color, size, seed } => {
             let rnd = |i: u64, k: u64| { let mut x = (seed ^ (i * 0x9E3779B97F4A7C15) ^ (k * 0xBF58476D1CE4E5B9)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 29; (x >> 11) as f64 / (1u64 << 53) as f64 };
             let (wf, hf) = (w as f64, h as f64);
@@ -325,12 +325,6 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         let mut f = f; if let Some(pl) = tplan.as_mut() { mask = pl.mask.take(); if let Some(po) = &pl.post { po(&mut f); } }
         let f = if let Some(mut pf) = crate::planar::pin_render(c, &f, lt, p.fps) { let adaptive = p.occluders.get(&c.id).map(|s| s.adaptive).unwrap_or(false); if adaptive { if let Some(sp) = p.occluders.get(&c.id) { if let Some(m) = crate::planar::adaptive_matte(c, sp, p.fps, t, w, h) { for i in 0..w * h { pf.d[i * 4 + 3] *= m[i]; } } } } if !adaptive && crate::planar::anchor_src(&c.id).is_none() { if let Some(sp) = p.occluders.get(&c.id) { crate::planar::rebuild_anchor(&c.id, sp, w, h); } } if let Some((sid, sstart)) = crate::planar::anchor_src(&c.id).filter(|_| !adaptive) { if let (Some(fr), Some(q)) = (cache.frames_of(&sid), crate::planar::pin_quad(c, lt)) { if let Some(cur) = fr.get(((t - sstart).max(0.0) * p.fps) as usize) { let g = prop(c, "pin_gain", lt) as f32; if let Some(m) = crate::planar::occluder_matte(&c.id, cur, &q, if g > 0.0 { g } else { 1.0 }) { for i in 0..w * h { pf.d[i * 4 + 3] *= m[i]; } } } } } pf } else if let Some(cs) = &c.corners { corner_pin(&f, cs) } else { f };
         let (rxv, ryv, pzv) = (prop(c, "rot_x", lt), prop(c, "rot_y", lt), prop(c, "pos_z", lt));
-        // Shard planes that consume this clip's adaptive matte (plane.occlusion_target) need it in FINAL SCREEN space: push the matte through the same layer transform (scale/pos/rotation, 3D pose and project camera) as the pinned layer itself.
-        if let Some(sp) = p.occluders.get(&c.id).filter(|s| s.adaptive) { if flat_clips(&p.tracks, 0.0).iter().any(|x| matches!(&x.source, Source::ShardBurst(e) if e.plane.as_ref().and_then(|pl| pl.occlusion_target.as_ref()) == Some(&c.id))) { if let Some(vis) = crate::planar::adaptive_matte(c, sp, p.fps, t, w, h) {
-            let mut mf = Frame::new(w, h); for i in 0..w * h { mf.d[i * 4] = vis[i]; mf.d[i * 4 + 1] = vis[i]; mf.d[i * 4 + 2] = vis[i]; mf.d[i * 4 + 3] = 1.0; }
-            let tm = if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 { let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(c, "rotation", lt) + rot_extra], scale: sc }; crate::three_d::render_layer(&mf, &cam, &pose, prop(c, "backface", lt) != 0.0) } else { transform_bb(&mf, Some((0, 0, w - 1, h - 1)), sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
-            let occ: Vec<f32> = (0..w * h).map(|i| { let a = tm.d[i * 4 + 3].clamp(0.0, 1.0); 1.0 - (tm.d[i * 4] * a + (1.0 - a)) }).collect();
-            crate::shards::TARGET_MATTE.with(|m| { m.borrow_mut().insert(c.id.clone(), (t, std::sync::Arc::new(occ))); }); } } }
         if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 {
             let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(c, "rotation", lt) + rot_extra], scale: sc };
             let f3 = crate::three_d::render_layer(&f, &cam, &pose, prop(c, "backface", lt) != 0.0);
@@ -587,4 +581,22 @@ fn flow_pair(fr:&Frames,a:usize,b:usize,w:usize,h:usize)->Result<(Frame,Frame),S
 }
 #[cfg(test)]mod color_tool_image_argv{use super::*;
 #[test]fn each_migrated_color_writer_uses_original_argv(){for writer in ["render_aces2_reference","render_gamut_excursions","render_exposure_false_color"]{let path=format!("{writer}.png");let cmd=image_encoder_command(320,180,&path);let args:Vec<_>=cmd.get_args().map(|v|v.to_string_lossy().to_string()).collect();assert_eq!(args,vec!["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s","320x180","-i","-","-frames:v","1",&path],"writer{writer}");}}
+}
+
+/// Final-screen occluder matte (1 = occluder) of an adaptive-occluder pinned clip at project time t, in the same space the clip's own layer lands in (scale, pos, rotation, motion path, transition_in, 3D pose and project camera). Evaluated on demand, independent of track order and of the target clip's opacity or visibility. Cached per (clip, time).
+pub fn target_screen_occ(p: &Project, id: &str, t: f64) -> Option<std::sync::Arc<Vec<f32>>> {
+    let hit = crate::shards::TARGET_MATTE.with(|m| m.borrow().get(id).filter(|(tt, _)| (*tt - t).abs() < 1e-9).map(|(_, o)| o.clone())); if hit.is_some() { return hit; }
+    let c = flat_clips(&p.tracks, 0.0).into_iter().find(|x| x.id == id)?; let sp = p.occluders.get(id).filter(|s| s.adaptive)?;
+    if t < c.start || t >= c.start + c.duration { return None; }
+    let (w, h) = (p.width as usize, p.height as usize);
+    let lt = if c.posterize_fps > 0.0 { (((t - c.start) * c.posterize_fps + 1e-6).floor() / c.posterize_fps).max(0.0) } else { t - c.start };
+    let vis = crate::planar::adaptive_matte(&c, sp, p.fps, t, w, h)?;
+    let (mut dx, mut dy, mut sc, mut rot_extra) = (prop(&c, "x", lt), prop(&c, "y", lt), prop(&c, "scale", lt), 0.0);
+    if let Some(mp) = &c.motion_path { let (x, y, a) = crate::motion::sample(mp, prop(&c, "path", lt), w, h); dx += x; dy += y; if mp.auto_orient { rot_extra += a + mp.orient_offset; } }
+    if let Some(tr_in) = &c.transition_in { if lt < tr_in.duration { let pl = crate::transitions::plan(tr_in, lt, w, h); dx += pl.dx; dy += pl.dy; sc *= pl.scale; rot_extra += pl.rot; } }
+    let (rxv, ryv, pzv) = (prop(&c, "rot_x", lt), prop(&c, "rot_y", lt), prop(&c, "pos_z", lt));
+    let mut mf = Frame::new(w, h); for i in 0..w * h { mf.d[i * 4] = vis[i]; mf.d[i * 4 + 1] = vis[i]; mf.d[i * 4 + 2] = vis[i]; mf.d[i * 4 + 3] = 1.0; }
+    let tm = if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 { let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(&c, "rotation", lt) + rot_extra], scale: sc }; crate::three_d::render_layer(&mf, &cam, &pose, prop(&c, "backface", lt) != 0.0) } else { transform_bb(&mf, Some((0, 0, w - 1, h - 1)), sc, prop(&c, "rotation", lt) + rot_extra, dx, dy) };
+    let occ: Vec<f32> = (0..w * h).map(|i| { let a = tm.d[i * 4 + 3].clamp(0.0, 1.0); 1.0 - (tm.d[i * 4] * a + (1.0 - a)) }).collect();
+    let arc = std::sync::Arc::new(occ); crate::shards::TARGET_MATTE.with(|m| { m.borrow_mut().insert(id.to_string(), (t, arc.clone())); }); Some(arc)
 }
