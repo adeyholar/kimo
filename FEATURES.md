@@ -788,3 +788,8 @@ is not Resolve shared-node/remote-grade semantic parity or a Fusion compositor.
 - SVG `A`/`a` arcs in paths (endpoint to center conversion, radius scaling, glued flags).
 - `add_path_key` / `clear_path_keys`: keyframe the whole path (per-point animation) with ease; keys must share the base path structure.
 - Proof: `python3 tests/path_arcs_morph_proof.py`.
+
+- Exact frame clock: media frame index now has a 1e-6 frame tolerance (media_index in render.rs). Before, times like 29/25 computed 28.99999999999996 and showed the previous source frame (a 1-frame plate lag against keyframed pins). Proof: tests/frame_clock_proof.py (98 exact frame times equal their epsilon renders); the film agent's phase_repro also reads exact_equals_previous false at 29/57/58. Not changed: speed-curve clips already had the tolerance; confetti/speedlines flicker steps use their own floor.
+
+## Editorial follow-up (captions agent, BETA)
+export_with_subtitles (selectable mov_text/SubRip streams next to burn-in, atomic output, range-relative cue times); measure_loudness true_peak=true (4x sinc reconstruction estimate, NOT certified, within 0.3 dB of FFmpeg ebur128 per the author); sync_clips drop_frame=true (29.97/59.94 DF labels, skipped labels rejected). Details in docs/EDITORIAL_MCP.md. I ran their MCP proofs (MP4/MKV streams, true peak, DF shift) and fuzz (240 tools / 8663 calls / 0 failures); the 0.3 dB figure is the author's.

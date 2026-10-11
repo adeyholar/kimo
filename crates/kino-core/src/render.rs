@@ -172,7 +172,7 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
     Ok(Frames { still:is_img,working_linear:native_fit,quantized:Default::default(),linear_buf, buf, fs, first: a })
 }
 
-fn media_index(c:&Clip,lt:f64,fps:f64)->usize{if c.speed_curve.is_some(){return c.source_index(lt,fps)}(lt.max(0.)*fps).floor() as usize}
+fn media_index(c:&Clip,lt:f64,fps:f64)->usize{if c.speed_curve.is_some(){return c.source_index(lt,fps)}(lt.max(0.)*fps+1e-6).floor() as usize}
 fn media_total(c:&Clip,fps:f64)->usize{let span=if c.speed_curve.is_some(){c.source_time(c.duration)}else{c.duration};((span*fps).ceil() as usize).max(1)}
 fn decode_cache_limit()->usize{(crate::guard::limits().mem_bytes/3).min(256*1024*1024).max(1024*1024)}
 

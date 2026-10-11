@@ -16,7 +16,7 @@ offset. Cues remain normal timed text clips, editable through `edit_caption` or
 existing clip/keyframe tools. `list_captions` returns groups and cue IDs.
 `set_caption_style` applies a preset to a group. `burn_in(caption_id, enabled)`
 controls caption visibility in preview and rendered exports, without deleting
-editable objects. It does not embed a selectable subtitle stream.
+editable objects. `export_with_subtitles` adds independent selectable streams (see below).
 
 ## Audio
 
@@ -44,7 +44,10 @@ opposite channel. It is not a constant-power mono-to-stereo spatializer.
 K-weighting, 400 ms blocks/100 ms hops, -70 LUFS absolute and -10 LU relative gates.
 Clips measure post-filter but pre-volume/pan. Without clip_id, it measures the final
 mixed/limited timeline. Silent or <400 ms PCM returns null. The reported peak is
-sample peak, not oversampled true peak.
+sample peak. Optional `true_peak=true` adds a four-times oversampled estimate
+using a normalized 64-tap Blackman-windowed sinc for each fractional phase.
+It includes original sample peaks, detects intersample overs, and is not a
+certified meter. Normalization still guards sample peak, not true peak.
 
 `normalize_loudness(clip_id, target_lufs)` replaces volume with a static measured
 gain, refusing targets that exceed -1 dBFS sample headroom. Compress first or lower
@@ -65,8 +68,11 @@ max_offset 5 s, min_correlation .75. This is an incremental CPU sync algorithm,
 not sample-accurate phase alignment or a speech-aware matcher.
 
 `by="timecode"` takes explicit source-in-point `timecodes` matching clip order,
-SMPTE `HH:MM:SS:FF`, integer fps. Embedded metadata extraction, drop-frame rates,
-and midnight wrap are not implemented. Normal 1x clips only for either sync mode.
+SMPTE `HH:MM:SS:FF`, integer fps by default. `drop_frame=true` uses
+`HH:MM:SS;FF` at 30000/1001 or 60000/1001 fps, including rounded 29.97/59.94
+within .001 fps. It counts frame labels rather than pretending nominal 30/60
+is the actual rate. Skipped frame labels at non-tenth-minute boundaries are
+rejected. Embedded metadata extraction and midnight wrap are not implemented. Normal 1x clips only for either sync mode.
 
 `add_multicam(angles, audio_angle=0)` moves the source clips into a persistent group
 and creates a dedicated track covering their common synchronized interval.
@@ -98,3 +104,27 @@ runs a stdio MCP session, renders a red-to-blue multicam switch and caption burn
 on/off, exports audio and saves the project. Requires FFmpeg and Pillow. These are
 synthetic behavior proofs, not a commercial-editor parity claim or a listening
 quality assessment. Whisper transcription is not exercised without a model/CLI.
+
+
+## Selectable subtitle export
+
+`export_with_subtitles(path, caption_ids?, start?, end?, crf?)` renders H.264/AAC
+then muxes one subtitle stream per selected group: MP4 `mov_text`, MKV SubRip.
+Omit caption_ids for all groups (1..32). Existing burn-in settings are independent:
+turn them off for soft-only output, or leave on for both. Selectable text keeps
+cue content and timing, not the burn-in styling presets. Titles identify groups;
+no language or default-on preference is guessed. Unicode is passed as UTF-8.
+Range clips and shifts cue times to zero, matching the rounded video-frame range.
+Missing/deleted/nested cues, literal angle brackets (SRT markup ambiguity), blank text separators, or groups with no cues in range
+fail before export. Temporary files are removed; final output replaces its target
+only after successful mux, preserving an earlier target on failure.
+
+This export uses the existing ordinary H.264 SDR delivery contract, not the
+high-bit/HDR preset path. It does not support ASS styling or subtitle editor
+metadata. Individual players decide how to present/select the streams.
+
+Follow-up tests verify MP4/MKV subtitle codecs and extracted cue timings,
+atomic failure preservation, true peak against FFmpeg ebur128 on three tones
+within .3dB, a known intersample-over fixture, and 29.97/59.94 label boundaries.
+`tests/gap4_followup_proof.py` runs these surfaces over MCP, then renders the
+same soft-sub MP4 without subtitles and with its selectable stream enabled.

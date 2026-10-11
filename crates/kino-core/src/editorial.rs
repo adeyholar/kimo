@@ -190,3 +190,135 @@ pub fn process_pcm(pcm: &mut [f32], effects: &[AudioEffect]) {
         }
     }
 }
+
+/// Four-phase windowed-sinc reconstruction estimate of intersample peak.
+/// Includes sample peaks, reconstructs at 4x; not a certified hardware meter.
+/// Blackman window, 64 taps per fractional phase, normalized DC gain.
+pub fn true_peak_4x(pcm: &[f32]) -> Result<Option<f64>, String> {
+    if pcm.len() % 2 != 0 || pcm.iter().any(|v| !v.is_finite()) {
+        return Err("finite stereo PCM required".into());
+    }
+    if pcm.is_empty() {
+        return Ok(None);
+    }
+    let frames = pcm.len() / 2;
+    let mut phases = vec![];
+    for phase in 1..4 {
+        let frac = phase as f64 / 4.;
+        let mut weights = vec![];
+        for tap in -31i32..=32 {
+            let x = tap as f64 - frac;
+            let pi = std::f64::consts::PI;
+            let sinc = if x.abs() < 1e-12 {
+                1.
+            } else {
+                (pi * x).sin() / (pi * x)
+            };
+            let window = 0.42 + 0.5 * (pi * x / 32.).cos() + 0.08 * (2. * pi * x / 32.).cos();
+            weights.push((tap, sinc * window));
+        }
+        let sum = weights.iter().map(|(_, v)| v).sum::<f64>();
+        for (_, v) in &mut weights {
+            *v /= sum
+        }
+        phases.push(weights);
+    }
+    let mut peak = pcm.iter().map(|v| v.abs() as f64).fold(0., f64::max);
+    for i in 0..frames {
+        if i % 4096 == 0 {
+            crate::guard::check()
+        }
+        for weights in &phases {
+            for ch in 0..2 {
+                let mut v = 0.;
+                for (tap, weight) in weights {
+                    let j = i as i64 + *tap as i64;
+                    if j >= 0 && (j as usize) < frames {
+                        v += pcm[j as usize * 2 + ch] as f64 * weight;
+                    }
+                }
+                peak = peak.max(v.abs());
+            }
+        }
+    }
+    Ok(if peak > 0. {
+        Some(20. * peak.log10())
+    } else {
+        None
+    })
+}
+#[cfg(test)]
+mod truepeak_tests {
+    use super::*;
+    #[test]
+    fn intersample_over_and_silence() {
+        let mut pcm = vec![];
+        for i in 0..48000 {
+            let x = 0.9
+                * (std::f64::consts::TAU * 12000. * i as f64 / 48000.
+                    + std::f64::consts::FRAC_PI_4)
+                    .sin();
+            let fade = (i as f64 / 1000.).min((48000 - i) as f64 / 1000.).min(1.);
+            pcm.extend([x as f32 * fade as f32; 2]);
+        }
+        let sample = 20.
+            * pcm
+                .iter()
+                .map(|v| v.abs() as f64)
+                .fold(0., f64::max)
+                .log10();
+        let peak = true_peak_4x(&pcm).unwrap().unwrap();
+        assert!(peak - sample > 2.9, "sample{sample}, reconstructed{peak}");
+        assert!((peak - 20. * 0.9f64.log10()).abs() < 0.1);
+        assert_eq!(true_peak_4x(&vec![0.; 100]).unwrap(), None);
+        assert!(true_peak_4x(&[f32::NAN, 0.]).is_err());
+    }
+    #[test]
+    fn compare_ffmpeg_ebur128() {
+        let path = std::env::temp_dir().join(format!("kino-truepeak-{}.wav", std::process::id()));
+        for hz in [997., 12000., 17000.] {
+            let pcm: Vec<f32> = (0..48000)
+                .flat_map(|i| {
+                    let fade = (i as f64 / 1000.).min((48000 - i) as f64 / 1000.).min(1.);
+                    let v = (0.8
+                        * (std::f64::consts::TAU * hz * i as f64 / 48000. + 0.785).sin()
+                        * fade) as f32;
+                    [v, v]
+                })
+                .collect();
+            crate::audio::write_wav(path.to_str().unwrap(), &pcm).unwrap();
+            let out = std::process::Command::new("ffmpeg")
+                .args([
+                    "-hide_banner",
+                    "-nostats",
+                    "-i",
+                    path.to_str().unwrap(),
+                    "-af",
+                    "ebur128=peak=true",
+                    "-f",
+                    "null",
+                    "-",
+                ])
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            let text = String::from_utf8_lossy(&out.stderr);
+            let summary = text.rsplit("True peak:").next().unwrap();
+            let expected = summary
+                .split("Peak:")
+                .nth(1)
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .parse::<f64>()
+                .unwrap();
+            let estimate = true_peak_4x(&pcm).unwrap().unwrap();
+            assert!(
+                (estimate - expected).abs() < 0.3,
+                "{hz}Hz ours{estimate}, ffmpeg{expected}"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+}

@@ -307,10 +307,19 @@ fn measure_loudness(ss: &mut Session, a: &Value) -> Result<Value, String> {
     } else {
         crate::audio::mix_strict(&ss.project).map_err(|e| e.to_string())?
     };
+    let tp = match a.get("true_peak") {
+        Some(v) => v.as_bool().ok_or("true_peak boolean required")?,
+        None => false,
+    };
+    let true_peak = if tp {
+        crate::editorial::true_peak_4x(&pcm)?
+    } else {
+        None
+    };
     let l = loudness(&pcm);
     let peak = pcm.iter().map(|v| v.abs() as f64).fold(0., f64::max);
     Ok(
-        json!({"integrated_lufs":l,"sample_peak_dbfs":if peak>0.{Some(20.*peak.log10())}else{None},"method":"EBU R128 stereo 48k; clip measurement post filters, before volume/pan; timeline post mix/limiter","minimum_seconds":0.4}),
+        json!({"integrated_lufs":l,"sample_peak_dbfs":if peak>0.{Some(20.*peak.log10())}else{None},"method":"EBU R128 stereo 48k; clip measurement post filters, before volume/pan; timeline post mix/limiter","minimum_seconds":0.4,"true_peak_dbfs":true_peak,"true_peak_method":if tp{Some("4x 64-tap Blackman-windowed sinc estimate, not certified")}else{None}}),
     )
 }
 fn normalize_loudness_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
@@ -423,19 +432,12 @@ fn sync_clips_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
             return Err("one timecode per clip required".into());
         }
         let fps = finite(a, "fps", ss.project.fps, 1., 120.)?;
-        if fps.fract() != 0. {
-            return Err("non-drop integer frame rate required".into());
-        }
-        let read = |v: &Value| -> Result<f64, String> {
-            let t = v.as_str().ok_or("timecode must be string")?;
-            let n: Vec<u32> = t
-                .split(':')
-                .map(|x| x.parse().map_err(|_| "invalid SMPTE timecode".into()))
-                .collect::<Result<_, String>>()?;
-            if n.len() != 4 || n[0] > 23 || n[1] > 59 || n[2] > 59 || n[3] >= fps as u32 {
-                return Err("timecode HH:MM:SS:FF out of range".into());
-            }
-            Ok(n[0] as f64 * 3600. + n[1] as f64 * 60. + n[2] as f64 + n[3] as f64 / fps)
+        let drop = match a.get("drop_frame") {
+            Some(v) => v.as_bool().ok_or("drop_frame boolean required")?,
+            None => false,
+        };
+        let read = |v: &Value| {
+            crate::timecode::seconds(v.as_str().ok_or("timecode string required")?, fps, drop)
         };
         let reference = read(&values[0])?;
         for v in &values[1..] {
@@ -490,7 +492,7 @@ fn sync_clips_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
         ss.project.find_clip_mut(id).unwrap().start = origin + off - min;
     }
     Ok(
-        json!({"clip_ids":names,"offsets_seconds":offsets,"correlations":scores,"origin_shift":-min,"method":by,"audio_resolution_seconds":0.005,"timecode_mode":"explicit non-drop source in-point timecodes; no midnight wrap"}),
+        json!({"clip_ids":names,"offsets_seconds":offsets,"correlations":scores,"origin_shift":-min,"method":by,"audio_resolution_seconds":0.005,"timecode_mode":"explicit source in-point SMPTE, drop_frame optional; no midnight wrap"}),
     )
 }
 /// Offset means other's sample zero occurs at this many hops after reference zero.
@@ -692,10 +694,10 @@ pub fn commands() -> Vec<Command> {
  Command{name:"add_audio_effect",description:"Append validated EQ/compressor/deesser/reverb/denoise. Render/export uses validated FFmpeg filters plus CPU reverb. Reverb is stereo damped-comb/allpass Schroeder; tail cropped to clip duration, reverb applied after FFmpeg effects.",mutates:true,schema:obj(vec![("clip_id",s("media clip")),("kind",json!({"type":"string","enum":["eq","compressor","deesser","reverb","denoise"]})),("params",json!({"type":"object","additionalProperties":{"type":"number"}}))],&["clip_id","kind"]),run:add_audio_effect},
  Command{name:"remove_audio_effect",description:"Remove effect by zero-based index.",mutates:true,schema:obj(vec![("clip_id",s("clip")),("effect_index",json!({"type":"integer","minimum":0}))],&["clip_id","effect_index"]),run:remove_audio_effect},
  Command{name:"set_audio_pan",description:"Stereo balance -1 left to +1 right; attenuates opposite channel.",mutates:true,schema:obj(vec![("clip_id",s("clip")),("pan",n("-1..1"))],&["clip_id","pan"]),run:set_audio_pan},
- Command{name:"measure_loudness",description:"EBU R128 integrated stereo LUFS and sample peak. Optional clip_id measures decoded post filters/pre gain; absent measures final timeline mix. Silence or <400ms returns null. Not true peak.",mutates:false,schema:obj(vec![("clip_id",s("optional clip"))],&[]),run:measure_loudness},
+ Command{name:"measure_loudness",description:"EBU R128 integrated stereo LUFS and sample peak. Optional clip_id measures decoded post filters/pre gain; absent measures final timeline mix. Silence or <400ms LUFS returns null. true_peak=true adds 4x sinc reconstruction peak estimate (not certified).",mutates:false,schema:obj(vec![("clip_id",s("optional clip")),("true_peak",json!({"type":"boolean","default":false}))],&[]),run:measure_loudness},
  Command{name:"normalize_loudness",description:"Replace clip volume with measured loudness gain. Rejects sample peaks over -1dBFS; target -36..-5 LUFS. Remeasure final timeline after mix.",mutates:true,schema:obj(vec![("clip_id",s("clip")),("target_lufs",n("default -14"))],&["clip_id"]),run:normalize_loudness},
  Command{name:"auto_duck",description:"Measure under-track RMS and generate a separate target-track duck envelope; volume keys preserved. Re-run after changing source dialogue.",mutates:true,schema:obj(vec![("track",s("target music track")),("under",s("dialogue track")),("amount_db",n("-60..0 default -12")),("threshold_db",n("default -35")),("attack",n("seconds default .1")),("release",n("seconds default .3"))],&["track","under"]),run:auto_duck},
- Command{name:"sync_clips",description:"Align 1x media clips by bounded RMS audio correlation (5ms resolution; rejects silence and ambiguous repeats), or explicit source in-point SMPTE non-drop timecodes. Shifts starts, preserves source in-points.",mutates:true,schema:obj(vec![("clip_ids",json!({"type":"array","items":{"type":"string"},"minItems":2,"maxItems":16})),("by",json!({"type":"string","enum":["audio","timecode"]})),("timecodes",json!({"type":"array","items":{"type":"string"}})),("fps",n("non-drop integer fps")),("window",n("1..60s default30")),("max_offset",n(".05..10s default5")),("min_correlation",n("default .75"))],&["clip_ids","by"]),run:sync_clips},
+ Command{name:"sync_clips",description:"Align 1x media clips by bounded RMS audio correlation (5ms resolution; rejects silence and ambiguous repeats), or explicit source in-point SMPTE timecodes, optional drop_frame at 29.97/59.94. Shifts starts, preserves source in-points.",mutates:true,schema:obj(vec![("clip_ids",json!({"type":"array","items":{"type":"string"},"minItems":2,"maxItems":16})),("by",json!({"type":"string","enum":["audio","timecode"]})),("timecodes",json!({"type":"array","items":{"type":"string"}})),("fps",n("integer non-drop or 30000/1001,60000/1001 drop")),("drop_frame",json!({"type":"boolean","default":false})),("window",n("1..60s default30")),("max_offset",n(".05..10s default5")),("min_correlation",n("default .75"))],&["clip_ids","by"]),run:sync_clips},
  Command{name:"add_multicam",description:"Move 2..16 synchronized media clips into persistent multicam group; common interval, angle zero video, fixed audio angle. Generates normal timeline clips for all exports.",mutates:true,schema:obj(vec![("angles",json!({"type":"array","items":{"type":"string"}})),("audio_angle",json!({"type":"integer","minimum":0}))],&["angles"]),run:add_multicam},
  Command{name:"switch_angle",description:"Switch multicam video at absolute timeline seconds t, zero-based angle; continuous audio remains fixed. Rebuilds group track, replacing manual edits there.",mutates:true,schema:obj(vec![("multicam_id",s("group")),("t",n("absolute timeline seconds")),("angle",json!({"type":"integer","minimum":0}))],&["multicam_id","t","angle"]),run:switch_angle},
  Command{name:"list_multicam",description:"Read multicam groups, angle recipes and switches.",mutates:false,schema:obj(vec![],&[]),run:list_multicam},
