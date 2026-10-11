@@ -445,6 +445,8 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
     Ok(out)
 }
 
+/// The compositor keeps premultiplied color on a transparent canvas (rgb = sum of src*a over below); alpha deliveries need straight alpha.
+pub(crate) fn unpremultiply(f: &mut Frame) { for px in f.d.chunks_exact_mut(4) { let a = px[3]; if a > 0.0 && a < 1.0 { for j in 0..3 { px[j] = (px[j] / a).min(1.0); } } } }
 pub fn to_rgba8(f: &Frame) -> Vec<u8> { f.d.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect() }
 
 fn image_encoder_command(w:usize,h:usize,path:&str)->Command{let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{w}x{h}"),"-i","-","-frames:v","1",path]);cmd}
@@ -461,7 +463,7 @@ pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<
 
 /// Ordinary video delivery is explicit Rec709 RGB -> limited BT709 YUV.
 /// Disabled projects keep their display-sRGB render samples; only delivery changes.
-fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Result<Command,String>{
+pub(crate) fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Result<Command,String>{
     let q=&p.color_pipeline;
     let transfer=if q.enabled{q.validate()?;if q.output_gamut!=0{return Err("ordinary video export requires Rec709 output gamut=0; select a supported delivery output or export_high_bit".into())}match q.output_transfer{0=>"linear",1=>"iec61966-2-1",8=>"bt709",_=>return Err("ordinary video export requires exactly taggable linear/sRGB/BT709 output transfer; select a supported delivery output or export_high_bit".into())}}else{"iec61966-2-1"};
     let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v","libx264","-vf","scale=out_color_matrix=bt709:out_range=tv","-pix_fmt","yuv420p","-color_range","tv","-color_primaries","bt709","-color_trc",transfer,"-colorspace","bt709","-crf",&crf.to_string(),path]);Ok(cmd)
@@ -490,7 +492,7 @@ pub fn export_alpha(p: &Project, path: &str, format: &str, t_in: f64, t_out: f64
         loop { let last = (f0 + end - 1) as f64 / p.fps; match prepare_export_range(p, &mut cache, (f0 + i) as f64 / p.fps, last) { Ok(()) => break, Err(e) if end - i > 1 && (e.contains("cache budget") || e.contains("memory cap") || e.contains("bounded cache")) => { end = i + (end - i).div_ceil(2); cache = Cache::new_export(); }, Err(e) => return Err(e) } }
         let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
         std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
-            let res = render_frame_opts(p, (f0 + k) as f64 / p.fps, cache, true).map(|f| to_rgba8(&f)); *slots[k - i].lock().unwrap() = Some(res); }); } });
+            let res = render_frame_opts(p, (f0 + k) as f64 / p.fps, cache, true).map(|mut f| { unpremultiply(&mut f); to_rgba8(&f) }); *slots[k - i].lock().unwrap() = Some(res); }); } });
         for m in slots { encoder.write(m.into_inner().unwrap().unwrap()?)?; }
         i = end;
     }
@@ -504,9 +506,15 @@ pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) ->
     let t_out = t_out.min(p.duration()); if t_in >= t_out { return Err("range starts after the end of the timeline".into()); }
     let f0 = (t_in * p.fps).round() as usize; let f1 = ((t_out * p.fps).round() as usize).max(f0 + 1);
     if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) { return Err("HDR delivery requires export_high_bit; legacy export is 8-bit SDR".into()); }
+    let command=legacy_encoder_command(p,path,crf)?;
+    export_range_cmd(p, path, f0, f1, command, false, true)
+}
+
+/// Shared export loop: render frames f0..f1 into `command`'s stdin (RGBA8), then mux audio when `audio`.
+/// `transparent` renders on a transparent canvas (alpha delivery); the ordinary export passes false.
+pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mut command: Command, transparent: bool, audio: bool) -> Result<f64, String> {
     let mut cache = Cache::new_export();
     let n = f1 - f0;
-    let mut command=legacy_encoder_command(p,path,crf)?;
     let frame_bytes=(p.width as usize).checked_mul(p.height as usize).and_then(|v|v.checked_mul(4)).ok_or("legacy encoder frame overflow")?;
     let mut encoder=crate::color::process::EncodeStream::new(&mut command,frame_bytes,crate::color::process::encode_deadline(n))?;
     let nt = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1);
@@ -518,7 +526,7 @@ pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) ->
         // work queue: nt workers pull frame indices, so one slow frame (shards) no longer idles the other cores
         let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
         std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
-            let tf0 = std::time::Instant::now(); let res = render_frame(p, (f0 + k) as f64 / p.fps, cache).and_then(|mut f| {prof("frame_total", tf0); let tq = std::time::Instant::now(); crate::color::pipeline::output(p,&mut f)?; prof("pipe_out", tq); let tq = std::time::Instant::now(); let r = to_rgba8(&f); prof("to_rgba8", tq); Ok(r)}); *slots[k - i].lock().unwrap() = Some(res); }); } });
+            let tf0 = std::time::Instant::now(); let res = render_frame_opts(p, (f0 + k) as f64 / p.fps, cache, transparent).and_then(|mut f| {if transparent { unpremultiply(&mut f); } prof("frame_total", tf0); let tq = std::time::Instant::now(); crate::color::pipeline::output(p,&mut f)?; prof("pipe_out", tq); let tq = std::time::Instant::now(); let r = to_rgba8(&f); prof("to_rgba8", tq); Ok(r)}); *slots[k - i].lock().unwrap() = Some(res); }); } });
         let frames: Vec<Result<Vec<u8>, String>> = slots.into_iter().map(|m| m.into_inner().unwrap().unwrap()).collect();
         for f in frames { encoder.write(f?)?; }
         i = end;
@@ -526,7 +534,7 @@ pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) ->
     encoder.finish()?;
     // mux mixed audio
     let pcm_full = crate::audio::mix(p); let (s0, s1) = ((f0 as f64 / p.fps * crate::audio::SR as f64) as usize * 2, (f1 as f64 / p.fps * crate::audio::SR as f64) as usize * 2); let pcm: Vec<f32> = { let a = s0.min(pcm_full.len()); let b = s1.min(pcm_full.len()); let mut v = pcm_full[a..b].to_vec(); v.resize(s1 - s0, 0.0); v };
-    if pcm.iter().any(|v|v.abs()>1e-6){crate::color::mux::legacy_audio(path,&pcm,n)?}
+    if audio && pcm.iter().any(|v|v.abs()>1e-6){crate::color::mux::legacy_audio(path,&pcm,n)?}
     Ok(n as f64 / p.fps)
 }
 
