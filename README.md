@@ -52,9 +52,13 @@ These are renders from the engine, driven by tool calls. Some are from the film 
 
 ### Fracture glass
 
-Glass shards with physical motion, refraction, a shutter-correct motion blur and a damped core so the break starts from the point of impact. Shown on a city plate, top row before core damping, bottom row after. The honest limit: the dark hole where the glass breaks is the revealed backdrop, and a backdrop-aware fill is not built yet.
+Glass shards with physical motion, refraction, a shutter-correct motion blur and a damped core so the break starts from the point of impact. Shown on a city plate, top row before core damping, bottom row after. The dark hole where the glass breaks can now be filled with `hole_fill` (default off): a defocused, dimmed copy of the pane (depth behind the glass), or with `hole_source=1` the layers below. The fill is a blur, not a rebuilt scene, so it reads as out-of-focus depth only.
 
 ![fracture glass](docs/media/fracture-glass.jpg)
+
+Left, default hole. Right, `hole_fill=1` (same frame, 1280x720 city plate, t=1.0 s):
+
+![hole fill](docs/media/fracture-hole-fill.jpg)
 
 ### Frosted glass (backdrop effect)
 
