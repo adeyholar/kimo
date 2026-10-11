@@ -252,14 +252,14 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
                 let i = (y * w + x) * 4; let a = (fl + sk * (1.0 - fl)).clamp(0.0, 1.0); if a <= 0.0 { continue; }
                 for j in 0..3 { f.d[i + j] = ((fill[j] * fl + stroke_color[j] * sk * (1.0 - fl)) / a) as f32; } f.d[i + 3] = a as f32; } }
         }
-        Source::Emitter(e) => { let alpha_of = |id: &str| render_clip_alone(p, id, c.start + lt, cache).map(|fr| (fr.w, fr.h, (0..fr.w * fr.h).map(|i| fr.d[i * 4 + 3]).collect::<Vec<f32>>()));
+        Source::Emitter(e) => { let alpha_of = |id: &str| silhouette_alpha(p, id, c.start + lt, cache).map(|(w, h, a)| (w, h, (*a).clone()));
             let emit = e.shape == "layer" && !e.emit_clip.is_empty(); if emit { crate::particles::set_emit_mask(alpha_of(&e.emit_clip), e.emit_edge);
                 if e.emit_follow { let bw = crate::particles::EMIT_BIN; let lmax = e.life + e.life_var.abs(); let b1 = (lt / bw).floor() as i64; let b0 = if e.prewarm { ((lt - lmax) / bw).floor() as i64 } else { ((lt - lmax).max(0.0) / bw).floor() as i64 };
-                    let bins = (b0..=b1).map(|b| (b, render_clip_alone(p, &e.emit_clip, c.start + ((b as f64 + 0.5) * bw).max(0.0), cache).map(|fr| (fr.w, fr.h, (0..fr.w * fr.h).map(|i| fr.d[i * 4 + 3]).collect::<Vec<f32>>())))).collect(); crate::particles::set_emit_bins(bins, e.emit_edge); } }
+                    let bins = (b0..=b1).map(|b| (b, silhouette_alpha(p, &e.emit_clip, c.start + ((b as f64 + 0.5) * bw).max(0.0), cache).map(|(w, h, a)| (w, h, (*a).clone())))).collect(); crate::particles::set_emit_bins(bins, e.emit_edge); } }
             let has = e.colliders.iter().any(|c| c.kind == "layer");
-            if has { let (w0, h0) = (f.w, f.h); let ms = e.colliders.iter().map(|cc| if cc.kind == "layer" { render_clip_alone(p, &cc.clip_id, c.start + lt, cache).map(|fr| (fr.w.min(w0), fr.h.min(h0), (0..fr.w.min(w0) * fr.h.min(h0)).map(|i| fr.d[(i / fr.w.min(w0) * fr.w + i % fr.w.min(w0)) * 4 + 3]).collect::<Vec<f32>>())) } else { None }).collect(); crate::particles::set_layer_masks(ms);
+            if has { let ms = e.colliders.iter().map(|cc| if cc.kind == "layer" { silhouette_alpha(p, &cc.clip_id, c.start + lt, cache).map(|(w, h, a)| (w, h, (*a).clone())) } else { None }).collect(); crate::particles::set_layer_masks(ms);
                 if e.colliders.iter().any(|c| c.kind == "layer" && c.follow) { let bw = crate::particles::EMIT_BIN; let lmax = e.life + e.life_var.abs(); let b1 = (lt / bw).floor() as i64; let b0 = if e.prewarm { ((lt - lmax) / bw).floor() as i64 } else { ((lt - lmax).max(0.0) / bw).floor() as i64 };
-                    let mut bins = vec![]; for (ci, cc) in e.colliders.iter().enumerate() { if cc.kind == "layer" && cc.follow { for b in b0..=b1 { bins.push((ci, b, render_clip_alone(p, &cc.clip_id, c.start + ((b as f64 + 0.5) * bw).max(0.0), cache).map(|fr| (fr.w, fr.h, (0..fr.w * fr.h).map(|i| fr.d[i * 4 + 3]).collect::<Vec<f32>>())))); } } } crate::particles::set_layer_bins(bins); } }
+                    let mut bins = vec![]; for (ci, cc) in e.colliders.iter().enumerate() { if cc.kind == "layer" && cc.follow { for b in b0..=b1 { bins.push((ci, b, silhouette_alpha(p, &cc.clip_id, c.start + ((b as f64 + 0.5) * bw).max(0.0), cache).map(|(w, h, a)| (w, h, (*a).clone())))); } } } crate::particles::set_layer_bins(bins); } }
             crate::particles::render_fps(e, &mut f, lt, p.fps); if has { crate::particles::set_layer_masks(Vec::new()); crate::particles::clear_layer_bins(); } if emit { crate::particles::set_emit_mask(None, false); crate::particles::clear_emit_bins(); } }
         Source::SpeedLines(s) => crate::speedlines::render(s, &mut f, lt),
         Source::GlitchConfetti(s) => crate::confetti::render(s, &mut f, lt),
@@ -568,6 +568,17 @@ pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mu
 
 thread_local! { static MATTE_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0); }
 /// Render one clip alone (full transforms/effects) on a transparent canvas: matte sources and difference references.
+
+thread_local! { static SIL_CACHE: std::cell::RefCell<std::collections::VecDeque<((u64, u64, usize, usize), std::rc::Rc<Vec<f32>>)>> = Default::default(); }
+/// Alpha plane of `id` rendered alone at timeline time `tt`, cached across frames. The key hashes the clip's full JSON, the time and the canvas size, so any edit to the clip changes the key (no stale silhouettes); at most 96 planes are kept.
+fn silhouette_alpha(p: &Project, id: &str, tt: f64, cache: &Cache) -> Option<(usize, usize, std::rc::Rc<Vec<f32>>)> {
+    use std::hash::{Hash, Hasher};
+    let clip = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?; let mut hs = std::collections::hash_map::DefaultHasher::new(); serde_json::to_string(clip).ok()?.hash(&mut hs);
+    let key = (hs.finish(), tt.to_bits(), p.width as usize, p.height as usize);
+    if let Some(hit) = SIL_CACHE.with(|c| c.borrow().iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())) { return Some((key.2, key.3, hit)); }
+    let fr = render_clip_alone(p, id, tt, cache)?; let a: Vec<f32> = (0..fr.w * fr.h).map(|i| fr.d[i * 4 + 3]).collect(); let rc = std::rc::Rc::new(a);
+    SIL_CACHE.with(|c| { let mut c = c.borrow_mut(); if c.len() >= 96 { c.pop_front(); } c.push_back((key, rc.clone())); }); Some((fr.w, fr.h, rc))
+}
 pub fn render_clip_alone(p: &Project, id: &str, t: f64, cache: &Cache) -> Option<Frame> {
     if MATTE_DEPTH.with(|d| d.get()) >= 3 { return None; }
     let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?.clone();
