@@ -21,18 +21,94 @@ impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new(), size: (0, 0,
 
 pub fn probe(path: &str) -> Result<(u32, u32, f64, f64), String> {
     if [".tif",".tiff"].iter().any(|e|path.to_lowercase().ends_with(e)){let(w,h)=crate::color::interchange::tiff_size(path)?;return Ok((w,h,0.,25.))}
-    let out = Command::new("ffprobe").args(["-v","error","-select_streams","v:0","-show_entries","stream=width,height,r_frame_rate,duration","-of","csv=p=0",path])
+    let out = Command::new("ffprobe").args(["-v", "error", "-select_streams", "v:0", "-show_entries",
+        "stream=width,height,r_frame_rate,duration:format=duration", "-of", "json", path])
         .output().map_err(|e| format!("ffprobe: {e}"))?;
-    let s = String::from_utf8_lossy(&out.stdout); let s = s.trim();
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() < 3 {
-        let o = Command::new("ffprobe").args(["-v","error","-show_entries","format=duration","-of","csv=p=0",path]).output().map_err(|e| e.to_string())?;
-        let d: f64 = String::from_utf8_lossy(&o.stdout).trim().parse().map_err(|_| format!("cannot probe {path}"))?;
-        return Ok((0, 0, d, 0.0));
+    if !out.status.success() {
+        return Err(format!("cannot probe {path}: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
-    let fr: Vec<f64> = parts[2].split('/').filter_map(|x| x.parse().ok()).collect();
-    let fps = if fr.len() == 2 && fr[1] > 0.0 { fr[0]/fr[1] } else { 30.0 };
-    Ok((parts[0].parse().unwrap_or(0), parts[1].parse().unwrap_or(0), parts.get(3).and_then(|d| d.parse().ok()).unwrap_or(0.0), fps))
+    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("invalid ffprobe metadata for {path}: {e}"))?;
+    parse_probe_metadata(&metadata).map_err(|e| format!("cannot probe {path}: {e}"))
+}
+
+// WebM/Matroska commonly omit stream.duration while format.duration is known.
+// Parse named fields, never treat N/A as a known zero duration.
+fn parse_probe_metadata(v: &serde_json::Value) -> Result<(u32, u32, f64, f64), String> {
+    fn finite_nonnegative(v: &serde_json::Value) -> Option<f64> {
+        let n = v.as_f64().or_else(|| v.as_str()?.parse().ok())?;
+        (n.is_finite() && n >= 0.).then_some(n)
+    }
+    let container_duration = finite_nonnegative(&v["format"]["duration"]);
+    let stream = v["streams"].as_array().and_then(|streams| streams.first());
+    let Some(s) = stream else {
+        return container_duration
+            .map(|d| (0, 0, d, 0.))
+            .ok_or_else(|| "no video stream or finite container duration".into());
+    };
+    let dimension = |key: &str| {
+        s[key]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n > 0)
+            .ok_or_else(|| format!("missing/invalid video {key}"))
+    };
+    let (w, h) = (dimension("width")?, dimension("height")?);
+    let fps = s["r_frame_rate"]
+        .as_str()
+        .and_then(|r| {
+            let (a, b) = r.split_once('/')?;
+            let (a, b) = (a.parse::<f64>().ok()?, b.parse::<f64>().ok()?);
+            let rate = a / b;
+            (a.is_finite() && b.is_finite() && a > 0. && b > 0. && rate.is_finite()).then_some(rate)
+        })
+        .unwrap_or(30.);
+    let stream_duration = finite_nonnegative(&s["duration"]);
+    let duration = stream_duration
+        .filter(|d| *d > 0.)
+        .or(container_duration.filter(|d| *d > 0.))
+        .or(stream_duration)
+        .or(container_duration)
+        .unwrap_or(0.);
+    // Undated still images keep duration=0, matching existing import semantics.
+    Ok((w, h, duration, fps))
+}
+
+#[cfg(test)]
+mod probe_metadata_tests {
+    use super::parse_probe_metadata;
+    use serde_json::json;
+    #[test]
+    fn named_duration_fallbacks() {
+        for d in [
+            json!("N/A"),
+            json!("NaN"),
+            json!("inf"),
+            json!(-1),
+            json!(0),
+            serde_json::Value::Null,
+        ] {
+            let v = json!({"streams":[{"width":320,"height":240,"r_frame_rate":"25/1","duration":d}],"format":{"duration":"32.480000"}});
+            assert_eq!(parse_probe_metadata(&v).unwrap(), (320, 240, 32.48, 25.));
+        }
+        assert_eq!(parse_probe_metadata(&json!({"streams":[{"width":320,"height":240,"r_frame_rate":"30000/1001","duration":"2.5"}],"format":{"duration":"3.5"}})).unwrap(),(320,240,2.5,30000./1001.));
+    }
+    #[test]
+    fn still_audio_and_invalid_metadata() {
+        assert_eq!(
+            parse_probe_metadata(
+                &json!({"streams":[{"width":16,"height":16,"r_frame_rate":"0/0"}]})
+            )
+            .unwrap(),
+            (16, 16, 0., 30.)
+        );
+        assert_eq!(
+            parse_probe_metadata(&json!({"streams":[],"format":{"duration":"1.25"}})).unwrap(),
+            (0, 0, 1.25, 0.)
+        );
+        assert!(parse_probe_metadata(&json!({})).is_err());
+        assert!(parse_probe_metadata(&json!({"streams":[{"width":0,"height":16}]})).is_err());
+    }
 }
 
 struct DecodeProcess(std::process::Child);
