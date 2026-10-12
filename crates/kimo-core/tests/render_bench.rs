@@ -1,7 +1,7 @@
 //! V3-0 step 0: in-process render bench (no MCP, no ffmpeg). 30 frames per scene at 1280x720 and 1920x1080, one thread, best of 3 passes, ms/frame.
 //! Run: cargo test --release --test render_bench -- --ignored --nocapture
 use kimo_core::commands::{dispatch, Session};
-use kimo_core::render::{render_frame, Cache};
+use kimo_core::render::{render_frame, set_shape_bound, Cache};
 use serde_json::json;
 
 static mut WH: (u32,u32) = (1920,1080); fn wh()->(u32,u32){unsafe{WH}}
@@ -19,10 +19,14 @@ fn adj_mask() -> Session { let mut s = base(); let t = c(&mut s, "add_track", js
     let a = c(&mut s, "add_track", json!({}))["track_id"].clone(); let adj = c(&mut s, "add_adjustment_layer", json!({"track_id": a, "start": 0, "duration": 2}))["clip_id"].clone();
     c(&mut s, "add_effect", json!({"clip_id": adj, "kind": "blur"})); s }
 
+fn small(kind: &str) -> Session { let mut s = base(); let t = c(&mut s, "add_track", json!({}))["track_id"].clone(); c(&mut s, "add_clip", json!({"track_id": t, "source_type": "solid", "color": [0.2, 0.3, 0.5], "start": 0, "duration": 2}));
+    let t2 = c(&mut s, "add_track", json!({}))["track_id"].clone(); let cl = c(&mut s, "add_shape", json!({"track_id": t2, "shape": "rect", "width": 200, "height": 100, "fill": [0.9, 0.5, 0.2, 1], "start": 0, "duration": 2}))["clip_id"].clone();
+    if kind != "none" { c(&mut s, "add_effect", json!({"clip_id": cl, "kind": kind})); } s }
 #[test] #[ignore] fn render_bench() {
     for (w, h) in [(1280u32, 720u32), (1920, 1080)] { unsafe { WH = (w, h); }
-        for (name, s) in [("simple", simple()), ("glass+adjustment", glass()), ("adjustment+mask", adj_mask())] {
+        for (name, s) in [("simple", simple()), ("glass+adjustment", glass()), ("adjustment+mask", adj_mask()), ("small 200x100 layer, no effect", small("none")), ("small layer + blur (LOCAL)", small("blur")), ("small layer + glow (LOCAL)", small("glow")), ("small layer + exposure (pixelwise)", small("exposure"))] {
             if let Ok(only) = std::env::var("BENCH_ONLY") { if !format!("{w}x{h} {name}").contains(&only) { continue; } }
+            if std::env::var("BENCH_AB").is_ok() { for round in 0..3 { for on in [false, true] { set_shape_bound(on); let cache = Cache::new(); let t = std::time::Instant::now(); for i in 0..30 { let f = render_frame(&s.project, i as f64 / 24.0, &cache).unwrap(); std::hint::black_box(&f); } eprintln!("AB {w}x{h} {name} shape_bound={on} round{round}: {:.1} ms/frame", t.elapsed().as_secs_f64() * 1000.0 / 30.0); } } set_shape_bound(true); continue; }
             let mut best = f64::MAX; for _ in 0..std::env::var("BENCH_PASSES").ok().and_then(|v| v.parse().ok()).unwrap_or(3) { let cache = Cache::new(); let t = std::time::Instant::now(); for i in 0..30 { let f = render_frame(&s.project, i as f64 / 24.0, &cache).unwrap(); std::hint::black_box(&f); } best = best.min(t.elapsed().as_secs_f64() * 1000.0 / 30.0); }
             eprintln!("BENCH {w}x{h} {name}: {best:.1} ms/frame");
         }

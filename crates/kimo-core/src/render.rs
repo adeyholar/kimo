@@ -247,7 +247,10 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
                 "ellipse" | "polygon" | "line" => crate::shapemods::sd(shape, *sides, hw, hh, *corner_radius, px, py),
                 _ => { let (qx, qy) = (px.abs() - hw + corner_radius, py.abs() - hh + corner_radius); (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - corner_radius } } };
             let stack = crate::shapemods::build(&c.effects, base, cx, cy, lt); let sd = |x: f64, y: f64| (stack.dist)(x, y);
-            for y in 0..h { for x in 0..w { let d = sd(x as f64 + 0.5, y as f64 + 0.5); let inside = (0.5 - d).clamp(0.0, 1.0); if inside <= 0.0 && *stroke_width <= 0.0 { continue; }
+            // plain rect (exact SDF; the ellipse SDF is approximate and leaks past its box at extreme aspect ratios, found by shape_bound_equiv; no shape modifiers): every pixel farther than margin from the shape's bounding box has d >= 0.5 + stroke/2 and writes nothing, so skip it (bit-identical)
+            let (mut bx0, mut bx1, mut by0, mut by1) = (0usize, w, 0usize, h);
+            if SHAPE_BOUND.load(std::sync::atomic::Ordering::Relaxed) && !c.effects.iter().any(|e| e.kind.starts_with("shape_")) && shape.as_str() == "rect" { let m = 0.5 + stroke_width.max(0.0) / 2.0 + 4.0; bx0 = ((cx - hw - m).floor().max(0.0)) as usize; bx1 = (((cx + hw + m).ceil()).max(0.0) as usize).min(w); by0 = ((cy - hh - m).floor().max(0.0)) as usize; by1 = (((cy + hh + m).ceil()).max(0.0) as usize).min(h); }
+            for y in by0..by1 { for x in bx0..bx1 { let d = sd(x as f64 + 0.5, y as f64 + 0.5); let inside = (0.5 - d).clamp(0.0, 1.0); if inside <= 0.0 && *stroke_width <= 0.0 { continue; }
                 let sk = if *stroke_width > 0.0 { (0.5 - (d.abs() - stroke_width / 2.0)).clamp(0.0, 1.0) * stack.trim_gate(x as f64 + 0.5 - cx, y as f64 + 0.5 - cy) } else { 0.0 }; let stroke_color = &stack.stroke_color(x as f64 + 0.5 - cx, y as f64 + 0.5 - cy, *width, *height, *stroke_color); let fl = if fill[0] < 0.0 { 0.0 } else if *stroke_width > 0.0 { (0.5 - (d + stroke_width / 2.0)).clamp(0.0, 1.0) } else { inside };
                 let i = (y * w + x) * 4; let a = (fl + sk * (1.0 - fl)).clamp(0.0, 1.0); if a <= 0.0 { continue; }
                 for j in 0..3 { f.d[i + j] = ((fill[j] * fl + stroke_color[j] * sk * (1.0 - fl)) / a) as f32; } f.d[i + 3] = a as f32; } }
@@ -310,6 +313,9 @@ fn prop(c: &Clip, k: &str, lt: f64) -> f64 { c.props.get(k).map(|x| x.at(lt)).un
 /// Inverse-mapped transform (scale/rotate/translate around centre) with alpha-correct bilinear sampling and
 /// supersampling (2x2 for any resample, up to 4x4 when minifying) so downscaled and rotated layers are antialiased.
 /// Alpha bounding box (x0,y0,x1,y1) of a frame, None if fully transparent.
+/// Kill switch for the bounded shape raster (default on); tests prove on/off output is bit-identical.
+static SHAPE_BOUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+pub fn set_shape_bound(on: bool) { SHAPE_BOUND.store(on, std::sync::atomic::Ordering::Relaxed); }
 fn alpha_bbox(src: &Frame) -> Option<(usize, usize, usize, usize)> { let (w, h) = (src.w, src.h); let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize); let mut any = false;
     for y in 0..h { let row = &src.d[y * w * 4..(y + 1) * w * 4]; let mut first = None; let mut last = 0; for x in 0..w { if row[x * 4 + 3] > 0.0 { if first.is_none() { first = Some(x); } last = x; } } if let Some(f0) = first { any = true; x0 = x0.min(f0); x1 = x1.max(last); y0 = y0.min(y); y1 = y1.max(y); } }
     if any { Some((x0, y0, x1, y1)) } else { None } }
