@@ -29,6 +29,7 @@ pub mod glass;
 pub mod model;
 pub mod commands;
 pub mod render;
+pub mod framecache;
 pub mod effects;
 pub mod text;
 pub mod particles;

@@ -92,7 +92,7 @@ pub(super) fn tools(eff_kinds: &[&str]) -> Vec<Command> {
         run: |ss, a| { let tt = num_arg(a, "time")?; let ma = opt_num(a, "min_alpha", 0.02); let _ = crate::shards::take_probe(); render::prepare_at(&ss.project, &mut ss.cache, Some(tt))?; let _ = render::render_frame(&ss.project, tt, &ss.cache)?; let v: Vec<_> = crate::shards::take_probe().into_iter().filter(|q| q.alpha >= ma).collect(); Ok(json!({"count": v.len(), "shards": v})) } },
     Command { name: "render_frame", description: "Render the frame at a timeline time to a PNG file so you can look at it. Returns the path.", mutates: false,
         schema: obj(vec![("time", n("seconds")), ("path", s("output .png path"))], &["time","path"]),
-        run: |ss, a| { let p = str_arg(a, "path")?; render::render_png(&ss.project, num_arg(a, "time")?, p, &mut ss.cache)?; Ok(json!({"path":p})) } },
+        run: |ss, a| { let p = str_arg(a, "path")?; render::render_png_with(&ss.project, num_arg(a, "time")?, p, &mut ss.cache, Some(&mut ss.fcache))?; Ok(json!({"path":p})) } },
     Command { name: "export", description: "Render the timeline (or a start/end range) to an H.264 mp4.", mutates: false,
         schema: obj(vec![("path", s("output .mp4 path")), ("crf", n("quality 0..51, default 18")), ("start", n("optional range start, seconds (default 0)")), ("end", n("optional range end, seconds (default timeline end). Frames and audio equal the same span of a full export.")), ("audio", json!({"type":"boolean","description":"default true. false writes picture only, so range exports can be joined and one continuous export_audio mix muxed once (separately encoded AAC ranges leave a gap at every seam)"})), ("low_memory", json!({"type":"boolean","description":"opt-in: lower x264 lookahead/refs/b-frames to cut encoder memory (encoder RSS 479 to 257 MB measured at 1080p, size -0.3%, PSNR -0.02 dB on a synthetic clip) for small machines; output bytes differ from the default"}))], &["path"]),
         run: |ss, a| { let p = str_arg(a, "path")?; let crf = opt_num(a, "crf", 18.0) as u32; let wa = a.get("audio").and_then(|v| v.as_bool()).unwrap_or(true); let lm = a.get("low_memory").and_then(|v| v.as_bool()).unwrap_or(false); let d = if a.get("start").is_some() || a.get("end").is_some() { let st = opt_num(a, "start", 0.0); let en = opt_num(a, "end", ss.project.duration()); render::export_range_opts(&ss.project, p, crf, st, en, lm, wa)? } else if wa { render::export_opts(&ss.project, p, crf, lm)? } else { let dur = ss.project.duration(); render::export_range_opts(&ss.project, p, crf, 0.0, dur, lm, false)? }; Ok(json!({"path":p,"duration":d})) } },
@@ -130,6 +130,18 @@ pub(super) fn tools(eff_kinds: &[&str]) -> Vec<Command> {
                 if u.len() != ul.len() { return Err("history file is inconsistent (undo and labels differ in length)".into()); } Some((u, ul, cp)) } } } } else { None };
             ss.project = proj; if let Some((u, ul, cp)) = hist { ss.undo = u; ss.undo_labels = ul; ss.checkpoints = cp; ss.redo.clear(); ss.redo_labels.clear(); }
             ss.project.recompute_next_id(); Ok(json!({"tracks":ss.project.tracks.len(),"next_id":ss.project.next_id,"undo_steps":ss.undo.len(),"checkpoints":ss.checkpoints.len(),"history_ignored":ignored})) } },
+    Command { name: "cache_stats", description: "Frame cache statistics: entries, bytes, cap, hits, misses, evictions, hit_rate. The cache holds recently rendered frames for scrubbing and repeated render_frame / get_scopes; it is never used by export.", mutates: false,
+        schema: obj(vec![], &[]),
+        run: |ss, _a| { let f = &ss.fcache; let tot = f.hits + f.misses; Ok(json!({"entries": f.len(), "bytes": f.bytes(), "cap_bytes": f.cap, "hits": f.hits, "misses": f.misses, "evictions": f.evictions, "hit_rate": if tot == 0 { 0.0 } else { f.hits as f64 / tot as f64 }})) } },
+    Command { name: "cache_clear", description: "Empty the frame cache (frees its memory). Renders afterwards are bit-identical, only slower once.", mutates: false,
+        schema: obj(vec![], &[]),
+        run: |ss, _a| { let (n, b) = (ss.fcache.len(), ss.fcache.bytes()); ss.fcache.clear(); Ok(json!({"cleared_entries": n, "freed_bytes": b})) } },
+    Command { name: "cache_set_budget", description: "Set the frame cache size in megabytes (0 turns it off). Must not exceed the memory budget; shrinking evicts the oldest frames.", mutates: false,
+        schema: obj(vec![("megabytes", n("cache size in MB, 0 = off"))], &["megabytes"]),
+        run: |ss, a| { let mb = num_arg(a, "megabytes")?; if !(mb >= 0.0) || !mb.is_finite() { return Err(format!("megabytes must be >= 0, got {mb}")); }
+            let want = (mb * 1048576.0) as usize; let b = crate::guard::BUDGET.load(std::sync::atomic::Ordering::Relaxed);
+            if b != usize::MAX && want > b { return Err(format!("cache budget {mb} MB is above the memory budget of {} MB (raise KIMO_MEM_MB or choose a smaller cache)", b >> 20)); }
+            ss.fcache.set_cap(want); Ok(json!({"cap_bytes": ss.fcache.cap, "entries": ss.fcache.len(), "bytes": ss.fcache.bytes()})) } },
     Command { name: "undo", description: "Undo the last mutating operation(s). steps (default 1) undoes several at once. history_list shows what each step is.", mutates: false,
         schema: obj(vec![("steps", n("how many steps to undo, default 1"))], &[]),
         run: |ss, a| { let steps = opt_num(a, "steps", 1.0).max(1.0) as usize; if ss.undo.is_empty() { return Err("nothing to undo".into()); } let mut done = 0;

@@ -33,3 +33,22 @@ fn small(kind: &str) -> Session { let mut s = base(); let t = c(&mut s, "add_tra
         }
     }
 }
+
+/// V3-6a: frame cache numbers at 1080p (in-process, one session): cold render, warm hit, and scrubbing back and forth over 30 frames.
+#[test] #[ignore] fn cache_bench() {
+    for (w, h) in [(1280u32, 720u32), (1920, 1080)] {
+        let mut s = Session::new(); c(&mut s, "project_set", json!({"width": w, "height": h, "fps": 24}));
+        let t = c(&mut s, "add_track", json!({}))["track_id"].clone(); c(&mut s, "add_clip", json!({"track_id": t, "source_type": "solid", "color": [0.2, 0.3, 0.5], "start": 0, "duration": 3}));
+        let t2 = c(&mut s, "add_track", json!({}))["track_id"].clone(); let cl = c(&mut s, "add_shape", json!({"track_id": t2, "shape": "rect", "width": 600.0, "height": 300.0, "fill": [0.9, 0.5, 0.2, 1], "corner_radius": 20.0, "start": 0, "duration": 3}))["clip_id"].clone();
+        c(&mut s, "add_effect", json!({"clip_id": cl, "kind": "glow"})); c(&mut s, "add_effect", json!({"clip_id": cl, "kind": "blur"}));
+        let times: Vec<f64> = (0..30).map(|i| i as f64 / 24.0).collect(); let cache = Cache::new();
+        let mut fc = kimo_core::framecache::FrameCache::new(2 << 30);
+        let t0 = std::time::Instant::now(); for &t in &times { std::hint::black_box(render_frame(&s.project, t, &cache).unwrap()); } let uncached = t0.elapsed().as_secs_f64() * 1000.0 / 30.0;
+        let t0 = std::time::Instant::now(); for &t in &times { std::hint::black_box(kimo_core::framecache::render_cached(&mut fc, &s.project, t, &cache).unwrap()); } let cold = t0.elapsed().as_secs_f64() * 1000.0 / 30.0;
+        let t0 = std::time::Instant::now(); for &t in &times { std::hint::black_box(kimo_core::framecache::render_cached(&mut fc, &s.project, t, &cache).unwrap()); } let warm = t0.elapsed().as_secs_f64() * 1000.0 / 30.0;
+        let tk = std::time::Instant::now(); let k = kimo_core::framecache::key(&s.project, 0.5, false); let key_ms = tk.elapsed().as_secs_f64() * 1000.0; std::hint::black_box(k);
+        // scrub: bounce across the 30 cached frames
+        let t0 = std::time::Instant::now(); let mut n = 0; for r in 0..4 { for i in 0..30 { let j = if r % 2 == 0 { i } else { 29 - i }; std::hint::black_box(kimo_core::framecache::render_cached(&mut fc, &s.project, times[j], &cache).unwrap()); n += 1; } } let scrub = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        eprintln!("CACHE {w}x{h}: uncached {uncached:.1} ms/frame, cold (render+store) {cold:.1}, warm hit {warm:.1}, scrub over cached frames {scrub:.1} ms/frame, key {key_ms:.2} ms, cache {} MB, hits {} misses {}", fc.bytes() >> 20, fc.hits, fc.misses);
+    }
+}

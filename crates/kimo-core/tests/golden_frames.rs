@@ -63,3 +63,17 @@ fn compare(file: &str, got: &[String], update: bool, fails: &mut Vec<String>) {
     eprintln!("golden: {} scenes, {} frames, {} tools, {:.1}s{}", scenes().len(), nframes, registry_ref().len(), t0.elapsed().as_secs_f64(), if update { " (baselines rewritten)" } else { "" });
     assert!(fails.is_empty(), "golden mismatch:\n{}", fails.join("\n"));
 }
+
+/// V3-6a: for every golden scene and time, the frame cache must return exactly the uncached pixels: cold (miss), warm (hit), and after the entry was evicted by a cap of zero and refilled.
+#[test] fn golden_scenes_cold_warm_cleared_equal_uncached() {
+    std::env::set_var("KIMO_FONTS", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fonts"));
+    let mut n = 0;
+    for (name, b) in scenes() {
+        let ss = build(b); let cache = render::Cache::new(); let mut fc = kimo_core::framecache::FrameCache::new(256 << 20);
+        for t in TIMES { let truth = render::render_frame(&ss.project, t, &cache).expect("render");
+            let cold = kimo_core::framecache::render_cached(&mut fc, &ss.project, t, &cache).unwrap(); assert!(cold.d == truth.d, "{name}@{t}: cold cached frame differs");
+            let h = fc.hits; let warm = kimo_core::framecache::render_cached(&mut fc, &ss.project, t, &cache).unwrap(); assert_eq!(fc.hits, h + 1, "{name}@{t}: second render was not a hit"); assert!(warm.d == truth.d, "{name}@{t}: warm cached frame differs");
+            fc.set_cap(0); fc.set_cap(256 << 20); let again = kimo_core::framecache::render_cached(&mut fc, &ss.project, t, &cache).unwrap(); assert!(again.d == truth.d, "{name}@{t}: refill after clear differs"); n += 1; }
+    }
+    eprintln!("golden cache equality: {n} frames cold/warm/refilled bit-identical");
+}

@@ -43,6 +43,9 @@ auto_duck 3739408323f8e68e
 bind_beats 2d8bcd8a43d9aad9
 bind_shared_grade_graphs d163ca88fc64bb1d
 burn_in 0df91ac9090a9beb
+cache_clear 6022ac3871ddd27b
+cache_set_budget 422160a7f6a95562
+cache_stats fda818c878e0e6dc
 camera_solve_info 68eba83a999378cc
 checkpoint 4063b9f4243b3a4e
 checkpoint_delete 22a3aee8d04e2bd6

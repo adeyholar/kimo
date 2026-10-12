@@ -41,3 +41,5 @@
 40 load_project	io_error	param=	hint=
 41 set_property	invalid_argument_combo	param=time	hint=
 42 delete_clip	missing_arg	param=clip_id	hint=required arguments: clip_id; did you mean 'clip_id' instead of 'clipid'?
+43 cache_set_budget	missing_arg	param=megabytes	hint=required arguments: megabytes
+44 cache_set_budget	out_of_range	param=	hint=

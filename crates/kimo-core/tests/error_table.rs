@@ -29,6 +29,7 @@ fn calls(t1: &str, c: &str) -> Vec<(&'static str, Value)> {
         ("loop_clip", json!({"clip_id": c, "times": 0})), ("loop_clip", json!({"clip_id": c, "times": 1, "gap": -1.0})), ("swap_clips", json!({"clip_a": c, "clip_b": c})),
         ("distribute_clips", json!({"track_id": t1, "gap": -1.0})), ("get_scopes", json!({})), ("render_frame", json!({"time": "x"})),
         ("bind_shared_grade_graphs", json!({"clip_id": c, "graphs": ["missing"]})), ("save_project", json!({})), ("load_project", json!({"path": "/nonexistent/x.kimo"})), ("set_property", json!({"clip_id": c, "property": "x", "value": 1.0, "time": 0.0})), ("delete_clip", json!({"clipid": "x"})),
+        ("cache_set_budget", json!({})), ("cache_set_budget", json!({"megabytes": -1.0})),
     ]
 }
 #[test] fn error_texts_are_byte_identical_to_the_baseline() {

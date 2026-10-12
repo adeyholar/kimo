@@ -128,7 +128,7 @@ pub(super) fn tools(eff_kinds: &[&str]) -> Vec<Command> {
             Ok(json!({"captions":made.len(),"clip_ids":made})) } },
     Command { name: "get_scopes", description: "Video scopes at a time: per-channel histogram (32 bins), luma stats, clipping %, average color, and a coarse luma waveform - for AI color grading feedback.", mutates: false,
         schema: obj(vec![("time", n("seconds"))], &["time"]),
-        run: |ss, a| { let tt = num_arg(a, "time")?; render::prepare_at(&ss.project, &mut ss.cache, Some(tt))?; let f = render::render_frame(&ss.project, tt, &ss.cache)?;
+        run: |ss, a| { let tt = num_arg(a, "time")?; render::prepare_at(&ss.project, &mut ss.cache, Some(tt))?; let f = crate::framecache::render_cached(&mut ss.fcache, &ss.project, tt, &ss.cache)?;
             let n = f.w * f.h; let mut hist = [[0u32; 32]; 3]; let (mut sum, mut lo, mut hi) = ([0f64; 3], 0u32, 0u32); let mut lsum = 0f64; let mut lsq = 0f64;
             for i in 0..n { let mut l = 0f32; for j in 0..3 { let v = f.d[i*4+j].clamp(0.0, 1.0); hist[j][((v * 31.999) as usize).min(31)] += 1; sum[j] += v as f64; l += v * [0.2126, 0.7152, 0.0722][j]; } lsum += l as f64; lsq += (l * l) as f64; if l < 0.02 { lo += 1; } if l > 0.98 { hi += 1; } }
             let mean = lsum / n as f64; let cols = 16; let mut wf = vec![]; for cx in 0..cols { let (mut mn, mut mx) = (1f32, 0f32); for y in (0..f.h).step_by(4) { for x in (cx * f.w / cols..(cx + 1) * f.w / cols).step_by(4) { let i = y * f.w + x; let l = 0.2126*f.d[i*4] + 0.7152*f.d[i*4+1] + 0.0722*f.d[i*4+2]; mn = mn.min(l); mx = mx.max(l); } } wf.push(json!([mn, mx])); }

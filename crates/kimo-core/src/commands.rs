@@ -16,14 +16,14 @@ mod tools_4;
 pub fn fnv64(b: &[u8]) -> u64 { let mut h = 0xcbf29ce484222325u64; for x in b { h ^= *x as u64; h = h.wrapping_mul(0x100000001b3); } h }
 struct FnvWriter<W: std::io::Write> { inner: W, h: u64 }
 impl<W: std::io::Write> std::io::Write for FnvWriter<W> { fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { let n = self.inner.write(b)?; for x in &b[..n] { self.h ^= *x as u64; self.h = self.h.wrapping_mul(0x100000001b3); } Ok(n) } fn flush(&mut self) -> std::io::Result<()> { self.inner.flush() } }
-pub struct Session { pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache,
+pub struct Session { pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache, pub fcache: crate::framecache::FrameCache,
     /// One label per undo / redo entry (tool name, plus clip id when given), parallel to `undo` / `redo`.
     pub undo_labels: Vec<String>, pub redo_labels: Vec<String>,
     /// Named snapshots of the whole project: (name, project, label of the history position when taken).
     pub checkpoints: Vec<(String, Project, usize)>,
     /// Snapshot-size estimate for the history cap, refreshed every 16 mutations instead of serialising the project on every call.
     pub snap_sz: usize, pub snap_n: u32, pub snap_clips: usize }
-impl Session { pub fn new() -> Self { Session { project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0 } } }
+impl Session { pub fn new() -> Self { Session { project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), fcache: crate::framecache::FrameCache::new(crate::framecache::default_cap()), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0 } } }
 const MAX_CHECKPOINTS: usize = 24;
 
 #[derive(Clone)]

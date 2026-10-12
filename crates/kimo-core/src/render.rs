@@ -499,10 +499,11 @@ fn image_encoder_command(w:usize,h:usize,path:&str)->Command{let mut cmd=Command
 fn write_image_command(f:&Frame,cmd:&mut Command,deadline:std::time::Duration)->Result<(),String>{let size=f.w.checked_mul(f.h).and_then(|n|n.checked_mul(4)).filter(|n|*n>0&&*n==f.d.len()).ok_or("invalid image frame shape")?;crate::guard::reserve(size);let mut encoder=crate::color::process::EncodeStream::new(cmd,size,deadline)?;encoder.write(to_rgba8(f))?;encoder.finish()}
 pub(crate) fn write_image(f:&Frame,path:&str)->Result<(),String>{write_image_command(f,&mut image_encoder_command(f.w,f.h,path),crate::color::process::encode_deadline(1))}
 
-pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<(), String> {
+pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<(), String> { render_png_with(p, t, path, cache, None) }
+pub fn render_png_with(p: &Project, t: f64, path: &str, cache: &mut Cache, fc: Option<&mut crate::framecache::FrameCache>) -> Result<(), String> {
     if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) {return Err("HDR output cannot be shown as an SDR PNG; select an SDR preview output or render_high_bit_still".into())}
     prepare_at(p, cache, Some(t))?;
-    let mut f = render_frame(p, t, cache)?;
+    let mut f = match fc { Some(fc) => crate::framecache::render_cached(fc, p, t, cache)?, None => render_frame(p, t, cache)? };
     crate::color::pipeline::output(p,&mut f)?;
     write_image(&f,path)
 }
