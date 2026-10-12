@@ -1,7 +1,8 @@
 """Robustness runner: calls every MCP tool with hostile args. Fails on crash, hang, or non-JSON reply.
-Usage (from repo root): python3 tests/tool_fuzz.py"""
-import json, subprocess, sys, select, time
-EXE = "target/release/kimo-mcp"
+Usage (from repo root): python3 tests/tool_fuzz.py   (KIMO_FUZZ_SMOKE=1 for the 4-calls-per-tool smoke, KIMO_BIN to pick the binary)"""
+import json, os, subprocess, sys, select, time
+EXE = os.environ.get("KIMO_BIN", "target/release/kimo-mcp")
+SMOKE = os.environ.get("KIMO_FUZZ_SMOKE") == "1"   # fast tier: every tool still gets 4 hostile calls (fixed, no randomness), full tier runs everything
 class S:
     def __init__(s):
         s.p = subprocess.Popen([EXE], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True); s.i = 0; s.rpc("initialize", {})
@@ -46,6 +47,7 @@ def main():
         call(name, {k: None for k in props})
         call(name, {k: "nope" for k in props})
         call(name, {k: -1 for k in props})
+        if SMOKE: continue
         for k, sc in props.items():
             for v in vals(sc): call(name, {k: v})
         real = {k: ids[k] for k in props if k in ids}

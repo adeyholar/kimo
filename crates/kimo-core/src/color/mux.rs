@@ -32,5 +32,6 @@ fn mux_command(tx:&Transaction,format:&str,legacy:bool)->Command{let mut cmd=Com
 }
 
 #[cfg(test)]mod legacy_options{use super::*;
-#[test]fn legacy_aac_argv_preserves_bitrate(){let tx=Transaction::new("proof.mp4").unwrap();let cmd=mux_command(&tx,"legacy_aac",true);let args:Vec<_>=cmd.get_args().map(|v|v.to_string_lossy().to_string()).collect();assert_eq!(args,vec!["-v".to_string(),"error".into(),"-y".into(),"-i".into(),tx.video.display().to_string(),"-i".into(),tx.wav.display().to_string(),"-c:v".into(),"copy".into(),"-c:a".into(),"aac".into(),"-b:a".into(),"192k".into(),"-shortest".into(),tx.output.display().to_string()]);}
+#[test]fn legacy_aac_argv_preserves_bitrate(){let tx=Transaction::new("proof.mp4").unwrap();let cmd=mux_command(&tx,"legacy_aac",true);let args:Vec<_>=cmd.get_args().map(|v|v.to_string_lossy().to_string()).collect();assert_eq!(args,vec!["-v".to_string(),"error".into(),"-y".into(),"-i".into(),tx.video.display().to_string(),"-i".into(),tx.wav.display().to_string(),"-c:v".into(),"copy".into(),"-c:a".into(),"aac".into(),"-b:a".into(),"192k".into(),tx.output.display().to_string()]);}
+#[test]fn high_bit_argv_keeps_shortest(){let tx=Transaction::new("proof_hb.mp4").unwrap();let cmd=mux_command(&tx,"aac",false);let args:Vec<_>=cmd.get_args().map(|v|v.to_string_lossy().to_string()).collect();assert_eq!(args[args.len()-2],"-shortest");assert!(!args.contains(&"-b:a".to_string()));assert_eq!(args[args.len()-1],tx.output.display().to_string());}
 }

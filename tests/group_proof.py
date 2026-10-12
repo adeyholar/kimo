@@ -7,12 +7,16 @@ flat = k.rpc("tools/list", {"mode": "flat"})["tools"]; grouped = k.rpc("tools/li
 fb, gb = len(json.dumps(flat)), len(json.dumps(grouped))
 print(f"flat: {len(flat)} tools, {fb} bytes | grouped: {len(grouped)} tools, {gb} bytes | {fb/gb:.1f}x smaller")
 assert len(grouped) <= 20 and len(flat) >= 250
-# every flat tool is listed in exactly one group's enum
+# every registry tool is reachable through exactly one group (RV-23: the compact list no longer carries action names, kimo_describe(group) does)
+META = {"search_tools", "kimo_describe", "kimo_enable_group"}
 seen = {}
 for g in grouped:
-    for a in g["inputSchema"]["properties"].get("action", {}).get("enum", []):
+    if g["name"] in META: continue
+    for a in k.call("kimo_describe", group=g["name"])["actions"]:
+        a = a["action"] if isinstance(a, dict) else a
         assert a not in seen, (a, seen[a], g["name"]); seen[a] = g["name"]
-assert set(seen) == {t["name"] for t in flat}, set(seen) ^ {t["name"] for t in flat}
+assert set(seen) == {t["name"] for t in flat} - META, set(seen) ^ ({t["name"] for t in flat} - META)
+assert gb <= 6144, gb
 # grouped call equals flat call
 k.call("project_set", width=640, height=360, fps=25)
 a = k.call("get_project"); b = k.call("project", action="get_project", args={})
