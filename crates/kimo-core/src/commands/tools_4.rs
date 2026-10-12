@@ -131,7 +131,7 @@ pub(super) fn tools(eff_kinds: &[&str]) -> Vec<Command> {
                 let u: Vec<Project> = serde_json::from_value(h["undo"].clone()).map_err(|e| e.to_string())?; let ul: Vec<String> = serde_json::from_value(h["undo_labels"].clone()).map_err(|e| e.to_string())?; let cp: Vec<(String, Project, usize)> = serde_json::from_value(h["checkpoints"].clone()).map_err(|e| e.to_string())?;
                 if u.len() != ul.len() { return Err("history file is inconsistent (undo and labels differ in length)".into()); } Some((u, ul, cp)) } } } } else { None };
             ss.project = proj; if let Some((u, ul, cp)) = hist { ss.undo = u; ss.undo_labels = ul; ss.checkpoints = cp; ss.redo.clear(); ss.redo_labels.clear(); }
-            ss.project.recompute_next_id(); Ok(json!({"tracks":ss.project.tracks.len(),"next_id":ss.project.next_id,"undo_steps":ss.undo.len(),"checkpoints":ss.checkpoints.len(),"history_ignored":ignored})) } },
+            { let others: Vec<&Project> = ss.undo.iter().chain(ss.redo.iter()).chain(ss.checkpoints.iter().map(|c| &c.1)).collect(); ss.project.continue_ids_after_load(&others); } Ok(json!({"tracks":ss.project.tracks.len(),"next_id":ss.project.next_id,"undo_steps":ss.undo.len(),"checkpoints":ss.checkpoints.len(),"history_ignored":ignored})) } },
     Command { name: "kimo_info", description: "Build identity of this server: semver version, git commit, project schema version, enabled features and backend versions (ffmpeg, ffprobe). The same identity is recorded in saved projects (the \"kimo\" block) and in export reports.", mutates: false,
         schema: obj(vec![], &[]),
         run: |_ss, _a| Ok(crate::buildinfo::info()) },

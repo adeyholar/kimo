@@ -105,3 +105,28 @@ pub fn check_project(p: &crate::model::Project, l: &Limits) -> Result<(), String
     if p.duration() > l.max_duration_s { return Err(format!("timeline duration {:.0}s is over the {:.0}s limit", p.duration(), l.max_duration_s)); }
     Ok(())
 }
+
+/// Outcome of a guarded tool call. `Hung` means the worker did not stop after the cooperative cancel plus a 15 s grace period; the caller should report it and
+/// exit so the machine is not held hostage (the MCP server exits 124, a CLI exits non-zero).
+pub enum Guarded { Done(Result<Value, crate::errors::ToolError>), Hung { limit: u64 } }
+
+/// The one place that runs a tool under the sandbox limits (shared by kimo-mcp and kimo-cli so timeouts and cancellation cannot drift): a 64 MB-stack worker
+/// thread with the cancel token, the wall-clock limit (KIMO_EXPORT_TIMEOUT_S for tools whose name starts with "export", else KIMO_TIMEOUT_S), cooperative cancel
+/// on timeout, then a 15 s grace period.
+pub fn run_tool_guarded(ss: &std::sync::Arc<std::sync::Mutex<crate::commands::Session>>, name: &str, args: &Value) -> Guarded {
+    use std::time::Duration;
+    let l = limits(); let limit = if name.starts_with("export") { l.export_timeout_s } else { l.timeout_s };
+    let tok = new_token(); let tok2 = tok.clone();
+    let (tx, rx) = std::sync::mpsc::channel(); let (s2, n2, a2) = (ss.clone(), name.to_string(), args.clone());
+    spawn_builder_with_token(std::thread::Builder::new().stack_size(64 << 20), move || { let mut g = s2.lock().unwrap_or_else(|e| e.into_inner()); let r = crate::commands::dispatch_ex_with(&mut g, &n2, &a2, &tok2); let _ = tx.send(r); }).ok();
+    match rx.recv_timeout(Duration::from_secs(limit)) {
+        Ok(r) => Guarded::Done(r),
+        Err(_) => {
+            tok.store(true, Relaxed);
+            match rx.recv_timeout(Duration::from_secs(15)) {
+                Ok(_) => Guarded::Done(Err(format!("tool '{name}' stopped: exceeded the {limit}s time limit (KIMO_TIMEOUT_S); project rolled back where possible").into())),
+                Err(_) => Guarded::Hung { limit },
+            }
+        }
+    }
+}

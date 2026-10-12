@@ -157,3 +157,4 @@ py validate_track_real_plate.py helper # benchmark or data generator, not a pass
 py worker_identical_proof.py full
 py gate_check.py fast
 py gate_run.py helper # the gate runner itself
+py id_continuity_proof.py fast

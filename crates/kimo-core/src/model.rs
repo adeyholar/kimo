@@ -163,14 +163,19 @@ impl Clip {
 }
 
 impl Project {
-    /// Collision-safe id counter after loading: one past the largest trailing number in any id-like string (keys and string values), never below 1000.
-    pub fn recompute_next_id(&mut self) {
+    /// Largest trailing number in any id-like string (keys and string values) of this project; 0 when there is none.
+    pub fn max_id_suffix(&self) -> u64 {
         fn walk(v: &serde_json::Value, m: &mut u64) {
             let tail = |s: &str| { let d: String = s.chars().rev().take_while(|c| c.is_ascii_digit()).collect::<Vec<_>>().into_iter().rev().collect(); if d.is_empty() || d.len() > 12 || s.len() > 64 { 0 } else { d.parse::<u64>().unwrap_or(0) } };
             match v { serde_json::Value::String(s) => *m = (*m).max(tail(s)), serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, m)), serde_json::Value::Object(o) => for (k, x) in o { *m = (*m).max(tail(k)); walk(x, m); }, _ => {} }
         }
-        let mut m = 999u64; if let Ok(v) = serde_json::to_value(&*self) { walk(&v, &mut m); } self.next_id = m + 1;
+        let mut m = 0u64; if let Ok(v) = serde_json::to_value(self) { walk(&v, &mut m); } m
     }
+    /// Collision-safe id counter after undo/redo/restore: one past the largest trailing number in any id-like string, never below 1000.
+    pub fn recompute_next_id(&mut self) { self.next_id = self.max_id_suffix().max(999) + 1; }
+    /// Id counter after load_project (F1): one past the largest id number in the project and in every history snapshot (`others`), no 1000 floor, so ids
+    /// continue exactly where an in-memory session would have continued. Unique-id guarantee: the counter is above every id that can come back through undo/redo.
+    pub fn continue_ids_after_load(&mut self, others: &[&Project]) { let m = others.iter().map(|p| p.max_id_suffix()).fold(self.max_id_suffix(), u64::max); self.next_id = m + 1; }
     pub fn gen_id(&mut self, p: &str) -> String { let i = self.next_id; self.next_id += 1; format!("{p}{i}") }
     pub fn duration(&self) -> f64 {
         self.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.start + c.duration).fold(0.0, f64::max)

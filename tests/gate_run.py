@@ -7,7 +7,7 @@ commit), KIMO_FONTS, PYTHONPATH=examples. A proof prints 'SKIP: <reason>' and ex
 import os, re, subprocess, sys, time
 root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 os.chdir(root)
-tier = sys.argv[1] if len(sys.argv) > 1 else "fast"; nobuild = "--no-build" in sys.argv
+tier = sys.argv[1] if len(sys.argv) > 1 else "fast"; nobuild = "--no-build" in sys.argv; pyonly = "--py-only" in sys.argv   # --py-only: skip every cargo step (proofs against the existing release binary)
 assert tier in ("fast", "full"), "tier must be fast or full"
 PROFILE = os.environ.get("KIMO_GATE_PROFILE", "gate")
 env = dict(os.environ); tdir = env.get("CARGO_TARGET_DIR", os.path.join(root, "target"))
@@ -26,7 +26,7 @@ def counts(out):
     p = f = 0
     for m in re.finditer(r"test result: \w+\. (\d+) passed; (\d+) failed", out): p += int(m.group(1)); f += int(m.group(2))
     return p, f
-if not nobuild:
+if not nobuild and not pyonly:
     rc, out, sec = sh(["cargo", "build", "--release", "--workspace", "--bins"]); rows.append(("build release bins", "pass" if rc == 0 else "fail", sec, ""))
     if rc: print(out[-2000:])
 ent = []
@@ -35,11 +35,13 @@ for line in open("tests/gate_manifest.txt"):
     if len(s) == 3 and s[2] in ("fast", "full") and (tier == "full" or s[2] == "fast"): ent.append(s)
 rc, out, sec = sh([sys.executable, "tests/gate_check.py"]); rows.append(("gate_check (manifest)", "pass" if rc == 0 else "fail", sec, out.strip().splitlines()[0] if out else ""))
 if rc: print(out)
-rc, out, sec = sh(["cargo", "test", "--profile", PROFILE, "-p", "kimo-core", "--lib"]); p, f = counts(out); rows.append(("rust lib", "pass" if rc == 0 else "fail", sec, f"{p} passed {f} failed"))
-if rc: print("\n".join(l for l in out.splitlines() if "FAILED" in l or "panicked" in l)[:2000])
+if not pyonly:
+    rc, out, sec = sh(["cargo", "test", "--profile", PROFILE, "-p", "kimo-core", "--lib"]); p, f = counts(out); rows.append(("rust lib", "pass" if rc == 0 else "fail", sec, f"{p} passed {f} failed"))
+    if rc: print("\n".join(l for l in out.splitlines() if "FAILED" in l or "panicked" in l)[:2000])
 before = git_state()
 for kind, name, _ in ent:
     if kind == "rust":
+        if pyonly: continue
         rc, out, sec = sh(["cargo", "test", "--profile", PROFILE, "-p", "kimo-core", "--test", name]); p, f = counts(out)
         rows.append((f"rust {name}", "pass" if rc == 0 else "fail", sec, f"{p} passed {f} failed"))
         if rc: print("\n".join(l for l in out.splitlines() if "FAILED" in l or "panicked" in l)[:1500])
