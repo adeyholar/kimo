@@ -11,4 +11,5 @@ for f in ${@:-tests/*_proof.py}; do
   [ $rc -ne 0 ] && { echo "FAIL rc=$rc $f"; fail=1; }
 done
 [ -z "$1" ] && command -v cargo >/dev/null && { cargo test --release -p kimo-core --test render_state_leak >/tmp/proof_leak.txt 2>&1 || { echo "FAIL render_state_leak (see /tmp/proof_leak.txt)"; fail=1; }; }
+[ -z "$1" ] && [ -d "${MAIN_WT:-/tmp/mainwt}" ] && { bash tests/gc_main_compat.sh "${MAIN_WT:-/tmp/mainwt}" >/tmp/proof_gc.txt 2>&1 || { echo "FAIL G-c main compat (see /tmp/proof_gc.txt)"; fail=1; }; }
 exit $fail
