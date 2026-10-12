@@ -800,6 +800,10 @@ fn dispatch_inner(ss: &mut Session, name: &str, args: &Value) -> Result<Value, S
     r
 }
 
+/// `dispatch` under a per-call cancellation token: cancelling `tok` stops this call's work (and any worker threads it spawned through `guard`) and nothing else.
+pub fn dispatch_with(ss: &mut Session, name: &str, args: &Value, tok: &crate::guard::Cancel) -> Result<Value, String> { crate::guard::with_token(tok, || dispatch(ss, name, args)) }
+pub fn dispatch_ex_with(ss: &mut Session, name: &str, args: &Value, tok: &crate::guard::Cancel) -> Result<Value, crate::errors::ToolError> { crate::guard::with_token(tok, || dispatch_ex(ss, name, args)) }
+
 /// Structured variant of `dispatch`: same behaviour, same error text, plus a code, the offending parameter and a hint (unit 5 step 1).
 pub fn dispatch_ex(ss: &mut Session, name: &str, args: &Value) -> Result<Value, crate::errors::ToolError> {
     dispatch(ss, name, args).map_err(|m| {

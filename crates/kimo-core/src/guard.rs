@@ -2,7 +2,7 @@
 //! Layers: (1) argument sanitizer (finite numbers, magnitude, array/string size, nesting), (2) project limits checked after every
 //! mutation (canvas pixels, fps, clip count, duration) with automatic rollback, (3) memory budget enforced by a counting allocator
 //! (`Frame::new` and the render loop check it and fail the call; a hard backstop refuses allocations far beyond the budget),
-//! (4) cooperative cancellation + wall-clock time limit per call (`CANCEL`, checked per clip / per exported frame),
+//! (4) cooperative cancellation + wall-clock time limit per call (per-call `Cancel` token, checked per clip / per exported frame),
 //! (5) panics are caught and the project is rolled back. All limits can be overridden with KIMO_* environment variables.
 use serde_json::Value;
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -10,9 +10,27 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 
 pub static LIVE: AtomicUsize = AtomicUsize::new(0);
 pub static BUDGET: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Per-call cancellation token. One token is created per tool call; cancelling it stops only that call's work.
+pub type Cancel = std::sync::Arc<AtomicBool>;
+pub fn new_token() -> Cancel { std::sync::Arc::new(AtomicBool::new(false)) }
+thread_local! { static TOKEN: std::cell::RefCell<Option<Cancel>> = const { std::cell::RefCell::new(None) }; }
+/// The token active on this thread, if any.
+pub fn current_token() -> Option<Cancel> { TOKEN.with(|t| t.borrow().clone()) }
+pub struct Restore(Option<Cancel>);
+impl Drop for Restore { fn drop(&mut self) { let p = self.0.take(); TOKEN.with(|t| *t.borrow_mut() = p); } }
+/// Run `f` with `tok` as this thread's cancellation token (restored afterwards, also on panic).
+pub fn with_token<R>(tok: &Cancel, f: impl FnOnce() -> R) -> R { let _g = install_token(tok); f() }
+/// RAII form of `with_token`: the token is active on this thread until the guard drops.
+pub fn install_token(tok: &Cancel) -> TokenGuard { TokenGuard(Restore(TOKEN.with(|t| t.borrow_mut().replace(tok.clone())))) }
+pub struct TokenGuard(#[allow(dead_code)] Restore);
+fn inherit<R>(tok: Option<Cancel>, f: impl FnOnce() -> R) -> R { match tok { Some(t) => with_token(&t, f), None => f() } }
+/// The only sanctioned way to start threads in kimo-core: the child inherits the caller's cancellation token.
+pub fn spawn_with_token<F, T>(f: F) -> std::thread::JoinHandle<T> where F: FnOnce() -> T + Send + 'static, T: Send + 'static { let tok = current_token(); std::thread::spawn(move || inherit(tok, f)) }
+pub fn spawn_builder_with_token<F, T>(b: std::thread::Builder, f: F) -> std::io::Result<std::thread::JoinHandle<T>> where F: FnOnce() -> T + Send + 'static, T: Send + 'static { let tok = current_token(); b.spawn(move || inherit(tok, f)) }
+/// Scoped spawn whose child inherits the caller's token.
+pub fn scope_spawn<'scope, 'env, F, T>(sc: &'scope std::thread::Scope<'scope, 'env>, f: F) -> std::thread::ScopedJoinHandle<'scope, T> where F: FnOnce() -> T + Send + 'scope, T: Send + 'scope { let tok = current_token(); sc.spawn(move || inherit(tok, f)) }
 /// Hard allocation ceiling (backstop). Set in `init`: never above 85% of physical RAM, so the guard refuses before the kernel OOM killer fires.
 pub static HARD: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// Counting allocator. Install in a binary with `#[global_allocator] static A: kimo_core::guard::Counting = kimo_core::guard::Counting;`.
 pub struct Counting;
@@ -58,7 +76,7 @@ pub fn export_plan(w: u32, h: u32, cpus: usize, want_low: bool) -> Result<(usize
 pub fn export_threads(w: u32, h: u32, cpus: usize) -> usize { let b = BUDGET.load(Relaxed); if b == usize::MAX { return cpus.max(1); } let per = (w as usize).saturating_mul(h as usize).saturating_mul(16 * 12).max(1); (b.saturating_sub(LIVE.load(Relaxed)) / per).clamp(1, cpus.max(1)) }
 
 /// Panic (caught by `safe_dispatch`) when over the memory budget or cancelled. Cheap; call from loops that allocate or run long.
-#[inline] pub fn check() { if CANCEL.load(Relaxed) { panic!("cancelled: call exceeded its time limit"); } let b = BUDGET.load(Relaxed); if b != usize::MAX && LIVE.load(Relaxed) > b { panic!("memory budget exceeded: {} MB live of {} MB allowed (raise with KIMO_MEM_MB)", LIVE.load(Relaxed) >> 20, b >> 20); } }
+#[inline] pub fn check() { if TOKEN.with(|t| t.borrow().as_ref().map_or(false, |c| c.load(Relaxed))) { panic!("cancelled: call exceeded its time limit"); } let b = BUDGET.load(Relaxed); if b != usize::MAX && LIVE.load(Relaxed) > b { panic!("memory budget exceeded: {} MB live of {} MB allowed (raise with KIMO_MEM_MB)", LIVE.load(Relaxed) >> 20, b >> 20); } }
 /// Check before a large allocation of `bytes`.
 pub fn reserve(bytes: usize) { check(); let b = BUDGET.load(Relaxed); if b != usize::MAX && LIVE.load(Relaxed).saturating_add(bytes) > b { panic!("memory budget exceeded: allocation of {} MB would pass the {} MB budget (raise with KIMO_MEM_MB)", bytes >> 20, b >> 20); } }
 

@@ -88,13 +88,19 @@ fn sstep(x: f64) -> f64 { let t = x.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) }
 
 struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64, n3: [f64; 3], tex: Option<[f64; 6]>, id: u64, flat: f64, env: ([f64; 3], f64) }
 
-pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
+/// Per-render state that used to be process-global. Built once per frame from the project and passed down; two renders with different ctx never interfere.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RenderCtx { pub work_linear: bool }
+
+pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) { render_ctx(&RenderCtx::default(), e, f, t, cam, fps, total) }
+
+pub fn render_ctx(ctx: &RenderCtx, e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
     let (w, hh) = (f.w, f.h); let cv = CamView::new(w, hh, cam); let fl = cv.focal(); let k = w.min(hh) as f64 / 720.0;
     let nsub = if e.shutter_deg <= 0.0 { 1usize } else if e.blur_samples > 0 { (e.blur_samples as usize).clamp(1, 64) } else if e.plane.as_ref().map(|p| p.texture.is_some()).unwrap_or(false) { 8usize } else { 4usize }; let shutter = (e.shutter_deg.clamp(0.0, 720.0) / 360.0) / fps.max(1.0); let mut accc = vec![0f32; w * hh * 3]; let mut acca = vec![0f32; w * hh]; let rf = e.refract > 0.0 && e.material.transmissive(); let mut dacc = vec![0f32; if rf { w * hh * 2 } else { 0 }]; let mut dsum = vec![0f32; if rf { w * hh * 2 } else { 0 }];
     let lg = { let l = e.light; let m = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt().max(1e-9); [l[0] / m, l[1] / m, l[2] / m] };
     let focus = if e.focus > 0.0 { e.focus } else { fl };
     let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));
-    let tex = e.plane.as_ref().and_then(|p| p.texture.as_ref().and_then(|t| load_tex(t, p.region)));
+    let tex = e.plane.as_ref().and_then(|p| p.texture.as_ref().and_then(|t| load_tex(ctx, t, p.region)));
     let occ = if let Some(m) = EXT_OCC.with(|c| c.borrow_mut().take()) { if m.len() == w * hh { Some(m) } else { None } } else { e.plane.as_ref().and_then(|p| p.occlusion.as_ref().and_then(|o| load_occ(o, (t * fps).round() as i64, w, hh))) };
     let mut shadow = vec![0f32; if e.contact_shadow > 0.0 { w * hh } else { 0 }]; let sreach = if e.shadow_reach > 0.0 { e.shadow_reach } else { 220.0 } * k;
     let traj = if e.physics { Some((bake_cached(e, k, total, hh), 0)) } else { None };
@@ -127,7 +133,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             let mut shard: Vec<([(f64, f64); 6], f64, f64, f64, f64)> = vec![]; // per face
             let nrm = [rm[0][2], rm[1][2], rm[2][2]];
             let eye = cv.eye(); let to_eye = [eye[0]-pos[0], eye[1]-pos[1], eye[2]-pos[2]];
-            let env_for = |normal| if e.env_reflection.is_finite() && e.env_reflection > 0.0 { shard_look::environment(normal, to_eye, e.env_roughness, WORK_LINEAR.load(std::sync::atomic::Ordering::Relaxed)) } else { ([0.0;3],0.0) }; let mut zsum = 0.0; let mut ok = true;
+            let env_for = |normal| if e.env_reflection.is_finite() && e.env_reflection > 0.0 { shard_look::environment(normal, to_eye, e.env_roughness, ctx.work_linear) } else { ([0.0;3],0.0) }; let mut zsum = 0.0; let mut ok = true;
             for face in 0..2 { let zoff = if face == 0 { thick * 0.5 } else { -thick * 0.5 }; let mut pts = [(0.0, 0.0); 6]; let mut dz = 0.0;
                 for v in 0..nv { let l = [loc[v].0, loc[v].1, zoff]; let wp = [pos[0] + rm[0][0] * l[0] + rm[0][1] * l[1] + rm[0][2] * l[2], pos[1] + rm[1][0] * l[0] + rm[1][1] * l[1] + rm[1][2] * l[2], pos[2] + rm[2][0] * l[0] + rm[2][1] * l[1] + rm[2][2] * l[2]];
                     match cv.project(wp) { Some((sx, sy, zv)) => { pts[v] = (sx, sy); dz += zv; } None => { ok = false; } } }
@@ -240,9 +246,10 @@ impl Tex { fn sample(&self, u: f64, v: f64) -> [f64; 3] { let x = (u * self.w as
 thread_local! { static TEX: std::cell::RefCell<Option<(String, std::sync::Arc<Tex>)>> = std::cell::RefCell::new(None); }
 /// Load an image as an sRGB-decoded linear float texture at the plane's UV size (via ffmpeg, bounded to 4096x4096).
 /// Set by the renderer: true when frame buffers are scene-linear (colour pipeline on), false when display-referred 0..1 (default).
-pub static WORK_LINEAR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-fn load_tex(path: &str, region: [f64; 2]) -> Option<std::sync::Arc<Tex>> {
-    let wl = WORK_LINEAR.load(std::sync::atomic::Ordering::Relaxed); let key = format!("{}|{}|{}|{}", path, region[0], region[1], wl); if let Some((k, t)) = TEX.with(|c| c.borrow().clone()) { if k == key { return Some(t); } }
+/// Texture cache key: depends on the decode flag so a linear and an sRGB render never share a decoded texture.
+pub fn tex_key(ctx: &RenderCtx, path: &str, region: [f64; 2]) -> String { format!("{}|{}|{}|{}", path, region[0], region[1], ctx.work_linear) }
+fn load_tex(ctx: &RenderCtx, path: &str, region: [f64; 2]) -> Option<std::sync::Arc<Tex>> {
+    let wl = ctx.work_linear; let key = tex_key(ctx, path, region); if let Some((k, t)) = TEX.with(|c| c.borrow().clone()) { if k == key { return Some(t); } }
     let (w, hh) = ((region[0].round() as usize).clamp(8, 4096), (region[1].round() as usize).clamp(8, 4096));
     let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", path, "-vf", &format!("scale={}:{}", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
     if out.stdout.len() != w * hh * 3 { return None; }

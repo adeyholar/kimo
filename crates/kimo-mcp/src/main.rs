@@ -2,7 +2,7 @@
 //! Tools are generated from kimo_core::commands::registry().
 //! Every tool call runs on a worker thread under the sandbox layer (kimo_core::guard): argument sanitizer, project limits with
 //! rollback, memory budget, panic catching, and a wall-clock time limit with cooperative cancel (hard exit as the last resort).
-use kimo_core::commands::{dispatch, dispatch_ex, registry, Session};
+use kimo_core::commands::{dispatch, dispatch_ex_with, registry, Session};
 use kimo_core::toolgroups;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -14,13 +14,13 @@ static ALLOC: kimo_core::guard::Counting = kimo_core::guard::Counting;
 
 fn run_guarded(ss: &Arc<Mutex<Session>>, name: &str, args: &Value, out: &mut impl Write, id: &Option<Value>) -> Value {
     let l = kimo_core::guard::limits(); let limit = if name.starts_with("export") { l.export_timeout_s } else { l.timeout_s };
-    kimo_core::guard::CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
+    let tok = kimo_core::guard::new_token(); let tok2 = tok.clone();
     let (tx, rx) = mpsc::channel(); let (s2, n2, a2) = (ss.clone(), name.to_string(), args.clone());
-    std::thread::Builder::new().stack_size(64 << 20).spawn(move || { let mut g = s2.lock().unwrap_or_else(|e| e.into_inner()); let r = dispatch_ex(&mut g, &n2, &a2); let _ = tx.send(r); }).ok();
+    kimo_core::guard::spawn_builder_with_token(std::thread::Builder::new().stack_size(64 << 20), move || { let mut g = s2.lock().unwrap_or_else(|e| e.into_inner()); let r = dispatch_ex_with(&mut g, &n2, &a2, &tok2); let _ = tx.send(r); }).ok();
     let r = match rx.recv_timeout(Duration::from_secs(limit)) {
         Ok(r) => r,
         Err(_) => {
-            kimo_core::guard::CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
+            tok.store(true, std::sync::atomic::Ordering::Relaxed);
             match rx.recv_timeout(Duration::from_secs(15)) {
                 Ok(_) => Err(format!("tool '{name}' stopped: exceeded the {limit}s time limit (KIMO_TIMEOUT_S); project rolled back where possible").into()),
                 Err(_) => { // worker did not stop: report, then exit so the machine is never held hostage; the client restarts the server
