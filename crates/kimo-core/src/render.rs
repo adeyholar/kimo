@@ -494,10 +494,12 @@ pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<
 
 /// Ordinary video delivery is explicit Rec709 RGB -> limited BT709 YUV.
 /// Disabled projects keep their display-sRGB render samples; only delivery changes.
-pub(crate) fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Result<Command,String>{
+pub(crate) fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Result<Command,String>{legacy_encoder_command_opts(p,path,crf,false)}
+/// `low_memory` adds x264 settings that cut the encoder's RSS (shorter lookahead, fewer refs and b-frames) at a small size/quality cost. Default output bytes are unchanged.
+pub(crate) fn legacy_encoder_command_opts(p:&Project,path:&str,crf:u32,low_memory:bool)->Result<Command,String>{
     let q=&p.color_pipeline;
     let transfer=if q.enabled{q.validate()?;if q.output_gamut!=0{return Err("ordinary video export requires Rec709 output gamut=0; select a supported delivery output or export_high_bit".into())}match q.output_transfer{0=>"linear",1=>"iec61966-2-1",8=>"bt709",_=>return Err("ordinary video export requires exactly taggable linear/sRGB/BT709 output transfer; select a supported delivery output or export_high_bit".into())}}else{"iec61966-2-1"};
-    let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v","libx264","-vf","scale=out_color_matrix=bt709:out_range=tv","-pix_fmt","yuv420p","-color_range","tv","-color_primaries","bt709","-color_trc",transfer,"-colorspace","bt709","-crf",&crf.to_string(),path]);Ok(cmd)
+    let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v","libx264","-vf","scale=out_color_matrix=bt709:out_range=tv","-pix_fmt","yuv420p","-color_range","tv","-color_primaries","bt709","-color_trc",transfer,"-colorspace","bt709","-crf",&crf.to_string()]);if low_memory{cmd.args(["-x264-params","rc-lookahead=10:ref=2:bframes=2:sync-lookahead=0"]);}cmd.arg(path);Ok(cmd)
 }
 
 
@@ -531,14 +533,17 @@ pub fn export_alpha(p: &Project, path: &str, format: &str, t_in: f64, t_out: f64
 }
 
 pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> { export_range(p, path, crf, 0.0, p.duration()) }
+pub fn export_opts(p: &Project, path: &str, crf: u32, low_memory: bool) -> Result<f64, String> { export_range_opts(p, path, crf, 0.0, p.duration(), low_memory, true) }
 /// Export [t_in, t_out) seconds. Frame k renders at t_in + k/fps (absolute time, so frames equal the same frames of a full export).
-pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) -> Result<f64, String> {
+pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) -> Result<f64, String> { export_range_opts(p, path, crf, t_in, t_out, false, true) }
+pub fn export_range_opts(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64, low_memory: bool, with_audio: bool) -> Result<f64, String> {
     if !t_in.is_finite() || !t_out.is_finite() || t_in < 0.0 || t_out <= t_in { return Err("range must satisfy 0 <= start < end".into()); }
     let t_out = t_out.min(p.duration()); if t_in >= t_out { return Err("range starts after the end of the timeline".into()); }
     let f0 = (t_in * p.fps).round() as usize; let f1 = ((t_out * p.fps).round() as usize).max(f0 + 1);
     if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) { return Err("HDR delivery requires export_high_bit; legacy export is 8-bit SDR".into()); }
-    let command=legacy_encoder_command(p,path,crf)?;
-    export_range_cmd(p, path, f0, f1, command, false, true)
+    let (_workers, low_memory) = crate::guard::export_plan(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2), low_memory)?;
+    let command=legacy_encoder_command_opts(p,path,crf,low_memory)?;
+    export_range_cmd(p, path, f0, f1, command, false, with_audio)
 }
 
 /// Shared export loop: render frames f0..f1 into `command`'s stdin (RGBA8), then mux audio when `audio`.
@@ -813,4 +818,13 @@ fn static_layer(p: &Project, c: &Clip, lt: f64, seed: u64, t: f64, cache: &Cache
     if x1 <= x0 { x0 = 0; y0 = 0; x1 = 0; y1 = 0; }
     if (x1 - x0) * (y1 - y0) * 16 <= 64 * 1024 * 1024 { let cw = x1 - x0; let mut d = Vec::with_capacity(cw * (y1 - y0) * 4); for y in y0..y1 { d.extend_from_slice(&f.d[(y * w + x0) * 4..(y * w + x1) * 4]); } cache.statics.write().unwrap().insert(c.id.clone(), std::sync::Arc::new(StaticCrop { x0, y0, x1, y1, d })); }
     Ok(Some(f))
+}
+#[test] fn low_memory_changes_only_the_x264_params() {
+    let mut p = Project::default(); p.width = 1280; p.height = 720; p.fps = 25.;
+    let args = |c: &Command| -> Vec<String> { c.get_args().map(|v| v.to_string_lossy().to_string()).collect() };
+    let (d, d2) = (legacy_encoder_command(&p, "o.mp4", 23).unwrap(), legacy_encoder_command_opts(&p, "o.mp4", 23, false).unwrap());
+    assert_eq!(args(&d), args(&d2), "default argv must be unchanged");
+    let l = args(&legacy_encoder_command_opts(&p, "o.mp4", 23, true).unwrap());
+    assert!(l.windows(2).any(|w| w[0] == "-x264-params" && w[1].contains("rc-lookahead=10")) && l.last().unwrap() == "o.mp4");
+    let base = args(&d); assert_eq!(l.iter().filter(|a| !base.contains(a)).count(), 2, "only -x264-params and its value are added");
 }

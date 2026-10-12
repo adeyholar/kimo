@@ -600,7 +600,7 @@ speed mode. These samples do not certify all finite inputs or export speed.
 ### What it does
 
 #### Sandbox layer (guard.rs, built into every tool call)
-- [x] V1: argument sanitizer (finite numbers, magnitude +-1e8, array/string size, nesting), project limits checked after every mutation with automatic rollback (canvas pixels, fps, clip count, timeline duration), memory budget via counting allocator (default 70% of RAM or cgroup limit; Frame allocations and the render loop fail the call instead of OOMing; hard backstop refuses allocations far above budget), cooperative cancel plus wall-clock time limit per call (default 600 s, export 7200 s) with a last-resort clean server exit if a call cannot be stopped, panics caught with project rollback. Env overrides: KIMO_MEM_MB, KIMO_TIMEOUT_S, KIMO_EXPORT_TIMEOUT_S, KIMO_MAX_PIXELS, KIMO_MAX_FPS, KIMO_MAX_CLIPS, KIMO_MAX_DURATION_S, KIMO_MAX_NUM. Test: tests/sandbox_test.py.
+- [x] V1: argument sanitizer (finite numbers, magnitude +-1e8, array/string size, nesting), project limits checked after every mutation with automatic rollback (canvas pixels, fps, clip count, timeline duration), memory budget via counting allocator (default 55% of RAM or cgroup limit; Frame allocations and the render loop fail the call instead of OOMing; hard backstop refuses allocations far above budget), cooperative cancel plus wall-clock time limit per call (default 600 s, export 7200 s) with a last-resort clean server exit if a call cannot be stopped, panics caught with project rollback. Env overrides: KIMO_MEM_MB, KIMO_TIMEOUT_S, KIMO_EXPORT_TIMEOUT_S, KIMO_MAX_PIXELS, KIMO_MAX_FPS, KIMO_MAX_CLIPS, KIMO_MAX_DURATION_S, KIMO_MAX_NUM. Test: tests/sandbox_test.py.
 
 ### Parameters and controls
 

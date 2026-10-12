@@ -36,6 +36,24 @@ impl Limits { pub fn from_env() -> Self { Limits { max_num: env("KIMO_MAX_NUM", 
 pub fn limits() -> &'static Limits { static L: std::sync::OnceLock<Limits> = std::sync::OnceLock::new(); L.get_or_init(Limits::from_env) }
 /// Set the memory budget from the limits (called once at server start).
 pub fn init() { let b = limits().mem_bytes; BUDGET.store(b, Relaxed); HARD.store(b.saturating_add(b / 4).saturating_add(512 << 20).min(total_mem() / 100 * 85), Relaxed); }
+/// Encoder child (ffmpeg/x264) RSS measured at 1920x1080, default settings: 479 MB; with the opt-in low_memory x264 params: 257 MB (see FEATURES.md, export memory). Scaled by pixel count.
+pub const ENCODER_RSS_1080P: usize = 479 << 20;
+pub const ENCODER_RSS_1080P_LOW: usize = 257 << 20;
+fn mem_available() -> Option<usize> { std::fs::read_to_string("/proc/meminfo").ok().and_then(|s| s.lines().find(|l| l.starts_with("MemAvailable")).and_then(|l| l.split_whitespace().nth(1).and_then(|v| v.parse::<usize>().ok()))).map(|k| k * 1024) }
+/// Decide how an export can run before any frame is rendered: `(workers, low_memory)` or an explanatory error. The usable memory is the smaller of the
+/// remaining heap budget and the kernel's MemAvailable, minus the encoder child (which the counting allocator cannot see). `low_memory` is turned on
+/// automatically when only the lighter encoder fits. With no budget installed (library use) there is no limit.
+pub fn export_plan(w: u32, h: u32, cpus: usize, want_low: bool) -> Result<(usize, bool), String> {
+    let b = BUDGET.load(Relaxed); if b == usize::MAX { return Ok((cpus.max(1), want_low)); }
+    let px = (w as usize).saturating_mul(h as usize); let per = px.saturating_mul(16 * 12).max(1);
+    let scale = |full: usize| ((full as u128 * px as u128) / (1920u128 * 1080)) as usize;
+    let avail = b.saturating_sub(LIVE.load(Relaxed)).min(mem_available().unwrap_or(usize::MAX));
+    let try_with = |low: bool| { let reserve = scale(if low { ENCODER_RSS_1080P_LOW } else { ENCODER_RSS_1080P }); if avail >= reserve + per { Some(((avail - reserve) / per).clamp(1, cpus.max(1))) } else { None } };
+    if let Some(n) = try_with(want_low) { return Ok((n, want_low)); }
+    if !want_low { if let Some(n) = try_with(true) { return Ok((n, true)); } }
+    let need = scale(ENCODER_RSS_1080P_LOW) + per;
+    Err(format!("export of {w}x{h} needs about {} MB (one frame worker plus the encoder, low_memory), but only {} MB is available (budget {} MB, KIMO_MEM_MB; kernel free memory counted); lower the resolution or raise KIMO_MEM_MB", need >> 20, avail >> 20, b >> 20))
+}
 /// Worker threads for a frame-parallel export: each in-flight frame needs about 12 full-frame f32 buffers (16 bytes per pixel each), so the count is limited by the free memory budget (at least 1).
 pub fn export_threads(w: u32, h: u32, cpus: usize) -> usize { let b = BUDGET.load(Relaxed); if b == usize::MAX { return cpus.max(1); } let per = (w as usize).saturating_mul(h as usize).saturating_mul(16 * 12).max(1); (b.saturating_sub(LIVE.load(Relaxed)) / per).clamp(1, cpus.max(1)) }
 
