@@ -1,0 +1,43 @@
+00 no_such_tool	unknown_tool	param=tool	hint=nearest tools: match_color, connect_nodes, edit_caption
+01 set_propertyy	unknown_tool	param=tool	hint=nearest tools: set_property, get_project, get_scopes
+02 delete_clip	missing_arg	param=clip_id	hint=required arguments: clip_id
+03 delete_clip	bad_arg_type	param=clip_id	hint=
+04 delete_clip	not_found	param=clip_id	hint=valid clip ids (up to 10): clip3
+05 move_clip	missing_arg	param=start	hint=required arguments: clip_id, start
+06 move_clip	bad_arg_type	param=start	hint=
+07 move_clip	not_found	param=clip_id	hint=valid clip ids (up to 10): clip3
+08 trim_clip	out_of_range	param=	hint=
+09 set_speed	out_of_range	param=	hint=
+10 set_speed	out_of_range	param=	hint=
+11 set_property	invalid_value	param=property	hint=valid values: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface. For crop use add_effect/crop tools; for effect params use set_effect_param
+12 set_property	missing_arg	param=value	hint=required arguments: clip_id, property, value
+13 split_clip	out_of_range	param=	hint=
+14 split_clip	missing_arg	param=at	hint=required arguments: clip_id, at
+15 freeze_frame	out_of_range	param=	hint=
+16 freeze_frame	out_of_range	param=	hint=
+17 insert_gap	out_of_range	param=	hint=
+18 insert_gap	out_of_range	param=	hint=
+19 insert_gap	not_found	param=track_id	hint=valid track ids (up to 10): track1, track2
+20 add_track	OK
+21 add_shape	missing_arg	param=shape	hint=required arguments: track_id, shape, start, duration
+22 add_shape	not_found	param=track_id	hint=valid track ids (up to 10): track1, track2
+23 add_shape	invalid_value	param=shape	hint=valid values: rect, ellipse, polygon, line
+24 add_effect	invalid_value	param=kind	hint=nearest effect kinds: log_wheels, offset, bleach_bypass
+25 add_effect	not_found	param=clip_id	hint=valid clip ids (up to 10): clip3
+26 set_keyframe	missing_arg	param=value	hint=required arguments: clip_id, property, time, value
+27 set_keyframe	invalid_value	param=property	hint=valid values: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface. To keyframe an effect param pass effect_id
+28 set_camera	out_of_range	param=	hint=
+29 set_camera	bad_arg_type	param=cam_x	hint=
+30 set_track	not_found	param=track_id	hint=valid track ids (up to 10): track1, track2
+31 remove_silence_cuts	not_found	param=track_id	hint=valid track ids (up to 10): track1, track2
+32 loop_clip	out_of_range	param=	hint=
+33 loop_clip	out_of_range	param=	hint=
+34 swap_clips	invalid_state	param=	hint=
+35 distribute_clips	out_of_range	param=	hint=
+36 get_scopes	missing_arg	param=time	hint=required arguments: time
+37 render_frame	missing_arg	param=path	hint=required arguments: time, path
+38 bind_shared_grade_graphs	not_found	param=	hint=
+39 save_project	missing_arg	param=path	hint=required arguments: path
+40 load_project	io_error	param=	hint=
+41 set_property	invalid_argument_combo	param=time	hint=
+42 delete_clip	missing_arg	param=clip_id	hint=required arguments: clip_id; did you mean 'clip_id' instead of 'clipid'?

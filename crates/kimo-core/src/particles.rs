@@ -40,14 +40,14 @@ thread_local! { static EMIT_PTS: std::cell::RefCell<Vec<(f32, f32)>> = Default::
 pub const EMIT_BIN: f64 = 0.1;
 /// Spawn points for shape "layer": every pixel with alpha >= 0.5 (or only outline pixels when `edge`), subsampled to at most 60k points.
 /// A silhouette alpha plane shared with the renderer's cache: (width, height, alpha).
-pub type Plane = (usize, usize, std::rc::Rc<Vec<f32>>);
-thread_local! { static PTS_CACHE: std::cell::RefCell<Vec<(std::rc::Rc<Vec<f32>>, bool, std::rc::Rc<Vec<(f32, f32)>>)>> = Default::default(); static U8_CACHE: std::cell::RefCell<Vec<(std::rc::Rc<Vec<f32>>, Mask)>> = Default::default(); }
+pub type Plane = (usize, usize, std::sync::Arc<Vec<f32>>);
+thread_local! { static PTS_CACHE: std::cell::RefCell<Vec<(std::sync::Arc<Vec<f32>>, bool, std::rc::Rc<Vec<(f32, f32)>>)>> = Default::default(); static U8_CACHE: std::cell::RefCell<Vec<(std::sync::Arc<Vec<f32>>, Mask)>> = Default::default(); }
 /// Derived forms are cached per source plane (the Rc is held, so its address cannot be reused); at most 96 of each.
 fn points_cached(pl: Plane, edge: bool) -> std::rc::Rc<Vec<(f32, f32)>> {
-    if let Some(h) = PTS_CACHE.with(|c| c.borrow().iter().find(|(r, e, _)| std::rc::Rc::ptr_eq(r, &pl.2) && *e == edge).map(|(_, _, v)| v.clone())) { return h; }
+    if let Some(h) = PTS_CACHE.with(|c| c.borrow().iter().find(|(r, e, _)| std::sync::Arc::ptr_eq(r, &pl.2) && *e == edge).map(|(_, _, v)| v.clone())) { return h; }
     let v = std::rc::Rc::new(mask_points(Some((pl.0, pl.1, &pl.2[..])), edge)); PTS_CACHE.with(|c| { let mut c = c.borrow_mut(); if c.len() >= 96 { c.remove(0); } c.push((pl.2.clone(), edge, v.clone())); }); v }
 fn u8_cached(pl: Plane) -> Mask {
-    if let Some(h) = U8_CACHE.with(|c| c.borrow().iter().find(|(r, _)| std::rc::Rc::ptr_eq(r, &pl.2)).map(|(_, v)| v.clone())) { return h; }
+    if let Some(h) = U8_CACHE.with(|c| c.borrow().iter().find(|(r, _)| std::sync::Arc::ptr_eq(r, &pl.2)).map(|(_, v)| v.clone())) { return h; }
     let v = to_u8((pl.0, pl.1, &pl.2[..])); U8_CACHE.with(|c| { let mut c = c.borrow_mut(); if c.len() >= 96 { c.remove(0); } c.push((pl.2.clone(), v.clone())); }); v }
 fn mask_points(m: Option<(usize, usize, &[f32])>, edge: bool) -> Vec<(f32, f32)> {
     let mut pts = Vec::new(); if let Some((w, h, d)) = m { let a = |x: usize, y: usize| d[y * w + x] >= 0.5;

@@ -26,14 +26,14 @@ print('pane detail (sum |2nd difference| of green): on',grad(on,*inner),'vs unfr
 print('render_frame with frosted_glass: %.2fs'%dt)
 assert outside
 # moved pane must frost what is under it, not what was under the unmoved layer
-c('set_property',clip_id=sid,property='x',time=0,value=140); c('render_frame',time=0.5,path='/tmp/fp_mv.png'); mv=png('/tmp/fp_mv.png')
+c('set_property',clip_id=sid,property='x',value=140); c('render_frame',time=0.5,path='/tmp/fp_mv.png'); mv=png('/tmp/fp_mv.png')
 def mean(b,x0,x1,y0,y1): n=(x1-x0)*(y1-y0); return [sum(b[(y*W+x)*3+j] for y in range(y0,y1) for x in range(x0,x1))/n for j in range(3)]
 d=lambda a,b:sum(abs(x-y) for x,y in zip(a,b))
 m=mean(mv,330,450,150,210); here=mean(plate_f,330,450,150,210); origin=mean(plate_f,190,310,150,210)
 print('moved pane mean vs plate under it %.1f, vs plate at unmoved spot %.1f'%(d(m,here),d(m,origin))); assert d(m,here)<d(m,origin),'pane frosts the wrong place'
 # clear magnifier lens: pane centre shows the plate zoomed 2x about the pane centre
 for kk,v in dict(blur=0,tint_amount=0.0,saturation=1.0,edge_light=0.0,refraction=0.0,magnify=2.0,x=0).items():
-    if kk=='x': c('set_property',clip_id=sid,property='x',time=0,value=0)
+    if kk=='x': c('set_property',clip_id=sid,property='x',value=0)
     else: c('set_effect_param',clip_id=sid,effect_id=fxid,param=kk,value=v)
 c('render_frame',time=0.5,path='/tmp/fp_lens.png'); ln=png('/tmp/fp_lens.png')
 def zoomed_err(mag):

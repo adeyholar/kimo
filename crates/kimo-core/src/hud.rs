@@ -11,7 +11,7 @@ fn txt(text: &str, font: &str, size: f64, color: [f64; 3], align: &str) -> Sourc
 fn shape(kind: &str, w: f64, h: f64, fill: [f64; 3], sw: f64, sc: [f64; 3]) -> Source { Source::Shape { shape: kind.into(), width: w, height: h, fill, stroke_width: sw, stroke_color: sc, sides: 4, corner_radius: 0.0 } }
 fn set(c: &mut Clip, p: &str, v: f64) { c.props.get_mut(p).unwrap().base = v; }
 fn key(c: &mut Clip, p: &str, t: f64, v: f64, e: Ease) { c.props.get_mut(p).unwrap().set_key(t, v, e); }
-fn push(ss: &mut Session, tid: &str, clips: Vec<Clip>) -> Result<Vec<String>, String> { let ids = clips.iter().map(|c| c.id.clone()).collect(); ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.extend(clips); Ok(ids) }
+fn push(ss: &mut Session, tid: &str, clips: Vec<Clip>) -> Result<Vec<String>, String> { let ids = clips.iter().map(|c| c.id.clone()).collect(); ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.extend(clips.into_iter().map(std::sync::Arc::new)); Ok(ids) }
 
 /// Object-detection style overlay: hollow box + corner ticks + filled label tag with "label 0.92".
 pub fn add_detection_box(ss: &mut Session, a: &Value) -> Result<Value, String> {

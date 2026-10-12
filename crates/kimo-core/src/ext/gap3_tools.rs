@@ -8,11 +8,17 @@ fn kind_of(o: &Op) -> &'static str { match o { Op::Wiggle { .. } => "wiggle", Op
 fn hash_seed(s: &str) -> u64 { let mut h: u64 = 0xcbf29ce484222325; for b in s.bytes() { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); } h }
 fn prop_of<'a>(ss: &'a mut Session, a: &Value) -> Result<&'a mut Prop, String> {
     let cid = str_arg(a, "clip_id")?.to_string(); let k = str_arg(a, "property")?.to_string(); let eid = a.get("effect_id").and_then(|v| v.as_str()).map(String::from);
-    let c = ss.project.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).find(|c| c.id == cid).ok_or(format!("no such clip '{cid}'"))?;
+    let c = ss.project.find_clip_mut(&cid).ok_or(format!("no such clip '{cid}'"))?;
     match eid { Some(id) => Ok(c.effects.iter_mut().find(|x| x.id == id).ok_or("no such effect")?.params.entry(k).or_insert(Prop::new(0.0))), None => c.props.get_mut(&k).ok_or(format!("no such property '{k}'")) }
 }
+/// Read-only lookup: never creates a property (a read tool must not change the project, or undo would miss it).
+fn prop_peek<'a>(ss: &'a Session, a: &Value) -> Result<&'a Prop, String> {
+    let cid = str_arg(a, "clip_id")?; let k = str_arg(a, "property")?; let eid = a.get("effect_id").and_then(|v| v.as_str());
+    let c = ss.project.tracks.iter().flat_map(|t| t.clips.iter()).find(|c| c.id == cid).ok_or(format!("no such clip '{cid}'"))?;
+    match eid { Some(id) => c.effects.iter().find(|x| x.id == id).ok_or("no such effect")?.params.get(k).ok_or(format!("no such effect param '{k}'")), None => c.props.get(k).ok_or(format!("no such property '{k}'")) }
+}
 fn within(a: &Value, k: &str, d: f64, lo: f64, hi: f64) -> Result<f64, String> { let v = opt_num(a, k, d); if v.is_finite() && v >= lo && v <= hi { Ok(v) } else { Err(format!("'{k}' must be in {lo}..{hi}, got {v}")) } }
-fn find_clip<'a>(ss: &'a mut Session, a: &Value) -> Result<&'a mut crate::model::Clip, String> { let cid = str_arg(a, "clip_id")?.to_string(); ss.project.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).find(|c| c.id == cid).ok_or(format!("no such clip '{cid}'")) }
+fn find_clip<'a>(ss: &'a mut Session, a: &Value) -> Result<&'a mut crate::model::Clip, String> { let cid = str_arg(a, "clip_id")?.to_string(); ss.project.find_clip_mut(&cid).ok_or(format!("no such clip '{cid}'")) }
 fn spec_list(table: &[(&str, &str, &[(&str, f64)])]) -> Value { json!(table.iter().map(|(k, d, ps)| json!({"kind": k, "description": d, "params": ps.iter().map(|(n, v)| json!({"name": n, "default": v})).collect::<Vec<_>>()})).collect::<Vec<_>>()) }
 fn set_effect(c: &mut crate::model::Clip, kind: &str, id: Option<String>, a: &Value, table: &[(&str, &str, &[(&str, f64)])], pre: &str) -> Result<String, String> {
     let (_, _, defs) = table.iter().find(|(k, _, _)| *k == kind).ok_or(format!("unknown {pre} '{kind}'; see the list tool"))?;
@@ -39,7 +45,7 @@ pub fn commands() -> Vec<Command> { vec![
             Ok(json!({"clip_id": cid, "property": prop, "modifiers": pr.expr.iter().map(kind_of).collect::<Vec<_>>()})) } },
     Command { name: "list_modifiers", description: "List the modifiers/expression ops on a property (kind + full parameters).", mutates: false,
         schema: obj(vec![("clip_id", s("clip")), ("property", s("property or effect param")), ("effect_id", s("optional effect"))], &["clip_id","property"]),
-        run: |ss, a| { let pr = prop_of(ss, a)?; Ok(json!({"modifiers": pr.expr.iter().map(|o| json!({"kind": kind_of(o), "op": o})).collect::<Vec<_>>(), "keyframes": pr.keys.len()})) } },
+        run: |ss, a| { let pr = prop_peek(ss, a)?; Ok(json!({"modifiers": pr.expr.iter().map(|o| json!({"kind": kind_of(o), "op": o})).collect::<Vec<_>>(), "keyframes": pr.keys.len()})) } },
     Command { name: "remove_modifier", description: "Remove modifiers of one kind (wiggle|loop|bounce|overshoot|sin|inertia|posterize_time|clamp|round) from a property, or all when kind is omitted.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("property", s("property or effect param")), ("effect_id", s("optional effect")), ("kind", s("modifier kind; omit = all"))], &["clip_id","property"]),
         run: |ss, a| { let k = a.get("kind").and_then(|v| v.as_str()).map(String::from); let pr = prop_of(ss, a)?; let before = pr.expr.len(); match &k { Some(k) => pr.expr.retain(|o| kind_of(o) != k), None => pr.expr.clear() } Ok(json!({"removed": before - pr.expr.len(), "remaining": pr.expr.len()})) } },

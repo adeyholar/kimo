@@ -11,8 +11,8 @@ use std::process::Command as Proc;
 fn s(d: &str) -> Value { json!({"type":"string","description":d}) }
 fn n(d: &str) -> Value { json!({"type":"number","description":d}) }
 fn obj(props: Vec<(&str, Value)>, req: &[&str]) -> Value { let mut m = serde_json::Map::new(); for (k, v) in props { m.insert(k.into(), v); } json!({"type":"object","properties":m,"required":req}) }
-fn sa<'a>(a: &'a Value, k: &str) -> Result<&'a str, String> { a.get(k).and_then(|v| v.as_str()).ok_or(format!("missing string '{k}'")) }
-fn na(a: &Value, k: &str) -> Result<f64, String> { a.get(k).and_then(|v| v.as_f64()).ok_or(format!("missing number '{k}'")) }
+fn sa<'a>(a: &'a Value, k: &str) -> Result<&'a str, String> { a.get(k).and_then(|v| v.as_str()).ok_or_else(|| crate::errors::arg_err(a, k, "string")) }
+fn na(a: &Value, k: &str) -> Result<f64, String> { a.get(k).and_then(|v| v.as_f64()).ok_or_else(|| crate::errors::arg_err(a, k, "number")) }
 fn on(a: &Value, k: &str, d: f64) -> f64 { a.get(k).and_then(|v| v.as_f64()).unwrap_or(d) }
 
 /// Frame of one clip in isolation (its own effects included) at a timeline time.

@@ -7,11 +7,7 @@ use crate::{
 };
 use std::collections::BTreeSet;
 fn existing(ss: &mut Session, name: &str, a: &Value) -> Result<Value, String> {
-    let reg = crate::commands::registry();
-    let c = reg
-        .iter()
-        .find(|c| c.name == name)
-        .ok_or("missing existing tool")?;
+    let c = crate::commands::find_command(name).ok_or("missing existing tool")?;
     (c.run)(ss, a)
 }
 fn finite(a: &Value, k: &str, d: f64, lo: f64, hi: f64) -> Result<f64, String> {
@@ -374,7 +370,8 @@ fn auto_duck_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
         .iter_mut()
         .find(|t| t.id == track && !t.locked)
         .ok_or("missing/locked target track")?;
-    for c in &mut tr.clips {
+    for ca in tr.clips.iter_mut() {
+        let c = &**ca;
         let mut gain = 1.;
         let mut prop = Prop::new(1.);
         for (i, target) in env.iter().enumerate() {
@@ -389,7 +386,9 @@ fn auto_duck_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
             gain = *target + (gain - *target) * (-0.05 / tau).exp();
             prop.set_key(t, gain, Ease::Linear);
         }
-        c.audio.duck_gain = prop;
+        if prop.keys.iter().all(|k| (k.v - 1.0).abs() < 1e-12) { prop = Prop::new(1.0); } // unity everywhere: keep the default (keyless) envelope
+        // write only when the envelope really changes, so clips outside the dialogue stay shared with the undo snapshot
+        if serde_json::to_value(&ca.audio.duck_gain).ok() != serde_json::to_value(&prop).ok() { std::sync::Arc::make_mut(ca).audio.duck_gain = prop; }
     }
     Ok(json!({"clips":tr.clips.len(),"envelope_step":0.05,"separate_from_volume":true}))
 }
@@ -572,7 +571,7 @@ fn rebuild(ss: &mut Session, id: &str) -> Result<(), String> {
         .iter_mut()
         .find(|t| t.id == g.track_id)
         .ok_or("multicam track deleted")?
-        .clips = made;
+        .clips = made.into_iter().map(std::sync::Arc::new).collect();
     Ok(())
 }
 fn add_multicam_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {

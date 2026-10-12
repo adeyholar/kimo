@@ -3,9 +3,8 @@
 //! A tool's group comes from `group_of`: exact names first, then name rules, so most new tools land in the right group on
 //! their own. The unit test fails if any registry tool falls through to "extras", which makes adding a tool without a
 //! group a visible build failure rather than a silent drift.
-use crate::commands::{registry, Command};
-use std::sync::OnceLock;
-fn reg() -> &'static Vec<Command> { static R: OnceLock<Vec<Command>> = OnceLock::new(); R.get_or_init(registry) }
+use crate::commands::{registry_ref, Command};
+fn reg() -> &'static [Command] { registry_ref() }
 use serde_json::{json, Value};
 
 pub struct Group { pub name: &'static str, pub about: &'static str }
@@ -29,20 +28,20 @@ pub const GROUPS: &[Group] = &[
 
 pub fn group_of(n: &str) -> &'static str {
     const EXACT: &[(&str, &[&str])] = &[
-        ("project", &["project_set", "import_media", "save_project", "load_project", "undo", "redo", "get_project", "ext_list"]),
+        ("project", &["project_set", "import_media", "save_project", "load_project", "undo", "redo", "history_list", "checkpoint", "restore", "checkpoint_delete", "get_project", "ext_list"]),
         ("tracking", &["fit_info"]),
         ("output", &["render_frame", "export", "export_alpha", "export_gif", "export_audio", "export_preset", "inspect_export_preset", "export_with_subtitles", "burn_in", "export_camera_solve", "export_grade_lut", "export_asc_cdl", "export_color_pipeline_lut", "set_ocio_view_delivery", "export_ocio_view_video", "export_high_bit", "export_aces2_reference_video", "render_float_tiff", "render_float_exr", "render_high_bit_still", "render_ocio_display_view", "render_aces2_reference"]),
         ("effects", &["list_effects", "add_effect", "set_effect_param", "remove_effect", "list_transitions", "add_transition", "set_effect_mask", "add_adjustment_layer", "set_echo", "set_posterize_time", "add_speed_lines", "add_glitch_confetti", "add_managed_linear_effect", "set_effect_encoding"]),
         ("masks", &["set_mask", "set_mask_keyframe", "remove_mask", "add_mask", "update_mask", "remove_mask_layer", "reorder_mask", "list_masks", "set_mask_prop_key", "set_mask_path_key", "roto_propagate", "set_track_matte", "remove_track_matte", "track_matte", "render_mask", "refine_matte"]),
         ("text", &["add_text", "set_text", "set_text_style", "add_text_animator", "set_animator_keyframe", "add_title", "set_text_weight", "set_text_path", "list_fonts", "import_srt", "add_captions", "list_captions", "set_caption_style", "edit_caption", "transcribe"]),
         ("graphics", &["add_shape", "add_path_shape", "set_path", "path_info", "add_path_key", "clear_path_keys", "add_shape_modifier", "list_shape_modifiers", "remove_shape_modifier", "add_modifier", "list_modifiers", "remove_modifier", "list_layer_styles", "set_layer_style", "remove_layer_style", "add_box_expand", "add_detection_box", "add_hud_frame", "add_counter", "add_prompt_box"]),
-        ("vfx3d", &["add_scene3d", "add_shard_burst", "add_particles", "add_emitter", "shards_project", "set_light", "remove_light", "list_lights", "set_material", "list_materials", "remove_material", "set_relight", "preview_material", "simulate_physics"]),
+        ("vfx3d", &["add_scene3d", "add_shard_burst", "add_particles", "add_emitter", "shards_project", "set_light", "light_rig", "remove_light", "list_lights", "set_material", "list_materials", "remove_material", "set_relight", "preview_material", "simulate_physics"]),
         ("color_science", &["evaluate_hlg_reference_display"]),
         ("color_grade", &["preview_subject_match"]),
         ("scopes", &["get_scopes", "render_scope", "render_display_scope", "analyze_exposure", "analyze_exposure_sequence", "render_exposure_false_color", "render_gamut_excursions", "measure_loudness", "analyze_color", "inspect_grade_scopes", "set_grade_scopes"]),
         ("audio", &["set_audio", "set_audio_volume_key", "set_audio_pan", "add_audio_effect", "remove_audio_effect", "normalize_loudness", "auto_duck", "detect_beats", "add_audio_clip"]),
         ("animate", &["set_property", "set_keyframe", "set_keyframe_bezier", "set_expression", "get_curve", "move_key", "remove_key", "copy_curve", "simplify_curve", "smooth_curve", "set_motion_path", "remove_motion_path", "apply_motion_preset", "set_motion_blur", "set_flow_blur", "render_flow", "add_camera_shake", "motion_extract", "motion_diff", "bind_beats", "track_beats", "set_corner_pin", "set_mesh_pin", "set_blend", "set_camera", "set_camera_keyframe"]),
-        ("timeline", &["add_track", "add_clip", "move_clip", "trim_clip", "split_clip", "delete_clip", "set_speed", "set_speed_ramp", "set_time_mode", "freeze_frame", "ripple_delete", "ripple_trim", "roll_edit", "slip_clip", "slide_clip", "insert_gap", "lift_range", "duplicate_clip", "rate_stretch", "set_track", "delete_track", "split_all_at", "remove_silence_cuts", "group_clips", "ungroup_clip", "add_marker", "list_markers", "remove_marker", "snap_time", "list_edit_points", "add_multicam", "switch_angle", "list_multicam", "sync_clips"]),
+        ("timeline", &["add_track", "add_clip", "move_clip", "trim_clip", "split_clip", "delete_clip", "set_speed", "set_speed_ramp", "set_time_mode", "freeze_frame", "ripple_delete", "ripple_trim", "roll_edit", "slip_clip", "slide_clip", "insert_gap", "lift_range", "duplicate_clip", "loop_clip", "distribute_clips", "swap_clips", "rate_stretch", "set_track", "delete_track", "split_all_at", "remove_silence_cuts", "group_clips", "ungroup_clip", "add_marker", "list_markers", "remove_marker", "snap_time", "list_edit_points", "add_multicam", "switch_angle", "list_multicam", "sync_clips"]),
     ];
     for (g, names) in EXACT { if names.contains(&n) { return g; } }
     // rules for tools added later: the first match wins

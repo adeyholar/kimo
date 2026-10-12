@@ -68,6 +68,6 @@ pub fn add_title(ss: &mut Session, a: &Value) -> Result<Value, String> {
         }
         o => return Err(format!("unknown style {o}; styles: {:?}", STYLES)),
     }
-    let ids: Vec<String> = clips.iter().map(|c| c.id.clone()).collect(); let t = ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?; t.clips.extend(clips);
+    let ids: Vec<String> = clips.iter().map(|c| c.id.clone()).collect(); let t = ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?; t.clips.extend(clips.into_iter().map(std::sync::Arc::new));
     Ok(json!({"clip_ids": ids, "style": style}))
 }

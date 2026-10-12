@@ -26,6 +26,7 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
     ("vignette", "Darkened edges", &[("amount", 0.5, "0..1"), ("softness", 0.5, "0..1")]),
     ("blur", "Box-approx gaussian blur", &[("radius", 4.0, "pixels")]),
     ("glow", "Bloom on highlights", &[("amount", 0.5, "0..2"), ("radius", 12.0, "pixels"), ("threshold", 0.7, "0..1")]),
+    ("bloom", "Light-intensity bloom: soft-knee bright-pass, multi-scale blur, energy-conserving by default", &[("amount", 0.6, "0..1 (conserve) or more"), ("threshold", 0.8, "luma where bloom starts"), ("knee", 0.2, "0..1 soft knee"), ("radius", 8.0, "base px, levels double it"), ("levels", 5.0, "1..7 scales"), ("conserve", 1.0, "1 = frame energy preserved, 0 = additive"), ("tint_r", 1.0, "bloom tint R"), ("tint_g", 1.0, "bloom tint G"), ("tint_b", 1.0, "bloom tint B")]),
     ("grain", "Film grain", &[("amount", 0.08, "0..0.5")]),
     ("rgb_split", "Chromatic aberration / glitch shift", &[("amount", 6.0, "pixels")]),
     ("invert", "Invert colors", &[]),
@@ -107,6 +108,34 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
                 let k = ((l - th)/(1.0-th).max(0.01)).clamp(0.0,1.0); for j in 0..3 { b.d[i*4+j] *= k; } }
             box_blur3(&mut b, r);
             for i in 0..f.w*f.h { for j in 0..3 { f.d[i*4+j] += b.d[i*4+j]*a; } }
+        }
+        "bloom" => {
+            // Light-intensity-responsive bloom: bright-pass with a soft knee that keeps the pixel's colour and scales with its excess over the
+            // threshold (so a 4x brighter light blooms 4x more, even above 1.0), then a multi-scale blur (radius, 2r, 4r, ...) averaged with
+            // equal weights. mode 1 (default) conserves energy: what the bloom adds is taken out of the bright pixels, so the frame sum is unchanged.
+            let conserve = p(params, "conserve", 1.0, t) >= 0.5;
+            let a = p(params, "amount", 0.6, t).max(0.0); let a = if conserve { a.min(1.0) } else { a };
+            let th = p(params, "threshold", 0.8, t).max(0.0); let knee = p(params, "knee", 0.2, t).clamp(0.0, 1.0);
+            let r0 = p(params, "radius", 8.0, t).clamp(1.0, 256.0) as usize; let levels = (p(params, "levels", 5.0, t).round() as usize).clamp(1, 7);
+            let tint = [p(params, "tint_r", 1.0, t), p(params, "tint_g", 1.0, t), p(params, "tint_b", 1.0, t)];
+            let n = f.w * f.h; let mut ex = vec![0f32; n * 3];
+            for i in 0..n { let c = [f.d[i*4], f.d[i*4+1], f.d[i*4+2]]; let l = lum(c); if l <= 1e-6 { continue; }
+                // soft knee: quadratic ramp over [th - knee*th, th + knee*th], linear above
+                let w = knee * th; let lo = th - w; let e = if w > 1e-6 && l > lo && l < th + w { let x = l - lo; x * x / (4.0 * w) } else if l >= th + w { l - th } else { 0.0 };
+                let k = e / l; for j in 0..3 { ex[i*3+j] = c[j] * k; } }
+            let mut acc = vec![0f32; n * 3];
+            for lv in 0..levels {
+                let mut b = Frame { w: f.w, h: f.h, d: vec![0.0; n * 4] };
+                for i in 0..n { for j in 0..3 { b.d[i*4+j] = ex[i*3+j]; } b.d[i*4+3] = 1.0; }
+                box_blur3(&mut b, (r0 << lv).min(512));
+                for i in 0..n { for j in 0..3 { acc[i*3+j] += b.d[i*4+j] / levels as f32; } }
+            }
+            for i in 0..n { let a0 = f.d[i*4+3]; let mut extra = [0f32; 3]; let mut mx = 0f32;
+                for j in 0..3 { let rm = if conserve { ex[i*3+j] } else { 0.0 }; let add = a * acc[i*3+j] * tint[j];
+                    f.d[i*4+j] = (f.d[i*4+j] - a * rm + add).max(0.0); extra[j] = add; mx = mx.max(add); }
+                // light that spills past the layer's alpha: grow alpha so the glow shows outside the shape (straight alpha, premultiplied sum)
+                if a0 < 1.0 && mx > 0.0 { let k = 1.0 - a0; let an = a0 + k * mx.min(1.0);
+                    if an > 1e-6 { for j in 0..3 { let p = (f.d[i*4+j] - extra[j]) * a0 + k * extra[j]; f.d[i*4+j] = p / an; } f.d[i*4+3] = an; } } }
         }
         "grain" => {
             let a = p(params, "amount", 0.08, t); let mut s = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);

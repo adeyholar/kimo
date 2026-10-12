@@ -1,0 +1,43 @@
+00 no_such_tool {}	unknown tool 'no_such_tool'
+01 set_propertyy {}	unknown tool 'set_propertyy'
+02 delete_clip {}	missing string 'clip_id'
+03 delete_clip {"clip_id":5}	argument 'clip_id' must be a string (got number)
+04 delete_clip {"clip_id":"nope"}	no such clip 'nope'
+05 move_clip {"clip_id":"clip3"}	missing number 'start'
+06 move_clip {"clip_id":"clip3","start":"x"}	argument 'start' must be a number (got string)
+07 move_clip {"clip_id":"nope","start":1.0}	no such clip 'nope'
+08 trim_clip {"clip_id":"clip3","duration":-1.0}	duration must be > 0 and at most 1e6 seconds
+09 set_speed {"clip_id":"clip3","speed":0.0}	speed must be 0.1..100
+10 set_speed {"clip_id":"clip3","speed":1000.0}	speed must be 0.1..100
+11 set_property {"clip_id":"clip3","property":"bogus","value":1.0}	unknown property 'bogus': nothing reads it, so it would silently do nothing. Valid: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface. For crop use add_effect/crop tools; for effect params use set_effect_param.
+12 set_property {"clip_id":"clip3","property":"opacity"}	missing number 'value'
+13 split_clip {"at":99.0,"clip_id":"clip3"}	split point outside clip
+14 split_clip {"clip_id":"clip3"}	missing number 'at'
+15 freeze_frame {"at":1.0,"clip_id":"clip3","hold_from_here":true}	hold_from_here: `at` must be strictly inside the clip
+16 freeze_frame {"at":99.0,"clip_id":"clip3"}	at 99 is outside the clip (1..3)
+17 insert_gap {"at":-1.0,"duration":1.0,"track_id":"track1"}	at must be a finite time >= 0
+18 insert_gap {"at":1.0,"duration":-1.0,"track_id":"track1"}	duration must be > 0 and at most 1000000 seconds
+19 insert_gap {"at":1.0,"duration":1.0,"track_id":"nope"}	no such track 'nope'
+20 add_track {"kind":5}	OK (no error)
+21 add_shape {"track_id":"track1"}	missing string 'shape'
+22 add_shape {"duration":1.0,"fill":[1,1,1,1],"height":1,"shape":"rect","start":0.0,"track_id":"nope","width":1}	no such track 'nope'
+23 add_shape {"duration":1.0,"fill":[1,1,1,1],"height":1,"shape":"hexagonal","start":0.0,"track_id":"track1","width":1}	unknown shape 'hexagonal'. Valid: rect, ellipse, polygon, line
+24 add_effect {"clip_id":"clip3","kind":"no_such_effect"}	unknown effect 'no_such_effect'
+25 add_effect {"clip_id":"nope","kind":"blur"}	no such clip 'nope'
+26 set_keyframe {"clip_id":"clip3","property":"opacity","time":0.5}	missing number 'value'
+27 set_keyframe {"clip_id":"clip3","property":"bogus","time":0.5,"value":1.0}	unknown clip property 'bogus': nothing reads it. Valid: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface. To keyframe an effect param pass effect_id.
+28 set_camera {"cam_fov":3.0}	cam_fov must be 5..170
+29 set_camera {"cam_x":"a"}	argument 'cam_x' must be a number (got string)
+30 set_track {"locked":true,"track_id":"nope"}	no such track 'nope'
+31 remove_silence_cuts {"ranges":[[1.0,2.0]],"track_id":"nope"}	no such track 'nope'
+32 loop_clip {"clip_id":"clip3","times":0}	times must be an integer 1..100
+33 loop_clip {"clip_id":"clip3","gap":-1.0,"times":1}	gap must be a finite number >= 0
+34 swap_clips {"clip_a":"clip3","clip_b":"clip3"}	clip_a and clip_b must differ
+35 distribute_clips {"gap":-1.0,"track_id":"track1"}	gap must be a finite number >= 0
+36 get_scopes {}	missing number 'time'
+37 render_frame {"time":"x"}	missing string 'path'
+38 bind_shared_grade_graphs {"clip_id":"clip3","graphs":["missing"]}	missing shared graph missing
+39 save_project {}	missing string 'path'
+40 load_project {"path":"/nonexistent/x.kimo"}	cannot read '/nonexistent/x.kimo': No such file or directory (os error 2)
+41 set_property {"clip_id":"clip3","property":"x","time":0.0,"value":1.0}	set_property sets the static value and has no time; use set_keyframe with time to animate
+42 delete_clip {"clipid":"x"}	missing string 'clip_id'

@@ -14,7 +14,7 @@ pub struct ShardBurst {
     #[serde(default = "d_smin")] pub size_min: f64, #[serde(default = "d_smax")] pub size_max: f64, #[serde(default = "d_seed")] pub seed: u64,
     #[serde(default = "d_tint")] pub tint: [f64; 3], #[serde(default = "d_drag")] pub drag: f64, #[serde(default)] pub gravity: f64, #[serde(default = "d_spin")] pub spin: f64,
     #[serde(default = "d_dof")] pub dof: f64, #[serde(default)] pub focus: f64, #[serde(default = "d_one")] pub brightness: f64, #[serde(default = "d_light")] pub light: [f64; 3],
-    #[serde(default)] pub toward_camera: f64, #[serde(default)] pub spread_time: f64, #[serde(default)] pub fade_out: f64, #[serde(default)] pub dispersion: f64, #[serde(default)] pub origin_spread: f64,
+    #[serde(default)] pub toward_camera: f64, #[serde(default)] pub spread_time: f64, #[serde(default)] pub fade_out: f64, #[serde(default)] pub dispersion: f64, #[serde(default, skip_serializing_if = "refd_zero")] pub refract_dispersion: f64, #[serde(default)] pub origin_spread: f64,
     #[serde(default)] pub physics: bool, #[serde(default = "d_rest")] pub restitution: f64, #[serde(default = "d_fric")] pub friction: f64, #[serde(default)] pub floor: Option<f64>, #[serde(default)] pub ang_drag: f64, #[serde(default = "d_tr")] pub collide: bool,
     #[serde(default)] pub thickness: Option<[f64; 2]>, #[serde(default)] pub glass: f64, #[serde(default)] pub aspect: Option<[f64; 2]>, #[serde(default)] pub fresnel: f64, #[serde(default)] pub refract: f64, #[serde(default)] pub falloff: f64,
     /// Opt-in looks. Legacy preserves the existing shader. Size controls affect free-burst geometry and physics, not pane cells.
@@ -228,11 +228,10 @@ thread_local! { static DISP: std::cell::RefCell<Option<(usize, usize, Vec<f32>)>
 /// Take the premultiplied screen-space refraction field written by the last shard render (if refract > 0).
 pub fn take_disp() -> Option<(usize, usize, Vec<f32>)> { DISP.with(|d| d.borrow_mut().take()) }
 /// Bend the canvas behind a layer by a premultiplied displacement field; `layer_a` is the layer alpha (field is divided by it).
-pub fn refract_canvas(out: &mut Frame, disp: &(usize, usize, Vec<f32>), layer: &Frame) {
+pub fn refract_canvas(out: &mut Frame, disp: &(usize, usize, Vec<f32>), layer: &Frame, rdisp: f64) {
     let (w, hh) = (out.w, out.h); if disp.0 != w || disp.1 != hh { return; } let src = out.d.clone();
     for y in 0..hh { for x in 0..w { let o = y * w + x; let a = layer.d[o * 4 + 3]; if a < 0.003 { continue; } let lim = 28.0 * (hh as f32 / 720.0); let (dx, dy) = ((disp.2[o * 2] / a.max(0.05)).clamp(-lim, lim), (disp.2[o * 2 + 1] / a.max(0.05)).clamp(-lim, lim));
-        let (sx, sy) = ((x as f32 + dx).clamp(0.0, w as f32 - 1.001), (y as f32 + dy).clamp(0.0, hh as f32 - 1.001)); let (x0, y0) = (sx as usize, sy as usize); let (fx, fy) = (sx - x0 as f32, sy - y0 as f32);
-        let wgt = a.min(1.0); for j in 0..3 { let v = |xx: usize, yy: usize| src[(yy * w + xx) * 4 + j]; let s = v(x0, y0) * (1.0 - fx) * (1.0 - fy) + v(x0 + 1, y0) * fx * (1.0 - fy) + v(x0, y0 + 1) * (1.0 - fx) * fy + v(x0 + 1, y0 + 1) * fx * fy; out.d[o * 4 + j] = src[o * 4 + j] * (1.0 - wgt) + s * wgt; } } }
+        let wgt = a.min(1.0); for j in 0..3 { let sc = 1.0 + rdisp as f32 * (j as f32 - 1.0); let (sx, sy) = ((x as f32 + dx * sc).clamp(0.0, w as f32 - 1.001), (y as f32 + dy * sc).clamp(0.0, hh as f32 - 1.001)); let (x0, y0) = (sx as usize, sy as usize); let (fx, fy) = (sx - x0 as f32, sy - y0 as f32); let v = |xx: usize, yy: usize| src[(yy * w + xx) * 4 + j]; let s = v(x0, y0) * (1.0 - fx) * (1.0 - fy) + v(x0 + 1, y0) * fx * (1.0 - fy) + v(x0, y0 + 1) * (1.0 - fx) * fy + v(x0 + 1, y0 + 1) * fx * fy; out.d[o * 4 + j] = src[o * 4 + j] * (1.0 - wgt) + s * wgt; } } }
 }
 
 struct Tex { w: usize, h: usize, d: Vec<f32>, mean: [f64; 3] }
@@ -278,3 +277,4 @@ pub fn take_probe() -> Vec<ProbeShard> { PROBE.with(|p| std::mem::take(&mut *p.b
 
 /// Depth sink of a not-yet-released cell: ramps over `preload_time`, strongest at the impact, held until the cell's birth.
 fn pre_dep(p: &Plane, d: f64, k: f64, ts: f64, birth: f64) -> f64 { if p.preload_depth <= 0.0 || ts >= birth { return 0.0; } let r = sstep(ts / p.preload_time.max(1e-3)); p.preload_depth * k * r * (-(d / (p.radius * k * 5.0)).powi(2)).exp() }
+fn refd_zero(v: &f64) -> bool { *v == 0.0 }

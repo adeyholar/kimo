@@ -226,7 +226,7 @@ fn prepare_window(p: &Project, cache: &mut Cache, t0: f64, t1: f64, window:usize
 }
 
 /// All clips including those inside precomps, with starts shifted onto the project clock (precomps nest recursively).
-pub fn flat_clips(tracks: &[Track], off: f64) -> Vec<Clip> { let mut v = vec![]; for tr in tracks { for c in &tr.clips { let mut cc = c.clone(); cc.start += off; if let Source::Precomp { tracks: inner } = &c.source { let sub = flat_clips(inner, cc.start); cc.source = Source::Adjustment; v.push(cc); v.extend(sub); } else { v.push(cc); } } } v }
+pub fn flat_clips(tracks: &[Track], off: f64) -> Vec<Clip> { let mut v = vec![]; for tr in tracks { for c in &tr.clips { let mut cc = Clip::clone(c); cc.start += off; if let Source::Precomp { tracks: inner } = &c.source { let sub = flat_clips(inner, cc.start); cc.source = Source::Adjustment; v.push(cc); v.extend(sub); } else { v.push(cc); } } } v }
 
 fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
     let lt = c.display_time(lt_in);
@@ -440,7 +440,11 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         let (rxv, ryv, pzv) = (prop(c, "rot_x", lt), prop(c, "rot_y", lt), prop(c, "pos_z", lt));
         if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 {
             let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(c, "rotation", lt) + rot_extra], scale: sc };
-            let f3 = crate::three_d::render_layer(&f, &cam, &pose, prop(c, "backface", lt) != 0.0);
+            let mut f3 = crate::three_d::render_layer(&f, &cam, &pose, prop(c, "backface", lt) != 0.0);
+            // frosted_glass on a tilted layer: the pane is the projected silhouette, and it frosts what is really under it
+            if c.effects.iter().any(|e| crate::effects2::is_post(&e.kind)) { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); crate::frosted::set_post(true); crate::frosted::set_tilt((ryv.to_radians().sin()) as f32, (-rxv.to_radians().sin()) as f32); crate::frosted::set_slab(Some(crate::three_d::Projector::new(w, h, &cam, &pose)));
+                let r: Result<(), String> = (|| { for e in c.effects.iter().filter(|e| crate::effects2::is_post(&e.kind)) { effects::apply(&e.kind, &e.params, &e.strings, &mut f3, lt, seed)?; } Ok(()) })();
+                crate::frosted::set_post(false); crate::frosted::set_tilt(0.0, 0.0); crate::frosted::set_slab(None); BACKDROP.with(|b| *b.borrow_mut() = None); r?; }
             blend(&mut out, &f3, op, c_blend, mask.as_deref()); if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } } continue;
         }
         let moving = c.motion_blur > 0.0 && ek == 0 && { let sh0 = c.motion_blur / 360.0 / p.fps; ["x", "y", "scale", "rotation"].iter().any(|k| (prop(c, k, lt - sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9 || (prop(c, k, lt + sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9) };
@@ -454,11 +458,11 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         prof("transform", tp);
         let mut f = f; if let Some(mt) = c.mask.as_ref().and_then(|m| m.matte.as_ref()) { if let Some(src) = render_clip_alone(p, &mt.source, t, cache) { let cov = crate::masks::matte_coverage(mt, &src); for i in 0..w * h { f.d[i * 4 + 3] *= cov[i]; } } }
         // frosted_glass runs here, after the layer transform, so it frosts what is really under the pane
-        if c.effects.iter().any(|e| e.kind == "frosted_glass") { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); crate::frosted::set_post(true);
-            let r: Result<(), String> = (|| { for e in c.effects.iter().filter(|e| e.kind == "frosted_glass") { effects::apply(&e.kind, &e.params, &e.strings, &mut f, lt, seed)?; } Ok(()) })();
+        if c.effects.iter().any(|e| crate::effects2::is_post(&e.kind)) { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); crate::frosted::set_post(true);
+            let r: Result<(), String> = (|| { for e in c.effects.iter().filter(|e| crate::effects2::is_post(&e.kind)) { effects::apply(&e.kind, &e.params, &e.strings, &mut f, lt, seed)?; } Ok(()) })();
             crate::frosted::set_post(false); BACKDROP.with(|b| *b.borrow_mut() = None); r?; }
         if let Some(cf) = tplan.as_ref().and_then(|pl| pl.compose.as_ref()) { out = cf(&out, &f); continue; }
-        if let Source::ShardBurst(_) = &c.source { if let Some(d) = crate::shards::take_disp() { crate::shards::refract_canvas(&mut out, &d, &f); } }
+        if let Source::ShardBurst(sb) = &c.source { if let Some(d) = crate::shards::take_disp() { crate::shards::refract_canvas(&mut out, &d, &f, sb.refract_dispersion.clamp(0.0, 1.0)); } }
         if let Some(acc) = eacc.as_mut() { let wgt = op / (ne + 1) as f32; for i in 0..w * h { let a = f.d[i * 4 + 3] * wgt; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += f.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; } } continue; }
         let tp=std::time::Instant::now(); let rect = if from_tb { LAST_RECT.with(|l| l.get()) } else { None }; blend_region(&mut out, &f, op, c_blend, mask.as_deref(), rect); prof("blend", tp);
         if let Some(r) = rect { pool_give(f, r); }
@@ -569,22 +573,23 @@ pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mu
 thread_local! { static MATTE_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0); }
 /// Render one clip alone (full transforms/effects) on a transparent canvas: matte sources and difference references.
 
-thread_local! { static SIL_CACHE: std::cell::RefCell<std::collections::VecDeque<((u64, u64, usize, usize), std::rc::Rc<Vec<f32>>)>> = Default::default(); }
+/// Clip-alone alpha planes shared across tool calls (each call runs on its own thread), so a lone render_frame can reuse them.
+static SIL_CACHE: std::sync::Mutex<std::collections::VecDeque<((u64, u64, usize, usize), std::sync::Arc<Vec<f32>>)>> = std::sync::Mutex::new(std::collections::VecDeque::new());
 /// Alpha plane of `id` rendered alone at timeline time `tt`, cached across frames. The key hashes the clip's full JSON, the time and the canvas size, so any edit to the clip changes the key (no stale silhouettes); at most 96 planes are kept.
-fn silhouette_alpha(p: &Project, id: &str, tt: f64, cache: &Cache) -> Option<(usize, usize, std::rc::Rc<Vec<f32>>)> {
+fn silhouette_alpha(p: &Project, id: &str, tt: f64, cache: &Cache) -> Option<(usize, usize, std::sync::Arc<Vec<f32>>)> {
     use std::hash::{Hash, Hasher};
-    let clip = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?; let mut hs = std::collections::hash_map::DefaultHasher::new(); serde_json::to_string(clip).ok()?.hash(&mut hs);
+    let clip = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?; let mut hs = std::collections::hash_map::DefaultHasher::new(); serde_json::to_string(clip).ok()?.hash(&mut hs); serde_json::to_string(&(&p.grade_scopes, &p.editorial, &p.lights, &p.materials, &p.occluders, &p.color_pipeline, &p.camera, &p.assets, p.fps.to_bits())).ok()?.hash(&mut hs);
     let key = (hs.finish(), tt.to_bits(), p.width as usize, p.height as usize);
-    if let Some(hit) = SIL_CACHE.with(|c| c.borrow().iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())) { return Some((key.2, key.3, hit)); }
-    let fr = render_clip_alone(p, id, tt, cache)?; let a: Vec<f32> = (0..fr.w * fr.h).map(|i| fr.d[i * 4 + 3]).collect(); let rc = std::rc::Rc::new(a);
-    SIL_CACHE.with(|c| { let mut c = c.borrow_mut(); if c.len() >= 96 { c.pop_front(); } c.push_back((key, rc.clone())); }); Some((fr.w, fr.h, rc))
+    if let Some(hit) = SIL_CACHE.lock().ok().and_then(|c| c.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())) { return Some((key.2, key.3, hit)); }
+    let fr = render_clip_alone(p, id, tt, cache)?; let a: Vec<f32> = (0..fr.w * fr.h).map(|i| fr.d[i * 4 + 3]).collect(); let rc = std::sync::Arc::new(a);
+    if let Ok(mut c) = SIL_CACHE.lock() { if c.len() >= 96 { c.pop_front(); } c.push_back((key, rc.clone())); } Some((fr.w, fr.h, rc))
 }
 pub fn render_clip_alone(p: &Project, id: &str, t: f64, cache: &Cache) -> Option<Frame> {
     if MATTE_DEPTH.with(|d| d.get()) >= 3 { return None; }
-    let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?.clone();
+    let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id).map(|c| (**c).clone())?;
     if t < c.start - 1e-9 || t >= c.start + c.duration - 1e-9 { return Some(Frame::new(p.width as usize, p.height as usize)); }
     let mut c = c; if let Some(m) = c.mask.as_mut() { m.matte = None; }
-    let sub = Project { grade_scopes: p.grade_scopes.subset(&[crate::model::Track{id:"matte".into(),clips:vec![c.clone()],locked:false,muted:false,name:String::new()}]), lights: p.lights.clone(), materials: p.materials.clone(), editorial: p.editorial.clone(), ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![c], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 };
+    let sub = Project { grade_scopes: p.grade_scopes.subset(&[crate::model::Track{id:"matte".into(),clips:vec![std::sync::Arc::new(c.clone())],locked:false,muted:false,name:String::new()}]), lights: p.lights.clone(), materials: p.materials.clone(), editorial: p.editorial.clone(), ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![std::sync::Arc::new(c)], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 };
     MATTE_DEPTH.with(|d| d.set(d.get() + 1)); let r = render_frame_opts(&sub, t, cache, true).ok(); MATTE_DEPTH.with(|d| d.set(d.get() - 1)); r
 }
 
@@ -783,7 +788,7 @@ pub fn target_screen_occ(p: &Project, id: &str, t: f64) -> Option<std::sync::Arc
 }
 
 /// Effects that depend only on their (constant) parameters and the pixels: no time, seed or randomness.
-const STATIC_EFFECTS: &[&str] = &["exposure", "contrast", "saturation", "temperature", "tint", "color_wheels", "curves", "teal_orange", "vignette", "blur", "glow", "invert", "sharpen", "posterize", "sepia", "outline", "outer_glow", "long_shadow", "choker", "feather_alpha", "silhouette_fill"];
+const STATIC_EFFECTS: &[&str] = &["exposure", "contrast", "saturation", "temperature", "tint", "color_wheels", "curves", "teal_orange", "vignette", "blur", "glow", "bloom", "invert", "sharpen", "posterize", "sepia", "outline", "outer_glow", "long_shadow", "choker", "feather_alpha", "silhouette_fill"];
 fn is_static_text(c: &Clip) -> bool {
     let plain = match &c.source { Source::Text { text, .. } => !text.contains('{'), Source::Shape { .. } => true, _ => false }; if !plain { return false; }
     let constant = |pr: &crate::keyframe::Prop| pr.keys.is_empty() && pr.expr.is_empty();

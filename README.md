@@ -11,7 +11,7 @@ MCP-first. Every feature is a tool call. Written in Rust, runs on a 2 GB box.<br
 <p align="center">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-F4F0E8?labelColor=0E0E12">
   <img alt="language" src="https://img.shields.io/badge/rust-core-FF5C28?labelColor=0E0E12">
-  <img alt="tools" src="https://img.shields.io/badge/MCP%20tools-255-F4F0E8?labelColor=0E0E12">
+  <img alt="tools" src="https://img.shields.io/badge/MCP%20tools-263-F4F0E8?labelColor=0E0E12">
   <img alt="fuzz" src="https://img.shields.io/badge/tool%20fuzz-9359%20calls%2C%200%20failures-FF5C28?labelColor=0E0E12">
 </p>
 
@@ -19,7 +19,7 @@ MCP-first. Every feature is a tool call. Written in Rust, runs on a 2 GB box.<br
 
 ## What it is
 
-**v1.0.0.** 255 tools, fuzzed (9359 calls, 0 failures). `main` is the stable v1; new work lands on feature branches.
+**v1.0.0.** 255 tools, fuzzed (9359 calls, 0 failures). `main` is the stable v1. The `v2` branch carries the v2 work (263 tools, fuzzed: 9549 calls, 0 failures; see patches/MANIFEST.md for the unit-by-unit changelog).
 
 kimo is a video editor with no GUI. You talk to it over the [Model Context Protocol](https://modelcontextprotocol.io). Cut, keyframe, grade, track, key, relight, simulate, caption, mix and export are all registered commands, and the MCP server's tool list is generated from that same registry. There is no feature a human can reach that an AI cannot.
 
@@ -29,7 +29,7 @@ The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve
 - **CPU, small memory.** The renderer is CPU only and tuned for a 2 GB machine. GPU code is off by default with a CPU fallback.
 - **Measured, not claimed.** Every "better than X" line in FEATURES.md has a stated baseline and a measured number, including the cases where we lost.
 - **Few entry points.** `tools/list` returns 16 grouped tools (15.7 KB) instead of 255 (176 KB), measured 11.2x smaller (compact JSON, v1.0.0). Every individual tool is still callable by its own name.
-- **Fuzzed.** 255 tools, 9359 calls, 0 failures, before anything is published.
+- **Fuzzed.** 255 tools (v1.0.0) / 263 tools (v2), 9359 / 9549 calls, 0 failures, before anything is published.
 
 ## Install
 
@@ -173,7 +173,7 @@ Left, default hole. Right, `hole_fill=1` (same frame, 1280x720 city plate, t=1.0
 
 ### Frosted glass (backdrop effect)
 
-`frosted_glass` turns any layer's alpha into a glass pane: inside it shows the composite below, blurred, tinted and refracted at a bevel, with a rim light. It runs after the layer's own position and scale, so a sliding panel frosts what is really under it. Frame from a 5 s 1280x720 clip (export took 15.0 s on the 2 GB box); the title sits on the pane. `magnify` turns the pane into a magnifier lens. Limits: not for 3D-tilted layers; the refraction is a bevel offset, not a ray-traced lens; frosting is a 3-pass box blur, not a Gaussian.
+`frosted_glass` turns any layer's alpha into a glass pane: inside it shows the composite below, blurred, tinted and refracted at a bevel, with a rim light. It runs after the layer's own position and scale, so a sliding panel frosts what is really under it. Frame from a 5 s 1280x720 clip (export took 15.0 s on the 2 GB box); the title sits on the pane. `magnify` turns the pane into a magnifier lens, and `magnify_cx` / `magnify_cy` move the zoom centre to any canvas point. It works on 3D-tilted layers (rot_x, rot_y, pos_z): the pane is the projected silhouette. Limits: the refraction is a bevel offset, not a ray-traced lens; frosting is a 3-pass box blur, not a Gaussian.
 
 ![frosted glass](docs/media/frosted-glass.jpg)
 

@@ -291,6 +291,7 @@ pub fn rebuild_anchor(target: &str, sp: &crate::model::OccSpec, w: usize, h: usi
 /// The whole per-frame matte sequence is computed once per target (streaming decode, plane-resolution only) and cached.
 pub struct MatteSeq { pw: usize, ph: usize, mats: Vec<Vec<u8>> }
 static SEQS: std::sync::Mutex<Option<std::collections::HashMap<String, std::sync::Arc<MatteSeq>>>> = std::sync::Mutex::new(None);
+pub fn remove_anchor(target: &str) { if let Some(m) = ANCHORS.lock().unwrap().as_mut() { m.remove(target); } }
 pub fn clear_seq(target: &str) { if let Some(m) = SEQS.lock().unwrap().as_mut() { m.remove(target); } }
 fn build_seq(c: &crate::model::Clip, sp: &crate::model::OccSpec, fps: f64) -> Option<MatteSeq> {
     let (w, h) = (sp.w, sp.h); let n = ((c.duration * fps).ceil() as usize).clamp(1, 4000); let t_of = |i: usize| sp.src_start + (sp.f0 + i) as f64 / fps - c.start;

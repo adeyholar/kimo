@@ -8,9 +8,20 @@ use crate::model::*;
 use crate::render;
 use serde_json::{json, Value};
 
-pub struct Session { pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache }
-impl Session { pub fn new() -> Self { Session { project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new() } } }
+pub fn fnv64(b: &[u8]) -> u64 { let mut h = 0xcbf29ce484222325u64; for x in b { h ^= *x as u64; h = h.wrapping_mul(0x100000001b3); } h }
+struct FnvWriter<W: std::io::Write> { inner: W, h: u64 }
+impl<W: std::io::Write> std::io::Write for FnvWriter<W> { fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { let n = self.inner.write(b)?; for x in &b[..n] { self.h ^= *x as u64; self.h = self.h.wrapping_mul(0x100000001b3); } Ok(n) } fn flush(&mut self) -> std::io::Result<()> { self.inner.flush() } }
+pub struct Session { pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache,
+    /// One label per undo / redo entry (tool name, plus clip id when given), parallel to `undo` / `redo`.
+    pub undo_labels: Vec<String>, pub redo_labels: Vec<String>,
+    /// Named snapshots of the whole project: (name, project, label of the history position when taken).
+    pub checkpoints: Vec<(String, Project, usize)>,
+    /// Snapshot-size estimate for the history cap, refreshed every 16 mutations instead of serialising the project on every call.
+    pub snap_sz: usize, pub snap_n: u32, pub snap_clips: usize }
+impl Session { pub fn new() -> Self { Session { project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0 } } }
+const MAX_CHECKPOINTS: usize = 24;
 
+#[derive(Clone)]
 pub struct Command {
     pub name: &'static str,
     pub description: &'static str,
@@ -25,8 +36,8 @@ fn obj(props: Vec<(&str, Value)>, req: &[&str]) -> Value {
     let mut m = serde_json::Map::new(); for (k, v) in props { m.insert(k.into(), v); }
     json!({"type":"object","properties":m,"required":req})
 }
-fn str_arg<'a>(a: &'a Value, k: &str) -> Result<&'a str, String> { a.get(k).and_then(|v| v.as_str()).ok_or(format!("missing string '{k}'")) }
-fn num_arg(a: &Value, k: &str) -> Result<f64, String> { a.get(k).and_then(|v| v.as_f64()).ok_or(format!("missing number '{k}'")) }
+fn str_arg<'a>(a: &'a Value, k: &str) -> Result<&'a str, String> { a.get(k).and_then(|v| v.as_str()).ok_or_else(|| crate::errors::arg_err(a, k, "string")) }
+fn num_arg(a: &Value, k: &str) -> Result<f64, String> { a.get(k).and_then(|v| v.as_f64()).ok_or_else(|| crate::errors::arg_err(a, k, "number")) }
 fn opt_num(a: &Value, k: &str, d: f64) -> f64 { a.get(k).and_then(|v| v.as_f64()).unwrap_or(d) }
 /// Alpha of a 4-value RGBA colour argument (1.0 when absent or RGB only).
 fn color_alpha(a: &Value, k: &str) -> f64 { a.get(k).and_then(|v| v.as_array()).filter(|x| x.len() == 4).and_then(|x| x[3].as_f64()).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0)).unwrap_or(1.0) }
@@ -55,7 +66,13 @@ fn clip<'a>(p: &'a mut Project, a: &Value) -> Result<&'a mut Clip, String> {
     let id = str_arg(a, "clip_id")?; p.find_clip_mut(id).ok_or(format!("no clip '{id}'"))
 }
 
-pub fn registry() -> Vec<Command> {
+pub fn registry() -> Vec<Command> { registry_ref().to_vec() }
+/// The tool table, built once per process (it used to be rebuilt, schemas and all, on every call), with a name index.
+fn reg_tables() -> &'static (Vec<Command>, std::collections::HashMap<&'static str, usize>) { static REG: std::sync::OnceLock<(Vec<Command>, std::collections::HashMap<&'static str, usize>)> = std::sync::OnceLock::new(); REG.get_or_init(|| { let v = build_registry(); let mut m = std::collections::HashMap::new(); for (i, c) in v.iter().enumerate() { m.entry(c.name).or_insert(i); } (v, m) }) }
+pub fn registry_ref() -> &'static [Command] { &reg_tables().0 }
+/// Look a tool up by name without copying the table.
+pub fn find_command(name: &str) -> Option<&'static Command> { let t = reg_tables(); t.1.get(name).map(|&i| &t.0[i]) }
+fn build_registry() -> Vec<Command> {
     let eff_kinds: Vec<&str> = CATALOG.iter().chain(CATALOG2.iter()).chain(catalog3().iter()).map(|c| c.0).collect();
     let mut v: Vec<Command> = vec![
     Command { name: "project_set", description: "Set project canvas size and frame rate (and optional name).", mutates: true,
@@ -87,7 +104,7 @@ pub fn registry() -> Vec<Command> {
             let id = ss.project.gen_id("clip");
             let mut c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: opt_num(a, "speed", 1.0), speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
             match a.get("fit").and_then(|v| v.as_str()) { Some("cover") => { c.props.insert("fit".into(), Prop::new(1.0)); } Some("stretch") => { c.props.insert("fit".into(), Prop::new(2.0)); } Some("contain") | None => {} Some(o) => return Err(format!("bad fit {o}; use contain, cover or stretch")) }
-            let tr = ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or(format!("no track '{tid}'"))?; tr.clips.push(c);
+            let tr = ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or(format!("no track '{tid}'"))?; tr.clips.push(std::sync::Arc::new(c));
             Ok(json!({"clip_id":id})) } },
     Command { name: "add_audio_clip", description: "Add an audio-only clip (music, voice, sfx) from an imported asset. It never draws and never takes part in the video stack. Creates an audio track if track_id is omitted. Export applies a limiter (ceiling -1.5 dBFS) so peaks stay under about -1 dBTP.", mutates: true,
         schema: obj(vec![("asset_id", s("imported asset (wav/mp3/video with audio)")), ("track_id", s("existing track, optional")), ("start", n("timeline start seconds")), ("duration", n("seconds")), ("in_point", n("source offset seconds")), ("volume", n("gain, default 1"))], &["asset_id","start","duration"]),
@@ -96,7 +113,7 @@ pub fn registry() -> Vec<Command> {
             let cid = ss.project.gen_id("clip"); let mut props = default_props(); props.insert("audio_only".into(), Prop::new(1.0)); props.insert("opacity".into(), Prop::new(0.0));
             let mut au = Audio::default(); au.volume = Prop::new(opt_num(a, "volume", 1.0));
             let c = Clip { id: cid.clone(), source: Source::Media { asset: id.into() }, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: opt_num(a, "in_point", 0.0), speed: 1.0, speed_curve: None, props, grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: au, motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
-            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or(format!("no track '{tid}'"))?.clips.push(c); Ok(json!({"clip_id":cid,"track_id":tid})) } },
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or(format!("no track '{tid}'"))?.clips.push(std::sync::Arc::new(c)); Ok(json!({"clip_id":cid,"track_id":tid})) } },
     Command { name: "add_text", description: "Add a text clip (rendered with a TTF/OTF font). Animate with set_keyframe on reveal (typewriter), opacity, scale, x, y, rotation. Default font is a system sans.", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("text", s("text, \\n for newlines")), ("start", n("seconds")), ("duration", n("seconds")), ("font", s("font family name (e.g. Montserrat) or path to .ttf/.otf; both accepted, optional")), ("x", n("pixel offset of the anchor from canvas center, default 0")), ("anchor", json!({"type":"string","enum":["center","left","right"],"description":"what x/y position refers to: the text block center (default), its left edge or its right edge. The block is centered on the canvas at x=0 for every align; align only aligns lines inside the block."})), ("size", n("pixels, default 72")),
             ("color", json!({"type":"array","items":{"type":"number"}})), ("letter_spacing", n("pixels")), ("stroke_width", n("pixels")), ("stroke_color", json!({"type":"array","items":{"type":"number"}})), ("shadow", n("shadow offset pixels")), ("align", json!({"type":"string","enum":["left","center","right"]}))], &["track_id","text","start","duration"]),
@@ -106,7 +123,7 @@ pub fn registry() -> Vec<Command> {
             let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
             let mut c = c; { let an = a.get("anchor").and_then(|v| v.as_str()).unwrap_or("center"); if an != "center" { if let Source::Text { text, font, size, letter_spacing, align, .. } = &c.source { let cw = ss.project.width as f64; let bw = crate::text::measure(text, font, *size, *letter_spacing, 0.0, align, cw)?.0; let dx = if an == "left" { bw / 2.0 } else if an == "right" { -bw / 2.0 } else { return Err("anchor must be center, left or right".into()) }; if let Some(p) = c.props.get_mut("x") { p.base = dx + opt_num(a, "x", 0.0); } } } else if let Some(p) = c.props.get_mut("x") { p.base = opt_num(a, "x", 0.0); } }
             { let al = color_alpha(a, "color"); if al < 1.0 { if let Some(p) = c.props.get_mut("opacity") { p.base *= al; } } }
-            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(std::sync::Arc::new(c)); Ok(json!({"clip_id":id})) } },
     Command { name: "set_text", description: "Edit text content/style of a text clip.", mutates: true,
         schema: obj(vec![("clip_id", s("text clip")), ("text", s("new text")), ("size", n("pixels")), ("color", json!({"type":"array","items":{"type":"number"}}))], &["clip_id"]),
         run: |ss, a| { let c = clip(&mut ss.project, a)?; if let Source::Text { text, size, color: col, .. } = &mut c.source {
@@ -178,7 +195,7 @@ pub fn registry() -> Vec<Command> {
                 let src = Source::Text { text: body.replace("\\n", "\n"), font: a.get("font").and_then(|v| v.as_str()).unwrap_or("/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf").into(), size: opt_num(a, "size", 48.0), color: color(a, "color", [1.0; 3]), letter_spacing: 0.0, stroke_width: opt_num(a, "stroke_width", 2.0), stroke_color: [0.0; 3], shadow: 2.0, align: "center".into() };
                 let mut props = default_props(); props.get_mut("y").unwrap().base = opt_num(a, "y", 220.0);
                 let c = Clip { id: id.clone(), source: src, start: st, duration: en - st, in_point: 0.0, speed: 1.0, speed_curve: None, props, grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
-                ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); made.push(id); }
+                ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(std::sync::Arc::new(c)); made.push(id); }
             Ok(json!({"captions":made.len(),"clip_ids":made})) } },
     Command { name: "get_scopes", description: "Video scopes at a time: per-channel histogram (32 bins), luma stats, clipping %, average color, and a coarse luma waveform - for AI color grading feedback.", mutates: false,
         schema: obj(vec![("time", n("seconds"))], &["time"]),
@@ -192,7 +209,7 @@ pub fn registry() -> Vec<Command> {
         run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let id = ss.project.gen_id("clip");
             let src = Source::Particles { kind: str_arg(a, "kind")?.into(), count: opt_num(a, "count", 200.0) as u32, color: color(a, "color", [1.0, 0.7, 0.3]), size: opt_num(a, "size", 3.0), seed: opt_num(a, "seed", 1.0) as u64 };
             let mut c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "add".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None }; c.blend = "add".into();
-            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(std::sync::Arc::new(c)); Ok(json!({"clip_id":id})) } },
     Command { name: "add_emitter", description: "Particle emitter layer (deterministic, scrub-safe). shape point|line|circle|rect|ring|layer (spawn on another clip's alpha silhouette: emit_clip + emit_edge for outline only + emit_follow to spawn on the silhouette at each particle's own birth time, 0.1 s bins) at x,y (0..1) sized width,height (frame fractions); rate/s, life (+life_var), speed (+speed_var px/s at 1080p), angle (270=up) +- spread, gravity, wind, drag, turbulence (+turb_scale), attractor (x,y,strength), floor+bounce (+friction), colliders [{kind: circle (x,y,r) | rect (x,y,w,h) | plane (x,y,angle of outward normal) | layer (clip_id: that clip's alpha silhouette, threshold 0.5; held at the current frame, or follow:true to use the silhouette at each particle's own time in 0.1 s bins)}] that particles bounce off, vortex (+vortex_x, vortex_y swirl force), size0->size1 over life (+size_var), color0->color1, alpha0->alpha1, trail (0..12), sprite soft|hard|streak|ring|star|spark, prewarm (already running at t=0), additive, seed. Use presets via `preset`: fire, sparks, snow, rain, smoke, confetti, fireflies, bokeh, magic_dust, explosion.", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("start", n("s")), ("duration", n("s")), ("preset", s("optional preset name")), ("config", json!({"type":"object","description":"Emitter fields overriding the preset"}))], &["track_id","start","duration"]),
         run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let mut cfg = match a.get("preset").and_then(|v| v.as_str()) { Some(p) => crate::particles::preset(p)?, None => json!({}) };
@@ -200,7 +217,7 @@ pub fn registry() -> Vec<Command> {
             let e: crate::particles::Emitter = serde_json::from_value(cfg.clone()).map_err(|e| format!("bad emitter config: {e}"))?; let additive = e.additive; let id = ss.project.gen_id("clip");
             let mut c = Clip { id: id.clone(), source: Source::Emitter(e), start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
             if additive { c.blend = "add".into(); }
-            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id,"config":cfg})) } },
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(std::sync::Arc::new(c)); Ok(json!({"clip_id":id,"config":cfg})) } },
     Command { name: "transcribe", description: "Speech-to-text via the `whisper` CLI (openai-whisper or whisper.cpp wrapper) if installed; writes an SRT you can pass to import_srt. Fails with a clear message when whisper is not installed.", mutates: false,
         schema: obj(vec![("path", s("audio/video file")), ("out_srt", s("output .srt path")), ("model", s("model name, default base"))], &["path","out_srt"]),
         run: |_, a| { let (inp, out) = (str_arg(a, "path")?, str_arg(a, "out_srt")?); let dir = std::path::Path::new(out).parent().map(|p| p.to_string_lossy().to_string()).filter(|s| !s.is_empty()).unwrap_or(".".into());
@@ -215,7 +232,7 @@ pub fn registry() -> Vec<Command> {
         schema: obj(vec![("track_id", s("track (put on top)")), ("start", n("s")), ("duration", n("s"))], &["track_id","start","duration"]),
         run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let id = ss.project.gen_id("clip");
             let c = Clip { id: id.clone(), source: Source::Adjustment, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
-            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(std::sync::Arc::new(c)); Ok(json!({"clip_id":id})) } },
     Command { name: "add_box_expand", description: "Detection box grows at constant speed (stepped per frame, no easing) from a rect to the whole frame, then a 2-frame white flash. Measured from the SCUMBLE reference. Rects are [x,y,w,h] normalized. Returns end time of the flash.", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("start", n("seconds")), ("from", json!({"type":"array","items":{"type":"number"}})), ("to", json!({"type":"array","items":{"type":"number"}})), ("frames", n("expansion frames, default 8")), ("color", json!({"type":"array","items":{"type":"number"}})), ("fill_opacity", n("default 0.22")), ("flash", json!({"type":"boolean"})), ("label", s("optional text in the corner"))], &["track_id","start"]),
         run: |ss, a| crate::hud::add_box_expand(ss, a) },
@@ -225,26 +242,26 @@ pub fn registry() -> Vec<Command> {
             let mut nested: Vec<Track> = vec![]; let (mut t0, mut t1) = (f64::MAX, f64::MIN); let mut top = 0usize;
             for (ti, tr) in ss.project.tracks.iter().enumerate() { for c in &tr.clips { if ids.contains(&c.id) { t0 = t0.min(c.start); t1 = t1.max(c.start + c.duration); top = top.max(ti); } } }
             if t0 == f64::MAX { return Err("no such clips".into()); }
-            for tr in ss.project.tracks.iter_mut() { let mut taken = vec![]; let mut keep = vec![]; for c in tr.clips.drain(..) { if ids.contains(&c.id) { let mut c = c; c.start -= t0; taken.push(c); } else { keep.push(c); } } tr.clips = keep; if !taken.is_empty() { let mut nt = tr.clone(); nt.clips = taken; nested.push(nt); } }
+            for tr in ss.project.tracks.iter_mut() { let mut taken = vec![]; let mut keep = vec![]; for c in tr.clips.drain(..) { if ids.contains(&c.id) { let mut c = c; std::sync::Arc::make_mut(&mut c).start -= t0; taken.push(c); } else { keep.push(c); } } tr.clips = keep; if !taken.is_empty() { let mut nt = tr.clone(); nt.clips = taken; nested.push(nt); } }
             let gid = ss.project.gen_id("clip"); let g = Clip { id: gid.clone(), source: Source::Precomp { tracks: nested }, start: t0, duration: t1 - t0, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
             let tidx = match a.get("track_id").and_then(|v| v.as_str()) { Some(t) => ss.project.tracks.iter().position(|x| x.id == t).ok_or("no such track")?, None => top };
-            ss.project.tracks[tidx].clips.push(g); Ok(json!({"clip_id": gid, "start": t0, "duration": t1 - t0})) } },
+            ss.project.tracks[tidx].clips.push(std::sync::Arc::new(g)); Ok(json!({"clip_id": gid, "start": t0, "duration": t1 - t0})) } },
     Command { name: "ungroup_clip", description: "Undo group_clips: puts the nested clips back on tracks at their original timeline times.", mutates: true,
         schema: obj(vec![("clip_id", s("group clip"))], &["clip_id"]),
         run: |ss, a| { let id = str_arg(a, "clip_id")?.to_string(); let mut found = None;
             for tr in ss.project.tracks.iter_mut() { if let Some(p) = tr.clips.iter().position(|c| c.id == id) { if let Source::Precomp { .. } = tr.clips[p].source { found = Some(tr.clips.remove(p)); break; } } }
-            let g = found.ok_or("not a group clip")?; let Source::Precomp { tracks } = g.source else { unreachable!() }; let mut n = 0;
-            for nt in tracks { let mut t = nt; for c in t.clips.iter_mut() { c.start += g.start; n += 1; } ss.project.tracks.push(t); } Ok(json!({"ungrouped": n})) } },
+            let g = found.ok_or("not a group clip")?; let Source::Precomp { tracks } = g.source.clone() else { unreachable!() }; let mut n = 0;
+            for nt in tracks { let mut t = nt; for c in t.clips.iter_mut() { std::sync::Arc::make_mut(c).start += g.start; n += 1; } ss.project.tracks.push(t); } Ok(json!({"ungrouped": n})) } },
     Command { name: "add_speed_lines", description: "Manga/comic speed lines: tapered radial rays from a center, reshuffled at flicker_fps, optional spin and solid background. Impact bursts, power-up, comic stingers. color [r,g,b], bg [r,g,b,a] (a=0 transparent), count 1-400, inner 0..1 (empty core radius), width [min,max] half-angle degrees at the outer end, cx/cy 0..1, spin deg/s. Animate with opacity/scale keyframes.", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("start", n("s")), ("duration", n("s")), ("count", n("rays")), ("inner", n("0..1")), ("width", json!({"type":"array","items":{"type":"number"}})), ("color", json!({"type":"array","items":{"type":"number"}})), ("bg", json!({"type":"array","items":{"type":"number"}})), ("cx", n("0..1")), ("cy", n("0..1")), ("flicker_fps", n("shuffles/s")), ("spin", n("deg/s")), ("seed", n("seed"))], &["track_id","start","duration"]),
         run: |ss, a| { let sl: crate::speedlines::SpeedLines = serde_json::from_value(json!(a.as_object().ok_or("args")?.iter().filter(|(k, _)| !["track_id","start","duration"].contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect::<serde_json::Map<String, serde_json::Value>>())).map_err(|e| format!("bad speed lines: {e}"))?;
             let id = ss.project.gen_id("clip"); let c = Clip { id: id.clone(), source: Source::SpeedLines(sl), start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: Default::default(), corners: None, audio: Default::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
-            let t = ss.project.tracks.iter_mut().find(|t| t.id == str_arg(a, "track_id").unwrap_or("")).ok_or("no such track")?; t.clips.push(c); Ok(json!({"clip_id": id})) } },
+            let t = ss.project.tracks.iter_mut().find(|t| t.id == str_arg(a, "track_id").unwrap_or("")).ok_or("no such track")?; t.clips.push(std::sync::Arc::new(c)); Ok(json!({"clip_id": id})) } },
     Command { name: "add_glitch_confetti", description: "Glitch confetti overlay: random flat-color squares plus thin horizontal tear lines (white/black/orange by default), reshuffled at flicker_fps. Transparent background; put it over a plate. squares count and size [min,max] px@720p, palette [[r,g,b],..], lines count, line_thickness [min,max] px, line_length [min,max] as fraction of width, line_colors, flicker_fps, seed.", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("start", n("s")), ("duration", n("s")), ("squares", n("count")), ("size", json!({"type":"array","items":{"type":"number"}})), ("palette", json!({"type":"array","items":{"type":"array","items":{"type":"number"}}})), ("lines", n("count")), ("line_thickness", json!({"type":"array","items":{"type":"number"}})), ("line_length", json!({"type":"array","items":{"type":"number"}})), ("line_colors", json!({"type":"array","items":{"type":"array","items":{"type":"number"}}})), ("flicker_fps", n("shuffles/s")), ("seed", n("seed"))], &["track_id","start","duration"]),
         run: |ss, a| { let sl: crate::confetti::GlitchConfetti = serde_json::from_value(json!(a.as_object().ok_or("args")?.iter().filter(|(k, _)| !["track_id","start","duration"].contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect::<serde_json::Map<String, serde_json::Value>>())).map_err(|e| format!("bad confetti: {e}"))?;
             let id = ss.project.gen_id("clip"); let c = Clip { id: id.clone(), source: Source::GlitchConfetti(sl), start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: Default::default(), corners: None, audio: Default::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
-            let t = ss.project.tracks.iter_mut().find(|t| t.id == str_arg(a, "track_id").unwrap_or("")).ok_or("no such track")?; t.clips.push(c); Ok(json!({"clip_id": id})) } },
+            let t = ss.project.tracks.iter_mut().find(|t| t.id == str_arg(a, "track_id").unwrap_or("")).ok_or("no such track")?; t.clips.push(std::sync::Arc::new(c)); Ok(json!({"clip_id": id})) } },
     Command { name: "set_echo", description: "Echo / temporal smear on a clip (AE Echo, CC Wide Time, frame blending). count ghosts spaced `spacing` s apart in time (negative = future). mode: composite (ghosts fade by decay^k), add / screen (light trails), average (equal-weight frame blend). count=0 removes.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("count", n("ghost count 0-64")), ("spacing", n("seconds between ghosts")), ("decay", n("0..1 per-ghost opacity falloff")), ("mode", json!({"type":"string","enum":["composite","add","screen","average"]}))], &["clip_id","count"]),
         run: |ss, a| { let cnt = opt_num(a, "count", 0.0).clamp(0.0, 64.0) as u32; let sp = opt_num(a, "spacing", 0.08).clamp(-5.0, 5.0); let dc = opt_num(a, "decay", 0.7); let mode = a.get("mode").and_then(|v| v.as_str()).unwrap_or("composite").to_string();
@@ -273,19 +290,19 @@ pub fn registry() -> Vec<Command> {
             let mut strings = std::collections::BTreeMap::new(); strings.insert("hits".to_string(), hits.join(","));
             if !matches!(a.get("profile"), Some(serde_json::Value::String(_))) { let tab: Vec<String> = match a.get("profile").and_then(|v| v.as_array()) { Some(arr) => arr.iter().filter_map(|r| { let r = r.as_array()?; Some(format!("{},{}", r.get(0)?.as_f64()?, r.get(1)?.as_f64()?)) }).collect(), None => vec!["-19,-10".into(), "-11,-6".into(), "-4,-2".into()] }; strings.insert("profile".to_string(), tab.join(";")); strings.insert("fps".to_string(), format!("{}", ss.project.fps)); params.insert("scale".to_string(), Prop::new(opt_num(a, "scale", 1.0))); }
             let c = Clip { id: id.clone(), source: Source::Adjustment, start, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![Effect { id: eid, kind: "impact_shake".into(), params, strings }], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
-            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(std::sync::Arc::new(c)); Ok(json!({"clip_id":id})) } },
     Command { name: "add_shape", description: "Add a vector shape layer: rect, ellipse, polygon (sides), line. Pixel size, fill + stroke, corner_radius for rects. Move with set_property x/y; animate with keyframes.", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("shape", json!({"type":"string","enum":["rect","ellipse","polygon","line"]})), ("start", n("s")), ("duration", n("s")), ("width", n("px")), ("height", n("px")), ("fill", json!({"type":"array","items":{"type":"number"},"description":"[r,g,b] or [r,g,b,a]; alpha multiplies the layer opacity"})), ("stroke_width", n("px")), ("stroke_color", json!({"type":"array","items":{"type":"number"}})), ("sides", n("polygon sides")), ("corner_radius", n("px"))], &["track_id","shape","start","duration"]),
         run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let id = ss.project.gen_id("clip");
-            let src = Source::Shape { shape: str_arg(a, "shape")?.into(), width: opt_num(a, "width", 300.0), height: opt_num(a, "height", 200.0), fill: color(a, "fill", [1.0; 3]), stroke_width: opt_num(a, "stroke_width", 0.0), stroke_color: color(a, "stroke_color", [0.0; 3]), sides: opt_num(a, "sides", 5.0) as u32, corner_radius: opt_num(a, "corner_radius", 0.0) };
+            let shape_name = str_arg(a, "shape")?; if !["rect", "ellipse", "polygon", "line"].contains(&shape_name) { return Err(format!("unknown shape '{shape_name}'. Valid: rect, ellipse, polygon, line")); } let src = Source::Shape { shape: shape_name.into(), width: opt_num(a, "width", 300.0), height: opt_num(a, "height", 200.0), fill: color(a, "fill", [1.0; 3]), stroke_width: opt_num(a, "stroke_width", 0.0), stroke_color: color(a, "stroke_color", [0.0; 3]), sides: opt_num(a, "sides", 5.0) as u32, corner_radius: opt_num(a, "corner_radius", 0.0) };
             let c = Clip { id: id.clone(), source: src, start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
-            let mut c = c; { let al = color_alpha(a, "fill"); if al < 1.0 { if let Some(p) = c.props.get_mut("opacity") { p.base *= al; } } } let sa = color_alpha(a, "stroke_color") < 1.0; ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(if sa { json!({"clip_id":id,"warning":"stroke_color alpha is not supported (fill alpha maps to layer opacity); stroke drawn opaque"}) } else { json!({"clip_id":id}) }) } },
+            let mut c = c; { let al = color_alpha(a, "fill"); if al < 1.0 { if let Some(p) = c.props.get_mut("opacity") { p.base *= al; } } } let sa = color_alpha(a, "stroke_color") < 1.0; ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(std::sync::Arc::new(c)); Ok(if sa { json!({"clip_id":id,"warning":"stroke_color alpha is not supported (fill alpha maps to layer opacity); stroke drawn opaque"}) } else { json!({"clip_id":id}) }) } },
     Command { name: "set_motion_blur", description: "Per-clip motion blur from keyframed/tracked transform motion. shutter_angle in degrees (180 = film standard, 0 = off). Multi-sample accumulation of x/y/scale/rotation across the shutter interval.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("shutter_angle", n("0..720, default 180"))], &["clip_id"]),
         run: |ss, a| { let v = opt_num(a, "shutter_angle", 180.0).clamp(0.0, 720.0); clip(&mut ss.project, a)?.motion_blur = v; Ok(json!({"shutter_angle": v})) } },
     Command { name: "set_text_style", description: "Rich text styling for a text clip: box_width (word wrap, 0=off), line_spacing, kerning, background box (bg [r,g,b,a], bg_pad, bg_radius), soft shadow (shadow_blur, shadow_opacity, shadow_color, shadow_angle deg), vertical gradient fill (gradient_top/gradient_bottom rgb, or empty to clear), glow (px radius) + glow_color. Only provided fields change.", mutates: true,
-        schema: obj(vec![("clip_id", s("text clip")), ("box_width", n("px")), ("line_spacing", n("multiplier, default 1.15")), ("kerning", json!({"type":"boolean"})), ("bg", json!({"type":"array","items":{"type":"number"},"description":"[r,g,b,a] or [] to clear"})), ("bg_pad", n("px")), ("bg_radius", n("px")), ("shadow_blur", n("px")), ("shadow_opacity", n("0..1")), ("shadow_color", json!({"type":"array","items":{"type":"number"}})), ("shadow_angle", n("degrees, 45 = down-right")), ("gradient_top", json!({"type":"array","items":{"type":"number"}})), ("gradient_bottom", json!({"type":"array","items":{"type":"number"}})), ("glow", n("px radius, 0 off")), ("glow_color", json!({"type":"array","items":{"type":"number"}}))], &["clip_id"]),
-        run: |ss, a| { let c = clip(&mut ss.project, a)?; let fx = c.text_fx.get_or_insert_with(TextFx::default);
+        schema: obj(vec![("clip_id", s("text clip")), ("box_width", n("px")), ("line_spacing", n("multiplier, default 1.15")), ("kerning", json!({"type":"boolean"})), ("line_mask", json!({"type":"boolean","description":"clip each line to its own band so line-unit animators reveal from behind a mask; same flag as set_text_weight"})), ("bg", json!({"type":"array","items":{"type":"number"},"description":"[r,g,b,a] or [] to clear"})), ("bg_pad", n("px")), ("bg_radius", n("px")), ("shadow_blur", n("px")), ("shadow_opacity", n("0..1")), ("shadow_color", json!({"type":"array","items":{"type":"number"}})), ("shadow_angle", n("degrees, 45 = down-right")), ("gradient_top", json!({"type":"array","items":{"type":"number"}})), ("gradient_bottom", json!({"type":"array","items":{"type":"number"}})), ("glow", n("px radius, 0 off")), ("glow_color", json!({"type":"array","items":{"type":"number"}}))], &["clip_id"]),
+        run: |ss, a| { let c = clip(&mut ss.project, a)?; let fx = c.text_fx.get_or_insert_with(TextFx::default); if let Some(m) = a.get("line_mask").and_then(|v| v.as_bool()) { fx.line_mask = m; }
             let rgb = |k: &str| a.get(k).and_then(|v| v.as_array()).filter(|v| v.len() >= 3).map(|v| [v[0].as_f64().unwrap_or(0.0), v[1].as_f64().unwrap_or(0.0), v[2].as_f64().unwrap_or(0.0)]);
             if a.get("box_width").is_some() { fx.box_width = opt_num(a, "box_width", 0.0); } if a.get("line_spacing").is_some() { fx.line_spacing = opt_num(a, "line_spacing", 1.15); }
             if let Some(k) = a.get("kerning").and_then(|v| v.as_bool()) { fx.kerning = k; }
@@ -338,24 +355,24 @@ pub fn registry() -> Vec<Command> {
         run: |ss, a| crate::hud::add_prompt_box(ss, a) },
     Command { name: "set_camera", description: "Virtual 3D camera used by every layer that has rot_x/rot_y/pos_z. cam_x/cam_y/cam_z move the camera (cam_z>0 dollies in; pixels), cam_pan/cam_tilt/cam_roll rotate it (degrees), cam_fov is vertical field of view (default 50). Values are base values; keyframe with set_camera_keyframe. Default camera makes a z=0 layer map 1:1 to 2D.", mutates: true,
         schema: obj(vec![("cam_x", n("px")), ("cam_y", n("px")), ("cam_z", n("px, + = toward scene")), ("cam_pan", n("deg")), ("cam_tilt", n("deg")), ("cam_roll", n("deg")), ("cam_fov", n("deg 5..170"))], &[]),
-        run: |ss, a| { for k in ["cam_x","cam_y","cam_z","cam_pan","cam_tilt","cam_roll","cam_fov"] { if let Some(v) = a.get(k).and_then(|v| v.as_f64()) { if !v.is_finite() { return Err(format!("{k} must be finite")); } if k == "cam_fov" && !(5.0..=170.0).contains(&v) { return Err("cam_fov must be 5..170".into()); } ss.project.camera.entry(k.into()).or_insert(Prop::new(0.0)).base = v; } }
+        run: |ss, a| { for k in ["cam_x","cam_y","cam_z","cam_pan","cam_tilt","cam_roll","cam_fov"] { if a.get(k).map_or(false, |v| !v.is_null()) { num_arg(a, k)?; } if let Some(v) = a.get(k).and_then(|v| v.as_f64()) { if !v.is_finite() { return Err(format!("{k} must be finite")); } if k == "cam_fov" && !(5.0..=170.0).contains(&v) { return Err("cam_fov must be 5..170".into()); } ss.project.camera.entry(k.into()).or_insert(Prop::new(0.0)).base = v; } }
             Ok(json!(ss.project.camera.iter().map(|(k, p)| (k.clone(), p.base)).collect::<std::collections::BTreeMap<_,_>>())) } },
     Command { name: "set_camera_keyframe", description: "Keyframe a camera property (cam_x, cam_y, cam_z, cam_pan, cam_tilt, cam_roll, cam_fov) at TIMELINE time. Use for dollies, pans, orbits, rack zooms. ease: linear|in|out|in_out|hold|out_quart|out_expo|out_back|in_out_quint|in_expo.", mutates: true,
         schema: obj(vec![("property", json!({"type":"string","enum":["cam_x","cam_y","cam_z","cam_pan","cam_tilt","cam_roll","cam_fov"]})), ("time", n("timeline seconds")), ("value", n("value")), ("ease", json!({"type":"string","enum":["linear","in","out","in_out","hold","out_quart","out_expo","out_back","in_out_quint","in_expo"]}))], &["property","time","value"]),
         run: |ss, a| { let k = str_arg(a, "property")?.to_string(); if !k.starts_with("cam_") { return Err("property must be a cam_* property".into()); } let t = num_arg(a, "time")?; let v = num_arg(a, "value")?; let e: crate::keyframe::Ease = serde_json::from_value(a.get("ease").cloned().unwrap_or(json!("linear"))).map_err(|e| e.to_string())?;
             ss.project.camera.entry(k).or_insert(Prop::new(0.0)).set_key(t, v, e); Ok(json!({"ok":true})) } },
-    Command { name: "add_shard_burst", description: "3D glass shard burst: hundreds of thick translucent faceted shards flying in 3D, seen through the project camera (use set_camera_keyframe cam_z for a fly-through). Fields in config: material legacy/glass/concrete/metal (legacy default, opt-in distinct shading), size_bias (0.125..8, default 1 log-uniform, 2.8 favors fine chips), size_scale (0.01..4, default 1; free bursts only, also used by physics), env_reflection (0..1 default 0 exact identity, world-space analytic sky/ground, alpha unchanged), env_roughness (0..1 softbox width), shutter_deg (motion-blur shutter angle, default 180, 0 = off) and blur_samples (temporal samples, default 4/8; 16-32 removes the stepped ghost copies of fast shards, cost linear in samples), count, glass 0..1 (soft translucent glass: wider softer edges, tinted rims instead of white outlines, facet glints; 0 = old look), thickness [min,max] (shard thickness as a fraction of size, default [0.3,0.9]; thin e.g. [0.015,0.04] for glass facets), aspect [min,max] (shard width/height ratio, default [0.62,1.22]), origin [x,y,z px], speed, size_min/size_max px (heavy-tailed: many tiny, few big), drag, gravity, spin deg/s, tint rgb, light dir, brightness, dof (depth-of-field strength, 0=off), focus (view depth in px of the sharp plane), toward_camera 0..1 (bias shards toward the lens), spread_time (stagger births), fade_out s, dispersion (chromatic rim px), seed. Time sub-sampled motion blur is built in. Best on dark backgrounds or additive blend.", mutates: true,
+    Command { name: "add_shard_burst", description: "3D glass shard burst: hundreds of thick translucent faceted shards flying in 3D, seen through the project camera (use set_camera_keyframe cam_z for a fly-through). Fields in config: material legacy/glass/concrete/metal (legacy default, opt-in distinct shading), size_bias (0.125..8, default 1 log-uniform, 2.8 favors fine chips), size_scale (0.01..4, default 1; free bursts only, also used by physics), env_reflection (0..1 default 0 exact identity, world-space analytic sky/ground, alpha unchanged), env_roughness (0..1 softbox width), shutter_deg (motion-blur shutter angle, default 180, 0 = off) and blur_samples (temporal samples, default 4/8; 16-32 removes the stepped ghost copies of fast shards, cost linear in samples), count, glass 0..1 (soft translucent glass: wider softer edges, tinted rims instead of white outlines, facet glints; 0 = old look), thickness [min,max] (shard thickness as a fraction of size, default [0.3,0.9]; thin e.g. [0.015,0.04] for glass facets), aspect [min,max] (shard width/height ratio, default [0.62,1.22]), origin [x,y,z px], speed, size_min/size_max px (heavy-tailed: many tiny, few big), drag, gravity, spin deg/s, tint rgb, light dir, brightness, dof (depth-of-field strength, 0=off), focus (view depth in px of the sharp plane), toward_camera 0..1 (bias shards toward the lens), spread_time (stagger births), fade_out s, dispersion (chromatic rim px), refract (px scale of the screen-space bend of the canvas behind transmissive glass shards), refract_dispersion (0..1, default 0 = unchanged: bends R, G, B by (1-d, 1, 1+d) times the offset, so blue bends most), seed. Time sub-sampled motion blur is built in. Best on dark backgrounds or additive blend.", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("start", n("s")), ("duration", n("s")), ("config", json!({"type":"object","description":"ShardBurst fields"}))], &["track_id","start","duration"]),
         run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let cfg = a.get("config").cloned().unwrap_or(json!({})); let e: crate::shards::ShardBurst = serde_json::from_value(cfg).map_err(|e| format!("bad shard config: {e}"))?;
             if e.count > 5000 { return Err("count must be <= 5000".into()); } if e.size_min <= 0.0 || e.size_max < e.size_min { return Err("need 0 < size_min <= size_max".into()); }
             let id = ss.project.gen_id("clip"); let c = Clip { id: id.clone(), source: Source::ShardBurst(e), start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
-            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(std::sync::Arc::new(c)); Ok(json!({"clip_id":id})) } },
     Command { name: "add_scene3d", description: "Add a real 3D scene layer: z-buffered geometry (box, rounded box, cylinder, capsule, sphere, plane, null) with parenting, keyframed transforms, PBR-style materials, directional/point/ambient lights, supersampling and depth of field, seen through the project camera.", mutates: true,
         schema: obj(vec![("track_id", s("track")), ("start", n("s")), ("duration", n("s")), ("config", json!({"type":"object","description":"Scene3D: objects[{kind box|rbox|cylinder|capsule|sphere|plane|null,size,round,pos,rot,scale,parent,keys[{t,pos,rot,scale}],color,rough,metal,emissive,opacity}], lights[{kind directional|point,dir|pos,color,intensity}], ambient, dof, focus, ssaa"}))], &["track_id","start","duration"]),
         run: |ss, a| { let tid = str_arg(a, "track_id")?.to_string(); let cfg = a.get("config").cloned().unwrap_or(json!({})); let e: crate::scene3d::Scene3D = serde_json::from_value(cfg).map_err(|e| format!("bad scene config: {e}"))?;
             if e.objects.len() > 500 || e.lights.len() > 16 { return Err("too many objects (max 500) or lights (max 16)".into()); }
             let id = ss.project.gen_id("clip"); let c = Clip { id: id.clone(), source: Source::Scene3D(e), start: num_arg(a, "start")?, duration: num_arg(a, "duration")?, in_point: 0.0, speed: 1.0, speed_curve: None, props: default_props(), grade_graph: None, effects: vec![], blend: "normal".into(), mask: None, time_mode: TimeMode::Normal, corners: None, audio: Audio::default(), motion_blur: 0.0, echo: None, motion_path: None, posterize_fps: 0.0, text_fx: None, transition_in: None };
-            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(c); Ok(json!({"clip_id":id})) } },
+            ss.project.tracks.iter_mut().find(|t| t.id == tid).ok_or("no such track")?.clips.push(std::sync::Arc::new(c)); Ok(json!({"clip_id":id})) } },
     Command { name: "list_fonts", description: "List bundled/system font families usable as the `font` of text clips (pass the name, or a file path). Variable fonts accept weight via set_text_style.", mutates: false, schema: obj(vec![], &[]),
         run: |_, _| Ok(json!(crate::text::all_fonts().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>())) },
     Command { name: "set_text_weight", description: "Set font weight (100-900) for variable fonts, uppercase, skew and line-mask reveal on a text clip.", mutates: true,
@@ -364,9 +381,18 @@ pub fn registry() -> Vec<Command> {
     Command { name: "set_time_mode", description: "Time remap: mode normal | reverse | freeze (hold the frame at clip-local time `at`).", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("mode", json!({"type":"string","enum":["normal","reverse","freeze"]})), ("at", n("freeze time, clip-local seconds"))], &["clip_id","mode"]),
         run: |ss, a| { let m = match str_arg(a, "mode")? { "normal" => TimeMode::Normal, "reverse" => TimeMode::Reverse, "freeze" => TimeMode::Freeze { at: opt_num(a, "at", 0.0) }, o => return Err(format!("bad mode {o}")) }; clip(&mut ss.project, a)?.time_mode = m; Ok(json!({"ok":true})) } },
-    Command { name: "freeze_frame", description: "Split-free freeze: hold the frame of a media clip at a timeline time for the rest of the clip.", mutates: true,
-        schema: obj(vec![("clip_id", s("clip")), ("at", n("timeline seconds"))], &["clip_id","at"]),
-        run: |ss, a| { let at = num_arg(a, "at")?; let c = clip(&mut ss.project, a)?; c.time_mode = TimeMode::Freeze { at: (at - c.start).max(0.0) }; Ok(json!({"ok":true})) } },
+    Command { name: "freeze_frame", description: "Freeze the WHOLE clip on the frame it shows at timeline time `at` (the clip holds that frame from its first to its last second; nothing is split). `at` must lie inside the clip. Works on any clip, not only media. With hold_from_here=true the clip is split at `at` instead: the first part plays normally and the second part holds its first frame (one undo step; needs a normal-speed-direction clip and `at` strictly inside it; returns right_clip_id).", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("at", n("timeline seconds")), ("hold_from_here", json!({"type":"boolean","description":"split at `at` and freeze only the second part, default false"}))], &["clip_id","at"]),
+        run: |ss, a| { let at = num_arg(a, "at")?; let hold = a.get("hold_from_here").and_then(|v| v.as_bool()).unwrap_or(false);
+            { let c = clip(&mut ss.project, a)?; if !at.is_finite() || at < c.start - 1e-9 || at > c.start + c.duration + 1e-9 { return Err(format!("at {at} is outside the clip ({}..{})", c.start, c.start + c.duration)); }
+              if !hold { c.time_mode = TimeMode::Freeze { at: (at - c.start).max(0.0) }; return Ok(json!({"ok":true})); }
+              if !matches!(c.time_mode, TimeMode::Normal) { return Err("hold_from_here needs a clip with normal time mode".into()); }
+              if at <= c.start + 1e-9 || at >= c.start + c.duration - 1e-9 { return Err("hold_from_here: `at` must be strictly inside the clip".into()); } }
+            let id = str_arg(a, "clip_id")?.to_string(); let nid = ss.project.gen_id("clip");
+            let tr = ss.project.tracks.iter_mut().find(|t| t.clips.iter().any(|c| c.id == id)).ok_or("no such clip")?;
+            let c = tr.clips.iter_mut().find(|c| c.id == id).map(|c| std::sync::Arc::make_mut(c)).unwrap();
+            let mut r = c.clone(); r.id = nid.clone(); r.start = at; r.duration = c.start + c.duration - at; r.in_point = c.in_point + (at - c.start) * c.speed; r.transition_in = None; r.time_mode = TimeMode::Freeze { at: 0.0 };
+            c.duration = at - c.start; tr.clips.push(std::sync::Arc::new(r)); ss.project.grade_scopes.copy_binding(&id, &nid); Ok(json!({"ok":true,"right_clip_id":nid})) } },
     Command { name: "set_corner_pin", description: "Perspective corner pin: pixel offsets of the 4 corners [[dx,dy] x4: top-left, top-right, bottom-right, bottom-left] from their normal positions. Pass null/empty to clear.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("corners", json!({"type":"array","items":{"type":"array","items":{"type":"number"}}}))], &["clip_id"]),
         run: |ss, a| { let cs = a.get("corners").and_then(|v| v.as_array()); let c = clip(&mut ss.project, a)?; match cs { Some(v) if v.len() == 4 => { let mut o = [[0.0; 2]; 4]; for (i, p) in v.iter().enumerate() { let p = p.as_array().ok_or("corner must be [dx,dy]")?; o[i] = [p.get(0).and_then(|x| x.as_f64()).unwrap_or(0.0), p.get(1).and_then(|x| x.as_f64()).unwrap_or(0.0)]; } c.corners = Some(o); } _ => c.corners = None } Ok(json!({"ok":true})) } },
@@ -375,15 +401,15 @@ pub fn registry() -> Vec<Command> {
         run: |ss, a| { let st = num_arg(a, "start")?; clip(&mut ss.project, a)?.start = st; Ok(json!({"ok":true})) } },
     Command { name: "trim_clip", description: "Set a clip's source in-point and/or duration.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("in_point", n("seconds")), ("duration", n("seconds"))], &["clip_id"]),
-        run: |ss, a| { let c = clip(&mut ss.project, a)?; if let Some(v) = a.get("in_point").and_then(|v| v.as_f64()) { c.in_point = v; } if let Some(v) = a.get("duration").and_then(|v| v.as_f64()) { c.duration = v; } Ok(json!({"in_point":c.in_point,"duration":c.duration})) } },
+        run: |ss, a| { let ip = if a.get("in_point").map_or(false, |v| !v.is_null()) { Some(num_arg(a, "in_point")?) } else { None }; let du = if a.get("duration").map_or(false, |v| !v.is_null()) { Some(num_arg(a, "duration")?) } else { None }; if let Some(v) = ip { if !v.is_finite() || v < 0.0 { return Err("in_point must be a finite time >= 0".into()); } } if let Some(v) = du { if !v.is_finite() || v <= 0.0 || v > 1.0e6 { return Err("duration must be > 0 and at most 1e6 seconds".into()); } } let c = clip(&mut ss.project, a)?; if let Some(v) = ip { c.in_point = v; } if let Some(v) = du { c.duration = v; } Ok(json!({"in_point":c.in_point,"duration":c.duration})) } },
     Command { name: "split_clip", description: "Split a clip at a timeline time into two clips. Returns the new right-hand clip id.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("at", n("timeline seconds"))], &["clip_id","at"]),
         run: |ss, a| { let at = num_arg(a, "at")?; let id = str_arg(a, "clip_id")?.to_string(); let nid = ss.project.gen_id("clip");
             let tr = ss.project.tracks.iter_mut().find(|t| t.clips.iter().any(|c| c.id == id)).ok_or("no such clip")?;
-            let c = tr.clips.iter_mut().find(|c| c.id == id).unwrap();
+            let c = tr.clips.iter_mut().find(|c| c.id == id).map(|c| std::sync::Arc::make_mut(c)).unwrap();
             if at <= c.start || at >= c.start + c.duration { return Err("split point outside clip".into()); }
             let mut r = c.clone(); r.id = nid.clone(); r.start = at; r.duration = c.start + c.duration - at; r.in_point = c.in_point + (at - c.start) * c.speed; r.transition_in = None;
-            c.duration = at - c.start; tr.clips.push(r); ss.project.grade_scopes.copy_binding(&id,&nid); Ok(json!({"right_clip_id":nid})) } },
+            c.duration = at - c.start; tr.clips.push(std::sync::Arc::new(r)); ss.project.grade_scopes.copy_binding(&id,&nid); Ok(json!({"right_clip_id":nid})) } },
     Command { name: "delete_clip", description: "Delete a clip.", mutates: true,
         schema: obj(vec![("clip_id", s("clip"))], &["clip_id"]),
         run: |ss, a| { let id = str_arg(a, "clip_id")?; let mut found = false; for t in ss.project.tracks.iter_mut() { let l = t.clips.len(); t.clips.retain(|c| c.id != id); found |= t.clips.len() != l; } if found { Ok(json!({"ok":true})) } else { Err("no such clip".into()) } } },
@@ -392,14 +418,17 @@ pub fn registry() -> Vec<Command> {
         run: |ss, a| { let v = num_arg(a, "speed")?; if !(0.1..=100.0).contains(&v) { return Err("speed must be 0.1..100".into()); } clip(&mut ss.project, a)?.speed = v; Ok(json!({"ok":true})) } },
     Command { name: "set_property", description: "Set a base transform property: opacity (0..1), x, y (pixels), scale, rotation (degrees, = rot_z), 3D: rot_x, rot_y (degrees), pos_z (pixels, +z away from camera; any non-zero 3D prop makes the layer a perspective plane seen through the project camera), backface (1 = visible from behind).", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("property", json!({"type":"string","enum":["opacity","x","y","scale","rotation","rot_x","rot_y","pos_z","backface"]})), ("value", n("value"))], &["clip_id","property","value"]),
-        run: |ss, a| { let k = str_arg(a, "property")?.to_string(); let v = num_arg(a, "value")?;
+        run: |ss, a| { if a.get("time").map_or(false, |v| !v.is_null()) { return Err("set_property sets the static value and has no time; use set_keyframe with time to animate".into()); } let k = str_arg(a, "property")?.to_string(); let v = num_arg(a, "value")?;
             if let Some(tool) = match k.as_str() { "speed" | "playback_speed" | "rate" => Some("set_speed"), "start" | "position" | "time" => Some("move_clip"), "duration" | "in_point" | "out_point" | "trim" => Some("trim_clip"), _ => None } { return Err(format!("'{k}' is a structural clip field, not a transform property: set_property would only create an inert generic prop. Use {tool} instead.")); }
+            const KNOWN: &[&str] = &["opacity", "x", "y", "scale", "rotation", "rot_x", "rot_y", "pos_z", "backface", "flow_blur", "flow_quality", "pin_gain", "reveal", "path"];
+            if !KNOWN.contains(&k.as_str()) { return Err(format!("unknown property '{k}': nothing reads it, so it would silently do nothing. Valid: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface. For crop use add_effect/crop tools; for effect params use set_effect_param.")); }
             let c = clip(&mut ss.project, a)?; c.props.entry(k).or_insert(Prop::new(0.0)).base = v; Ok(json!({"ok":true})) } },
     Command { name: "set_keyframe", description: "Keyframe a transform property or an effect param (effect_id + property = param name) at clip-local time. ease: linear|in|out|in_out|hold.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("property", s("opacity|x|y|scale|rotation or effect param")), ("effect_id", s("optional: target an effect")), ("time", n("clip-local seconds")), ("value", n("value")), ("ease", json!({"type":"string","enum":["linear","in","out","in_out","hold","out_quart","out_expo","out_back","in_out_quint","in_expo"]}))], &["clip_id","property","time","value"]),
         run: |ss, a| { let k = str_arg(a, "property")?.to_string(); let t = num_arg(a, "time")?; let v = num_arg(a, "value")?;
             let e: Ease = serde_json::from_value(a.get("ease").cloned().unwrap_or(json!("linear"))).map_err(|e| e.to_string())?;
             let eid = a.get("effect_id").and_then(|v| v.as_str()).map(String::from);
+            if eid.is_none() && !matches!(k.as_str(), "opacity" | "x" | "y" | "scale" | "rotation" | "rot_x" | "rot_y" | "pos_z" | "backface" | "flow_blur" | "flow_quality" | "pin_gain" | "reveal" | "path") { return Err(format!("unknown clip property '{k}': nothing reads it. Valid: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface. To keyframe an effect param pass effect_id.")); }
             let c = clip(&mut ss.project, a)?;
             let pr = match eid { Some(id) => c.effects.iter_mut().find(|x| x.id == id).ok_or("no such effect")?.params.entry(k).or_insert(Prop::new(v)), None => c.props.entry(k).or_insert(Prop::new(v)) };
             pr.set_key(t, v, e); Ok(json!({"keys":pr.keys.len()})) } },
@@ -417,7 +446,10 @@ pub fn registry() -> Vec<Command> {
     Command { name: "set_effect_param", description: "Set a base effect parameter value.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("effect_id", s("effect")), ("param", s("name")), ("value", n("value"))], &["clip_id","effect_id","param","value"]),
         run: |ss, a| { let eid = str_arg(a, "effect_id")?.to_string(); let k = str_arg(a, "param")?.to_string(); let v = num_arg(a, "value")?;
-            let e = clip(&mut ss.project, a)?.effects.iter_mut().find(|x| x.id == eid).ok_or("no such effect")?; e.params.entry(k).or_insert(Prop::new(v)).base = v; Ok(json!({"ok":true})) } },
+            let e = clip(&mut ss.project, a)?.effects.iter_mut().find(|x| x.id == eid).ok_or("no such effect")?;
+            let known = CATALOG.iter().chain(CATALOG2.iter()).chain(catalog3().iter()).find(|c| c.0 == e.kind).map(|c| c.2.iter().map(|p| p.0).collect::<Vec<_>>());
+            let warn = match known { Some(ps) if !ps.contains(&k.as_str()) => Some(format!("'{k}' is not a listed parameter of {}: it is stored but may be ignored. Listed: {}", e.kind, ps.join(", "))), _ => None };
+            e.params.entry(k).or_insert(Prop::new(v)).base = v; Ok(match warn { Some(w) => json!({"ok":true,"warning":w}), None => json!({"ok":true}) }) } },
     Command { name: "remove_effect", description: "Remove an effect from a clip.", mutates: true,
         schema: obj(vec![("clip_id", s("clip")), ("effect_id", s("effect"))], &["clip_id","effect_id"]),
         run: |ss, a| { let eid = str_arg(a, "effect_id")?.to_string(); let c = clip(&mut ss.project, a)?; let l = c.effects.len(); c.effects.retain(|x| x.id != eid); if c.effects.len() == l { Err("no such effect".into()) } else { Ok(json!({"ok":true})) } } },
@@ -549,10 +581,11 @@ pub fn registry() -> Vec<Command> {
             let mut keep = vec![false; n]; keep[0] = true; keep[n - 1] = true; let mut st = vec![(0usize, n - 1)];
             while let Some((i, j)) = st.pop() { let (a0, b0) = (&orig.keys[i], &orig.keys[j]); let (mut md, mut mi) = (-1.0f64, i); for k in i + 1..j { let u = (orig.keys[k].t - a0.t) / (b0.t - a0.t).max(1e-9); let d = (orig.keys[k].v - (a0.v + (b0.v - a0.v) * u)).abs(); if d > md { md = d; mi = k; } } if md > tol { keep[mi] = true; st.push((i, mi)); st.push((mi, j)); } }
             let mut i = 0; pr.keys.retain(|_| { let k = keep[i]; i += 1; k }); let mut me = 0f64; for k in &orig.keys { me = me.max((pr.at(k.t) - k.v).abs()); } Ok(json!({"before":n,"after":pr.keys.len(),"max_error":me})) } },
-    Command { name: "smooth_curve", description: "Graph editor: Gaussian-smooth a keyframed property's values (sigma in keys). Use on noisy tracker output or hand-keyed jitter. Keeps key times.", mutates: true,
-        schema: obj(vec![("clip_id", s("clip")), ("property", s("property")), ("sigma", n("keys, default 2"))], &["clip_id","property"]),
-        run: |ss, a| { let sg = opt_num(a, "sigma", 2.0).max(0.3); let c = clip(&mut ss.project, a)?; let pr = c.props.get_mut(str_arg(a, "property")?).ok_or("no such property")?; let v: Vec<f64> = pr.keys.iter().map(|k| k.v).collect(); let n = v.len() as i64; let r = (sg * 3.0).ceil() as i64;
-            for (i, k) in pr.keys.iter_mut().enumerate() { let (mut s0, mut w0) = (0.0, 0.0); for d in -r..=r { let j = (i as i64 + d).clamp(0, n - 1); let w = (-(d * d) as f64 / (2.0 * sg * sg)).exp(); s0 += v[j as usize] * w; w0 += w; } k.v = s0 / w0; } Ok(json!({"ok":true,"keys":n})) } },
+    Command { name: "smooth_curve", description: "Graph editor: Gaussian-smooth a keyframed property's values (sigma in keys). Use on noisy tracker output or hand-keyed jitter. Keeps key times and key count. Edges are replicated, so the first and last values move too unless pin_ends=true. A very large sigma flattens the curve to roughly the average of its end values.", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("property", s("property")), ("sigma", n("keys, default 2")), ("pin_ends", json!({"type":"boolean","description":"keep the first and last key values untouched, default false"}))], &["clip_id","property"]),
+        run: |ss, a| { let sg = opt_num(a, "sigma", 2.0).max(0.3); let pin = a.get("pin_ends").and_then(|v| v.as_bool()).unwrap_or(false); let c = clip(&mut ss.project, a)?; let pr = c.props.get_mut(str_arg(a, "property")?).ok_or("no such property")?; let v: Vec<f64> = pr.keys.iter().map(|k| k.v).collect(); let n = v.len() as i64; let r = (sg * 3.0).ceil() as i64;
+            for (i, k) in pr.keys.iter_mut().enumerate() { let (mut s0, mut w0) = (0.0, 0.0); for d in -r..=r { let j = (i as i64 + d).clamp(0, n - 1); let w = (-(d * d) as f64 / (2.0 * sg * sg)).exp(); s0 += v[j as usize] * w; w0 += w; } k.v = s0 / w0; }
+            if pin && n >= 1 { pr.keys[0].v = v[0]; let l = (n - 1) as usize; pr.keys[l].v = v[l]; } Ok(json!({"ok":true,"keys":n,"pin_ends":pin})) } },
     Command { name: "set_text_path", description: "Text on a path (AE Path Options): lays the text's characters along a smooth path (points normalized 0..1, or shape circle|ellipse|figure8|wave|arc|spiral with cx,cy,rx,ry) with each glyph rotated to the tangent. `start` (0..1 progress of the first character) can be animated with animate {start,end,from,to,ease}; flip reverses direction. Combine with add_text_animator for per-character effects along the path. remove=true clears it.", mutates: true,
         schema: obj(vec![("clip_id", s("text clip")), ("shape", s("preset shape")), ("points", json!({"type":"array","items":{"type":"array","items":{"type":"number"}}})), ("cx", n("")), ("cy", n("")), ("rx", n("")), ("ry", n("")), ("start", n("initial progress 0..1")), ("flip", json!({"type":"boolean"})), ("animate", json!({"type":"object"})), ("remove", json!({"type":"boolean"}))], &["clip_id"]),
         run: |ss, a| { let rm = a.get("remove").and_then(|v| v.as_bool()).unwrap_or(false); if rm { let c = clip(&mut ss.project, a)?; if let Some(fx) = c.text_fx.as_mut() { fx.path = None; } return Ok(json!({"ok":true})); }
@@ -644,30 +677,140 @@ pub fn registry() -> Vec<Command> {
         schema: obj(vec![("path", s("output path (.mov/.webm, or a PNG pattern)")), ("format", json!({"type":"string","enum":["prores4444","webm","png"]})), ("start", n("range start seconds, default 0")), ("end", n("range end seconds, default timeline end"))], &["path","format"]),
         run: |ss, a| { let d = render::export_alpha(&ss.project, str_arg(a, "path")?, str_arg(a, "format")?, opt_num(a, "start", 0.0), opt_num(a, "end", ss.project.duration()))?; Ok(json!({"path":str_arg(a, "path")?,"duration":d})) } },
     Command { name: "save_project", description: "Save the project to a JSON file.", mutates: false,
-        schema: obj(vec![("path", s("file path"))], &["path"]),
-        run: |ss, a| { let p = str_arg(a, "path")?; std::fs::write(p, serde_json::to_string_pretty(&ss.project).unwrap()).map_err(|e| e.to_string())?; Ok(json!({"path":p})) } },
+        schema: obj(vec![("path", s("file path")), ("with_history", json!({"type":"boolean","description":"also write <path>.history with the undo steps and named checkpoints, so they survive a restart (load_project with_history restores them). Can be large: every step is a whole project."})), ("history_steps", n("with_history: newest undo steps to persist, default 20 (checkpoints are always all kept)"))], &["path"]),
+        run: |ss, a| { let p = str_arg(a, "path")?;
+            // project: streamed through a hashing writer into <p>.tmp then renamed, so a crash or full disk never leaves a truncated project and the history header can bind to the exact bytes
+            let tmp = format!("{p}.tmp"); let sha = { let f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?; let mut w = FnvWriter { inner: std::io::BufWriter::new(f), h: 0xcbf29ce484222325 };
+                serde_json::to_writer_pretty(&mut w, &ss.project).map_err(|e| { let _ = std::fs::remove_file(&tmp); e.to_string() })?; std::io::Write::flush(&mut w).map_err(|e| { let _ = std::fs::remove_file(&tmp); e.to_string() })?; w.inner.get_ref().sync_all().map_err(|e| e.to_string())?; w.h };
+            let had_old = std::fs::remove_file(format!("{p}.history")).is_ok(); // never leave an old history beside the new project, whatever happens next
+            std::fs::rename(&tmp, p).map_err(|e| { let _ = std::fs::remove_file(&tmp); e.to_string() })?;
+            if a.get("with_history").and_then(|v| v.as_bool()).unwrap_or(false) { // streamed straight to the file from references (no intermediate JSON Value tree: that tree was several times the size of the history and ran the engine out of memory on large projects); only the newest history_steps undo steps are written (default 20)
+                #[derive(serde::Serialize)] struct Hist<'a> { version: u32, project_sha: String, undo_len: usize, undo: &'a [Project], undo_labels: &'a [String], checkpoints: &'a [(String, Project, usize)] }
+                let keep = (opt_num(a, "history_steps", 20.0).max(0.0) as usize).min(ss.undo.len()); let (us, ls) = (ss.undo.len() - keep, ss.undo_labels.len().saturating_sub(keep));
+                let htmp = format!("{p}.history.tmp"); let f = std::fs::File::create(&htmp).map_err(|e| e.to_string())?; let mut bw = std::io::BufWriter::new(f);
+                serde_json::to_writer(&mut bw, &Hist { version: 1, project_sha: format!("{sha:016x}"), undo_len: keep, undo: &ss.undo[us..], undo_labels: &ss.undo_labels[ls..], checkpoints: &ss.checkpoints }).map_err(|e| { let _ = std::fs::remove_file(&htmp); e.to_string() })?; std::io::Write::flush(&mut bw).map_err(|e| e.to_string())?; bw.get_ref().sync_all().map_err(|e| e.to_string())?;
+                std::fs::rename(&htmp, format!("{p}.history")).map_err(|e| e.to_string())?;
+                let hb = std::fs::metadata(format!("{p}.history")).map(|m| m.len()).unwrap_or(0); return Ok(json!({"path":p,"history":format!("{p}.history"),"undo_steps":keep,"undo_steps_available":ss.undo.len(),"checkpoints":ss.checkpoints.len(),"history_bytes":hb,"project_sha":format!("{sha:016x}")})); }
+            // a save without history must not leave an older history beside the new project
+            let stale = had_old;
+            Ok(json!({"path":p,"stale_history_removed":stale})) } },
     Command { name: "load_project", description: "Load a project JSON file.", mutates: true,
-        schema: obj(vec![("path", s("file path"))], &["path"]),
-        run: |ss, a| { let t = std::fs::read_to_string(str_arg(a, "path")?).map_err(|e| e.to_string())?; ss.project = serde_json::from_str(&t).map_err(|e| e.to_string())?;
-            ss.project.recompute_next_id(); Ok(json!({"tracks":ss.project.tracks.len(),"next_id":ss.project.next_id})) } },
-    Command { name: "undo", description: "Undo the last mutating operation.", mutates: false,
+        schema: obj(vec![("path", s("file path")), ("with_history", json!({"type":"boolean","description":"also load <path>.history (written by save_project with_history) so undo steps and checkpoints come back; the load itself is one more undo step on top. If the history is missing or does not belong to this project file (sha check) the project still loads and history_ignored says why"}))], &["path"]),
+        run: |ss, a| { let pth = str_arg(a, "path")?.to_string(); let t = std::fs::read_to_string(&pth).map_err(|e| e.to_string())?; let proj: Project = serde_json::from_str(&t).map_err(|e| e.to_string())?;
+            let mut ignored: Option<String> = None; let hist = if a.get("with_history").and_then(|v| v.as_bool()).unwrap_or(false) { match std::fs::read(format!("{pth}.history")) { Err(e) => { ignored = Some(format!("missing ({e})")); None } Ok(ht) => { let h: Value = serde_json::from_slice(&ht).map_err(|e| e.to_string())?;
+                let want = h.get("project_sha").and_then(|v| v.as_str()).unwrap_or(""); let have = format!("{:016x}", fnv64(t.as_bytes()));
+                if want != have { ignored = Some(if want.is_empty() { "history file has no project_sha (older format)".to_string() } else { format!("history belongs to a different project save (history sha {want}, project sha {have})") }); None } else {
+                let u: Vec<Project> = serde_json::from_value(h["undo"].clone()).map_err(|e| e.to_string())?; let ul: Vec<String> = serde_json::from_value(h["undo_labels"].clone()).map_err(|e| e.to_string())?; let cp: Vec<(String, Project, usize)> = serde_json::from_value(h["checkpoints"].clone()).map_err(|e| e.to_string())?;
+                if u.len() != ul.len() { return Err("history file is inconsistent (undo and labels differ in length)".into()); } Some((u, ul, cp)) } } } } else { None };
+            ss.project = proj; if let Some((u, ul, cp)) = hist { ss.undo = u; ss.undo_labels = ul; ss.checkpoints = cp; ss.redo.clear(); ss.redo_labels.clear(); }
+            ss.project.recompute_next_id(); Ok(json!({"tracks":ss.project.tracks.len(),"next_id":ss.project.next_id,"undo_steps":ss.undo.len(),"checkpoints":ss.checkpoints.len(),"history_ignored":ignored})) } },
+    Command { name: "undo", description: "Undo the last mutating operation(s). steps (default 1) undoes several at once. history_list shows what each step is.", mutates: false,
+        schema: obj(vec![("steps", n("how many steps to undo, default 1"))], &[]),
+        run: |ss, a| { let steps = opt_num(a, "steps", 1.0).max(1.0) as usize; if ss.undo.is_empty() { return Err("nothing to undo".into()); } let mut done = 0;
+            while done < steps { let Some(prev) = ss.undo.pop() else { break }; let lb = ss.undo_labels.pop().unwrap_or_default(); let cur = std::mem::replace(&mut ss.project, prev); ss.redo.push(cur); ss.redo_labels.push(lb); done += 1; }
+            ss.project.recompute_next_id(); Ok(json!({"ok":true,"undone":done,"undo_left":ss.undo.len(),"redo_available":ss.redo.len()})) } },
+    Command { name: "redo", description: "Redo the last undone operation(s). steps (default 1).", mutates: false,
+        schema: obj(vec![("steps", n("how many steps to redo, default 1"))], &[]),
+        run: |ss, a| { let steps = opt_num(a, "steps", 1.0).max(1.0) as usize; if ss.redo.is_empty() { return Err("nothing to redo".into()); } let mut done = 0;
+            while done < steps { let Some(nx) = ss.redo.pop() else { break }; let lb = ss.redo_labels.pop().unwrap_or_default(); let cur = std::mem::replace(&mut ss.project, nx); ss.undo.push(cur); ss.undo_labels.push(lb); done += 1; }
+            ss.project.recompute_next_id(); Ok(json!({"ok":true,"redone":done,"undo_left":ss.undo.len(),"redo_available":ss.redo.len()})) } },
+    Command { name: "history_list", description: "List the edit history: undo steps (oldest first, the last one is what `undo` reverts next), how many redo steps exist, and the named checkpoints.", mutates: false,
         schema: obj(vec![], &[]),
-        run: |ss, _| { let prev = ss.undo.pop().ok_or("nothing to undo")?; let cur = std::mem::replace(&mut ss.project, prev); ss.redo.push(cur); Ok(json!({"ok":true})) } },
-    Command { name: "redo", description: "Redo the last undone operation.", mutates: false,
-        schema: obj(vec![], &[]),
-        run: |ss, _| { let nx = ss.redo.pop().ok_or("nothing to redo")?; let cur = std::mem::replace(&mut ss.project, nx); ss.undo.push(cur); Ok(json!({"ok":true})) } },
+        run: |ss, _| Ok(json!({"undo": ss.undo_labels.iter().enumerate().map(|(i, l)| json!({"step": i, "tool": l})).collect::<Vec<_>>(),
+            "next_undo": ss.undo_labels.last(), "redo": ss.redo_labels.iter().rev().cloned().collect::<Vec<_>>(),
+            "checkpoints": ss.checkpoints.iter().map(|(n, _, at)| json!({"name": n, "after_undo_steps": at})).collect::<Vec<_>>() })) },
+    Command { name: "checkpoint", description: "Save a named snapshot of the whole project (for example before a colour grade) so it can be restored later with `restore`. Same name overwrites. Keeps the newest 24. Memory only, not saved with the project.", mutates: false,
+        schema: obj(vec![("name", s("checkpoint name"))], &["name"]),
+        run: |ss, a| { let name = str_arg(a, "name")?.trim().to_string(); if name.is_empty() || name.len() > 80 { return Err("name must be 1 to 80 characters".into()); }
+            let snap = (name.clone(), ss.project.clone(), ss.undo.len()); if let Some(e) = ss.checkpoints.iter_mut().find(|c| c.0 == name) { *e = snap; } else { ss.checkpoints.push(snap); if ss.checkpoints.len() > MAX_CHECKPOINTS { ss.checkpoints.remove(0); } }
+            Ok(json!({"ok":true,"name":name,"checkpoints":ss.checkpoints.iter().map(|c| c.0.clone()).collect::<Vec<_>>()})) } },
+    Command { name: "restore", description: "Restore the whole project to a named checkpoint. This is itself one undo step, so `undo` brings back what you had before restoring. The checkpoint stays available.", mutates: true,
+        schema: obj(vec![("name", s("checkpoint name from history_list"))], &["name"]),
+        run: |ss, a| { let name = str_arg(a, "name")?.to_string(); let p = ss.checkpoints.iter().find(|c| c.0 == name).map(|c| c.1.clone()).ok_or_else(|| format!("no checkpoint '{name}'. Existing: {}", ss.checkpoints.iter().map(|c| c.0.as_str()).collect::<Vec<_>>().join(", ")))?;
+            ss.project = p; ss.project.recompute_next_id(); Ok(json!({"ok":true,"restored":name})) } },
+    Command { name: "checkpoint_delete", description: "Delete a named checkpoint.", mutates: false,
+        schema: obj(vec![("name", s("checkpoint name"))], &["name"]),
+        run: |ss, a| { let name = str_arg(a, "name")?.to_string(); let l = ss.checkpoints.len(); ss.checkpoints.retain(|c| c.0 != name); if ss.checkpoints.len() == l { Err(format!("no checkpoint '{name}'")) } else { Ok(json!({"ok":true})) } } },
     ]; v.extend(crate::edit::commands()); v.extend(crate::colortools::commands()); v.push(crate::color::scope_command::command()); v.extend(crate::ext::commands()); v
 }
 
+/// Public entry: runs the tool and unifies the wording of not-found and OS errors (unit 5 commit B).
 pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
-    let reg = registry();
-    let c = reg.iter().find(|c| c.name == name).ok_or(format!("unknown tool '{name}'"))?;
+    let unknown = unknown_args(name, args);
+    if !unknown.is_empty() {
+        if let Ok(p) = std::env::var("KIMO_AUDIT_ARGS") { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) { for k in &unknown { let _ = writeln!(f, "{name} {k}"); } } }
+        if std::env::var("KIMO_STRICT_ARGS").map(|v| v == "1").unwrap_or(false) { return Err(unknown_arg_text(name, &unknown[0])); }
+    }
+    let mut r = dispatch_inner(ss, name, args).map_err(|m| polish_error(ss, args, m))?;
+    if !unknown.is_empty() { if let Some(o) = r.as_object_mut() { o.insert("warnings".into(), json!(unknown.iter().map(|k| format!("ignored {}", unknown_arg_text(name, k))).collect::<Vec<_>>())); } }
+    Ok(r)
+}
+
+/// Argument keys that the tool's schema does not declare (empty when the schema is free-form).
+pub fn unknown_args(name: &str, args: &Value) -> Vec<String> {
+    let (Some(obj), Some(c)) = (args.as_object(), registry_ref().iter().find(|c| c.name == name)) else { return vec![] };
+    let Some(props) = c.schema.get("properties").and_then(|p| p.as_object()) else { return vec![] };
+    if c.schema.get("additionalProperties").map_or(false, |v| v != &json!(false)) { return vec![]; }
+    obj.keys().filter(|k| !props.contains_key(*k)).cloned().collect()
+}
+
+fn unknown_arg_text(name: &str, key: &str) -> String {
+    let valid: Vec<String> = registry_ref().iter().find(|c| c.name == name).and_then(|c| c.schema.get("properties").and_then(|p| p.as_object()).map(|p| p.keys().cloned().collect())).unwrap_or_default();
+    let near = crate::errors::nearest(key, &valid, 1);
+    let mut t = format!("unknown argument '{key}'");
+    if let Some(n) = near.first() { if crate::errors::lev_pub(key, n) <= 3 { t.push_str(&format!(" (did you mean '{n}'?)")); } }
+    let shown: Vec<&str> = valid.iter().take(12).map(|x| x.as_str()).collect();
+    t.push_str(&format!(" (valid: {}{})", if shown.is_empty() { "none".to_string() } else { shown.join(", ") }, if valid.len() > 12 { ", ..." } else { "" }));
+    t
+}
+
+fn polish_error(ss: &Session, args: &Value, m: String) -> String {
+    let bad = |suffix: &str, exists: &dyn Fn(&str) -> bool| -> Option<String> { args.as_object()?.iter().find(|(k, v)| (k.ends_with(suffix) || (suffix == "clip_id" && (*k == "clip_a" || *k == "clip_b"))) && v.as_str().map(|s| !exists(s)).unwrap_or(false)).and_then(|(_, v)| v.as_str().map(String::from)) };
+    let (clip_ok, track_ok) = (|s: &str| ss.project.tracks.iter().flat_map(|t| t.clips.iter()).any(|c| c.id == s), |s: &str| ss.project.tracks.iter().any(|t| t.id == s));
+    if m == "no such clip" { if let Some(id) = bad("clip_id", &clip_ok) { return format!("no such clip '{id}'"); } }
+    if m == "no such track" { if let Some(id) = bad("track_id", &track_ok) { return format!("no such track '{id}'"); } }
+    if let Some(id) = m.strip_prefix("no clip '").and_then(|r| r.strip_suffix('\'')) { return format!("no such clip '{id}'"); }
+    if m.contains("(os error") { if let Some(p) = args.get("path").and_then(|v| v.as_str()) { if !m.contains(p) { return format!("cannot read '{p}': {m}"); } } }
+    m
+}
+
+fn dispatch_inner(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
+    let t = reg_tables(); let c = t.1.get(name).map(|&i| &t.0[i]).ok_or(format!("unknown tool '{name}'"))?;
     let l = crate::guard::limits(); crate::guard::sanitize(args, l, 0).map_err(|e| format!("rejected by sandbox: {e}"))?;
-    let before = ss.project.clone();
+    // read-only tools skip the whole-project snapshot (it cost O(project) on every call); mutating tools still snapshot for undo and rollback
+    // KIMO_AUDIT_READONLY=1: a tool marked read-only must leave the project unchanged (undo, redo, checkpoint and restore manage history themselves and are allowed).
+    static AUDIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); let audit = !c.mutates && *AUDIT.get_or_init(|| std::env::var("KIMO_AUDIT_READONLY").map(|v| v == "1").unwrap_or(false)) && !matches!(name, "undo" | "redo" | "checkpoint" | "checkpoint_delete" | "restore");
+    let fp = if audit { serde_json::to_vec(&ss.project).ok() } else { None }; let audit_before = if audit { Some(ss.project.clone()) } else { None };
+    let before = if c.mutates { ss.project.clone() } else { Project::default() };
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (c.run)(ss, args)));
-    let r = match r { Ok(r) => r, Err(e) => { ss.project = before; let m = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "internal error".into()); return Err(format!("tool '{name}' failed safely (project rolled back): {m}")); } };
-    if c.mutates && r.is_ok() { if let Err(e) = crate::guard::check_project(&ss.project, l) { ss.project = before; return Err(format!("rejected by sandbox (project rolled back): {e}")); } let sz = serde_json::to_vec(&before).map(|v| v.len()).unwrap_or(1 << 20).max(1); ss.undo.push(before); ss.redo.clear();
+    let mut r = match r { Ok(r) => r, Err(e) => { if c.mutates { ss.project = before; } let m = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "internal error".into()); return Err(format!("tool '{name}' failed safely (project rolled back): {m}")); } };
+    if c.mutates && r.is_ok() { if !matches!(name, "set_track" | "undo" | "redo" | "restore" | "load_project" | "checkpoint" | "project_set") && !name.starts_with("history_") && before.tracks.iter().any(|t| t.locked) {
+        let hit = before.tracks.iter().filter(|t| t.locked).find(|bt| match ss.project.tracks.iter().find(|t| t.id == bt.id) { None => true, Some(at) => at.clips.len() != bt.clips.len() || bt.clips.iter().zip(at.clips.iter()).any(|(x, y)| !std::sync::Arc::ptr_eq(x, y) && serde_json::to_value(&**x).ok() != serde_json::to_value(&**y).ok()) }).map(|t| t.id.clone());
+        if let Some(tid) = hit { ss.project = before; return Err(format!("track '{tid}' is locked: tool '{name}' would modify it; unlock with set_track locked=false")); } } let removed: Vec<String> = if before.tracks.iter().map(|t| t.clips.len()).sum::<usize>() > ss.project.tracks.iter().map(|t| t.clips.len()).sum::<usize>() || matches!(name, "lift_range" | "remove_track") { let now: std::collections::HashSet<&str> = ss.project.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.id.as_str()).collect(); before.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.id.clone()).filter(|i| !now.contains(i.as_str())).collect() } else { vec![] }; let cleared = ss.project.clear_refs_to(&removed); if !cleared.is_empty() { if let Ok(v) = r.as_mut() { if let Some(o) = v.as_object_mut() { o.insert("cleared_refs".into(), serde_json::to_value(&cleared).unwrap_or_default()); } } } if let Err(e) = crate::guard::check_project(&ss.project, l) { ss.project = before; return Err(format!("rejected by sandbox (project rolled back): {e}")); } let nclips: usize = ss.project.tracks.iter().map(|t| t.clips.len()).sum(); let moved = nclips.abs_diff(ss.snap_clips) * 4 > ss.snap_clips.max(4); if ss.snap_n % 16 == 0 || ss.undo.is_empty() || moved { ss.snap_clips = nclips; ss.snap_sz = serde_json::to_vec(&before).map(|v| v.len()).unwrap_or(1 << 20).max(1); } ss.snap_n = ss.snap_n.wrapping_add(1); let sz = ss.snap_sz; ss.undo.push(before); ss.redo.clear(); ss.redo_labels.clear(); ss.undo_labels.push(match args.get("clip_id").and_then(|v| v.as_str()) { Some(id) => format!("{name} {id}"), None => name.to_string() });
         // bounded history: at most 100 steps and roughly 256 MB of snapshots, so a 200-layer timeline cannot grow until the OS kills the engine
-        let cap = ((256usize << 20) / sz).clamp(8, 100); if ss.undo.len() > cap { let drop = ss.undo.len() - cap; ss.undo.drain(0..drop); } }
+        let cap = ((256usize << 20) / sz).clamp(8, 100); if ss.undo.len() > cap { let drop = ss.undo.len() - cap; ss.undo.drain(0..drop); ss.undo_labels.drain(0..drop.min(ss.undo_labels.len())); } }
+    if let (Some(fp), Some(pre)) = (fp, audit_before) { if serde_json::to_vec(&ss.project).ok().as_ref() != Some(&fp) { ss.project = pre; return Err(format!("AUDIT: read-only tool '{name}' modified the project (rolled back); mark it mutating or fix it")); } }
     r
+}
+
+/// Structured variant of `dispatch`: same behaviour, same error text, plus a code, the offending parameter and a hint (unit 5 step 1).
+pub fn dispatch_ex(ss: &mut Session, name: &str, args: &Value) -> Result<Value, crate::errors::ToolError> {
+    dispatch(ss, name, args).map_err(|m| {
+        let mut e = crate::errors::ToolError::from(m);
+        match e.code {
+            "unknown_tool" => { let names: Vec<String> = registry_ref().iter().map(|c| c.name.to_string()).collect(); e.hint = Some(format!("nearest tools: {}", crate::errors::nearest(name, &names, 3).join(", "))); }
+            "missing_arg" => { if let Some(c) = registry_ref().iter().find(|c| c.name == name) { let req: Vec<String> = c.schema.get("required").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(); let mut h = format!("required arguments: {}", req.join(", ")); for k in unknown_args(name, args) { let r = crate::errors::nearest(&k, &req, 1); if let Some(n) = r.first() { if crate::errors::lev_pub(&k, n) <= 3 && e.param.as_deref() == Some(n.as_str()) { h.push_str(&format!("; did you mean '{n}' instead of '{k}'?")); } } } e.hint = Some(h); } }
+            "not_found" => {
+                let lower = e.message.to_lowercase(); let (kind, ids): (&str, Vec<String>) = if lower.contains("track") { ("track", ss.project.tracks.iter().map(|t| t.id.clone()).collect()) } else if lower.contains("clip") { ("clip", ss.project.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.id.clone()).collect()) } else { ("", vec![]) };
+                if !kind.is_empty() { let key = args.as_object().and_then(|o| o.iter().find(|(k, v)| k.ends_with(&format!("{kind}_id")) && v.as_str().map(|s| !ids.iter().any(|i| i == s)).unwrap_or(false)).map(|(k, _)| k.clone())); e.param = key; e.hint = Some(format!("valid {kind} ids (up to 10): {}", ids.iter().take(10).cloned().collect::<Vec<_>>().join(", "))); }
+            }
+            "invalid_value" => {
+                if let Some(r) = e.message.split("Valid: ").nth(1) { e.param = Some(if e.message.starts_with("unknown shape") { "shape".into() } else if e.message.starts_with("unknown clip property") || e.message.starts_with("unknown property") { "property".into() } else { "value".into() }); e.hint = Some(format!("valid values: {}", r.trim_end_matches('.'))); }
+                else if let Some(k) = e.message.strip_prefix("unknown effect '").and_then(|r| r.split('\'').next()).map(String::from) {
+                    let kinds: Vec<String> = dispatch(ss, "list_effects", &json!({})).ok().and_then(|v| v.as_array().map(|a| a.iter().filter_map(|x| x.get("kind").and_then(|k| k.as_str()).map(String::from)).collect())).unwrap_or_default(); e.param = Some("kind".into()); e.hint = Some(format!("nearest effect kinds: {}", crate::errors::nearest(&k, &kinds, 3).join(", "))); }
+            }
+            _ => {}
+        }
+        e
+    })
 }
