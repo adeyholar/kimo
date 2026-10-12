@@ -61,9 +61,11 @@ fn mem_available() -> Option<usize> { std::fs::read_to_string("/proc/meminfo").o
 /// Decide how an export can run before any frame is rendered: `(workers, low_memory)` or an explanatory error. The usable memory is the smaller of the
 /// remaining heap budget and the kernel's MemAvailable, minus the encoder child (which the counting allocator cannot see). `low_memory` is turned on
 /// automatically when only the lighter encoder fits. With no budget installed (library use) there is no limit.
-pub fn export_plan(w: u32, h: u32, cpus: usize, want_low: bool) -> Result<(usize, bool), String> {
+pub fn export_plan(w: u32, h: u32, cpus: usize, want_low: bool) -> Result<(usize, bool), String> { export_plan_n(w, h, cpus, want_low, FRAME_BUFFERS_SAFE) }
+/// `export_plan` with an explicit per-frame buffer count (see `render::frame_buffers`).
+pub fn export_plan_n(w: u32, h: u32, cpus: usize, want_low: bool, bufs: usize) -> Result<(usize, bool), String> {
     let b = BUDGET.load(Relaxed); if b == usize::MAX { return Ok((cpus.max(1), want_low)); }
-    let px = (w as usize).saturating_mul(h as usize); let per = px.saturating_mul(16 * 12).max(1);
+    let px = (w as usize).saturating_mul(h as usize); let per = px.saturating_mul(16 * bufs.max(1)).max(1);
     let scale = |full: usize| ((full as u128 * px as u128) / (1920u128 * 1080)) as usize;
     let avail = b.saturating_sub(LIVE.load(Relaxed)).min(mem_available().unwrap_or(usize::MAX));
     let try_with = |low: bool| { let reserve = scale(if low { ENCODER_RSS_1080P_LOW } else { ENCODER_RSS_1080P }); if avail >= reserve + per { Some(((avail - reserve) / per).clamp(1, cpus.max(1))) } else { None } };
@@ -73,7 +75,10 @@ pub fn export_plan(w: u32, h: u32, cpus: usize, want_low: bool) -> Result<(usize
     Err(format!("export of {w}x{h} needs about {} MB (one frame worker plus the encoder, low_memory), but only {} MB is available (budget {} MB, KIMO_MEM_MB; kernel free memory counted); lower the resolution or raise KIMO_MEM_MB", need >> 20, avail >> 20, b >> 20))
 }
 /// Worker threads for a frame-parallel export: each in-flight frame needs about 12 full-frame f32 buffers (16 bytes per pixel each), so the count is limited by the free memory budget (at least 1).
-pub fn export_threads(w: u32, h: u32, cpus: usize) -> usize { let b = BUDGET.load(Relaxed); if b == usize::MAX { return cpus.max(1); } let per = (w as usize).saturating_mul(h as usize).saturating_mul(16 * 12).max(1); (b.saturating_sub(LIVE.load(Relaxed)) / per).clamp(1, cpus.max(1)) }
+/// Full-frame f32 buffers one in-flight frame is assumed to hold when nothing better is known (kept for any scene that is not fully measured).
+pub const FRAME_BUFFERS_SAFE: usize = 12;
+pub fn export_threads(w: u32, h: u32, cpus: usize) -> usize { export_threads_n(w, h, cpus, FRAME_BUFFERS_SAFE) }
+pub fn export_threads_n(w: u32, h: u32, cpus: usize, bufs: usize) -> usize { let b = BUDGET.load(Relaxed); if b == usize::MAX { return cpus.max(1); } let per = (w as usize).saturating_mul(h as usize).saturating_mul(16 * bufs.max(1)).max(1); (b.saturating_sub(LIVE.load(Relaxed)) / per).clamp(1, cpus.max(1)) }
 
 /// Panic (caught by `safe_dispatch`) when over the memory budget or cancelled. Cheap; call from loops that allocate or run long.
 #[inline] pub fn check() { if TOKEN.with(|t| t.borrow().as_ref().map_or(false, |c| c.load(Relaxed))) { panic!("cancelled: call exceeded its time limit"); } let b = BUDGET.load(Relaxed); if b != usize::MAX && LIVE.load(Relaxed) > b { panic!("memory budget exceeded: {} MB live of {} MB allowed (raise with KIMO_MEM_MB)", LIVE.load(Relaxed) >> 20, b >> 20); } }

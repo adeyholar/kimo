@@ -1,0 +1,30 @@
+//! V3-0 step 0: in-process render bench (no MCP, no ffmpeg). 30 frames per scene at 1280x720 and 1920x1080, one thread, best of 3 passes, ms/frame.
+//! Run: cargo test --release --test render_bench -- --ignored --nocapture
+use kimo_core::commands::{dispatch, Session};
+use kimo_core::render::{render_frame, Cache};
+use serde_json::json;
+
+static mut WH: (u32,u32) = (1920,1080); fn wh()->(u32,u32){unsafe{WH}}
+fn c(s: &mut Session, n: &str, a: serde_json::Value) -> serde_json::Value { dispatch(s, n, &a).unwrap_or_else(|e| panic!("{n}: {e}")) }
+fn base() -> Session { let mut s = Session::new(); c(&mut s, "project_set", json!({"width": wh().0, "height": wh().1, "fps": 24})); s }
+fn simple() -> Session { let mut s = base(); let t = c(&mut s, "add_track", json!({}))["track_id"].clone(); c(&mut s, "add_clip", json!({"track_id": t, "source_type": "solid", "color": [0.2, 0.3, 0.5], "start": 0, "duration": 2})); s }
+fn glass() -> Session { let mut s = simple(); let t = c(&mut s, "add_track", json!({}))["track_id"].clone();
+    c(&mut s, "add_shard_burst", json!({"track_id": t, "start": 0, "duration": 2, "config": {"count": 120, "seed": 3, "env_reflection": 0.6}}));
+    let a = c(&mut s, "add_track", json!({}))["track_id"].clone(); let adj = c(&mut s, "add_adjustment_layer", json!({"track_id": a, "start": 0, "duration": 2}))["clip_id"].clone();
+    c(&mut s, "add_effect", json!({"clip_id": adj, "kind": "glow"})); s }
+fn adj_mask() -> Session { let mut s = base(); let t = c(&mut s, "add_track", json!({}))["track_id"].clone();
+    let cl = c(&mut s, "add_clip", json!({"track_id": t, "source_type": "solid", "color": [0.8, 0.3, 0.2], "start": 0, "duration": 2}))["clip_id"].clone();
+    c(&mut s, "add_mask", json!({"clip_id": cl, "kind": "ellipse", "feather": 40, "params": {"cx": 0.5, "cy": 0.5, "w": 0.6, "h": 0.6}}));
+    c(&mut s, "add_effect", json!({"clip_id": cl, "kind": "blur"}));
+    let a = c(&mut s, "add_track", json!({}))["track_id"].clone(); let adj = c(&mut s, "add_adjustment_layer", json!({"track_id": a, "start": 0, "duration": 2}))["clip_id"].clone();
+    c(&mut s, "add_effect", json!({"clip_id": adj, "kind": "blur"})); s }
+
+#[test] #[ignore] fn render_bench() {
+    for (w, h) in [(1280u32, 720u32), (1920, 1080)] { unsafe { WH = (w, h); }
+        for (name, s) in [("simple", simple()), ("glass+adjustment", glass()), ("adjustment+mask", adj_mask())] {
+            if let Ok(only) = std::env::var("BENCH_ONLY") { if !format!("{w}x{h} {name}").contains(&only) { continue; } }
+            let mut best = f64::MAX; for _ in 0..std::env::var("BENCH_PASSES").ok().and_then(|v| v.parse().ok()).unwrap_or(3) { let cache = Cache::new(); let t = std::time::Instant::now(); for i in 0..30 { let f = render_frame(&s.project, i as f64 / 24.0, &cache).unwrap(); std::hint::black_box(&f); } best = best.min(t.elapsed().as_secs_f64() * 1000.0 / 30.0); }
+            eprintln!("BENCH {w}x{h} {name}: {best:.1} ms/frame");
+        }
+    }
+}

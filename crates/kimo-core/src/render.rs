@@ -519,7 +519,7 @@ pub fn export_alpha(p: &Project, path: &str, format: &str, t_in: f64, t_out: f64
     }
     let frame_bytes = (p.width as usize).checked_mul(p.height as usize).and_then(|v| v.checked_mul(4)).ok_or("frame overflow")?;
     let mut encoder = crate::color::process::EncodeStream::new(&mut cmd, frame_bytes, crate::color::process::encode_deadline(n))?;
-    let mut cache = Cache::new_export(); let nt = crate::guard::export_threads(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1)); let mut i = 0;
+    let mut cache = Cache::new_export(); let nt = crate::guard::export_threads_n(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1), frame_buffers(p)); let mut i = 0;
     while i < n {
         crate::guard::check(); let mut end = (i + nt * 4).min(n);
         loop { let last = (f0 + end - 1) as f64 / p.fps; match prepare_export_range(p, &mut cache, (f0 + i) as f64 / p.fps, last) { Ok(()) => break, Err(e) if end - i > 1 && (e.contains("cache budget") || e.contains("memory cap") || e.contains("bounded cache")) => { end = i + (end - i).div_ceil(2); cache = Cache::new_export(); }, Err(e) => return Err(e) } }
@@ -552,6 +552,25 @@ pub fn join_export(p: &Project, parts: &[String], path: &str, start: f64) -> Res
     Ok(frames as f64 / fps0)
 }
 
+/// Full-frame f32 buffers one in-flight frame needs, for sizing export workers. Measured on 1080p (tests/frame_live_peak.rs): plain generators 2.0,
+/// glass shards + glow/blur/bloom adjustment stacks up to 5.5, precomp depth 3 = 8, motion blur 4.25, 3D 3.0. Only scenes fully inside the measured
+/// set get a lower figure (ceil(1.5 x measured), floor 4): 4 for bare generators, 9 for the measured effect/mask/shard/adjustment set.
+/// Anything else (media, precomps, motion blur, 3D, other effects, grade graphs, echo, transitions) keeps the safe 12.
+pub fn frame_buffers(p: &Project) -> usize {
+    use crate::model::Source;
+    const SAFE: usize = crate::guard::FRAME_BUFFERS_SAFE;
+    if !p.camera.is_empty() { return SAFE; }
+    let mut rich = false;
+    for t in &p.tracks { for c in &t.clips {
+        match &c.source { Source::Solid { .. } | Source::Gradient { .. } | Source::Shape { .. } => {}, Source::Adjustment | Source::ShardBurst(_) => rich = true, _ => return SAFE }
+        if c.motion_blur != 0.0 || c.corners.is_some() || c.grade_graph.is_some() || c.echo.is_some() || c.motion_path.is_some() || c.transition_in.is_some() || c.text_fx.is_some() { return SAFE; }
+        if c.props.keys().any(|k| ["rot_x", "rot_y", "pos_z", "flow_blur"].contains(&k.as_str())) { return SAFE; }
+        if c.mask.is_some() { rich = true; }
+        for e in &c.effects { if !["glow", "blur", "bloom", "exposure"].contains(&e.kind.as_str()) { return SAFE; } rich = true; }
+    } }
+    if rich { 9 } else { 4 }
+}
+
 pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> { export_range(p, path, crf, 0.0, p.duration()) }
 pub fn export_opts(p: &Project, path: &str, crf: u32, low_memory: bool) -> Result<f64, String> { export_range_opts(p, path, crf, 0.0, p.duration(), low_memory, true) }
 /// Export [t_in, t_out) seconds. Frame k renders at t_in + k/fps (absolute time, so frames equal the same frames of a full export).
@@ -561,7 +580,7 @@ pub fn export_range_opts(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f6
     let t_out = t_out.min(p.duration()); if t_in >= t_out { return Err("range starts after the end of the timeline".into()); }
     let f0 = (t_in * p.fps).round() as usize; let f1 = ((t_out * p.fps).round() as usize).max(f0 + 1);
     if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) { return Err("HDR delivery requires export_high_bit; legacy export is 8-bit SDR".into()); }
-    let (_workers, low_memory) = crate::guard::export_plan(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2), low_memory)?;
+    let (_workers, low_memory) = crate::guard::export_plan_n(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2), low_memory, frame_buffers(p))?;
     let command=legacy_encoder_command_opts(p,path,crf,low_memory)?;
     export_range_cmd(p, path, f0, f1, command, false, with_audio)
 }
@@ -573,7 +592,7 @@ pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mu
     let n = f1 - f0;
     let frame_bytes=(p.width as usize).checked_mul(p.height as usize).and_then(|v|v.checked_mul(4)).ok_or("legacy encoder frame overflow")?;
     let mut encoder=crate::color::process::EncodeStream::new(&mut command,frame_bytes,crate::color::process::encode_deadline(n))?;
-    let nt = crate::guard::export_threads(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1));
+    let nt = crate::guard::export_threads_n(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1), frame_buffers(p));
     let mut i = 0;
     while i < n {
         crate::guard::check();
