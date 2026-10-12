@@ -10,6 +10,7 @@ fn quoted(s: &str) -> Option<String> { let a = s.find('\'')?; let b = s[a + 1..]
 /// Classify an error text by prefix/pattern. Returns (code, param).
 pub fn classify(m: &str) -> (&'static str, Option<String>) {
     if m.contains("has no time; use set_keyframe") { return ("invalid_argument_combo", Some("time".to_string())); }
+    if m.starts_with("time must be >= 0") { return ("out_of_range", Some("time".to_string())); }
     if m.starts_with("unknown argument") { return ("unknown_argument", quoted(m)); }
     if m.starts_with("unknown tool") { return ("unknown_tool", quoted(m).map(|_| "tool".to_string())); }
     if m.starts_with("rejected by sandbox") { return ("sandbox_rejected", None); }

@@ -734,6 +734,9 @@ fn build_registry() -> Vec<Command> {
     ]; v.extend(crate::edit::commands()); v.extend(crate::colortools::commands()); v.push(crate::color::scope_command::command()); v.extend(crate::ext::commands()); v
 }
 
+/// Keyframe tools whose `time` is clip-local seconds and cannot be negative.
+const KEYFRAME_TOOLS: [&str; 8] = ["set_keyframe", "set_keyframe_bezier", "set_mask_keyframe", "set_mask_prop_key", "set_mask_path_key", "set_animator_keyframe", "set_camera_keyframe", "set_audio_volume_key"];
+
 /// Public entry: runs the tool and unifies the wording of not-found and OS errors (unit 5 commit B).
 pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
     let unknown = unknown_args(name, args);
@@ -741,6 +744,7 @@ pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, Str
         if let Ok(p) = std::env::var("KIMO_AUDIT_ARGS") { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) { for k in &unknown { let _ = writeln!(f, "{name} {k}"); } } }
         if std::env::var("KIMO_STRICT_ARGS").map(|v| v == "1").unwrap_or(false) { return Err(unknown_arg_text(name, &unknown[0])); }
     }
+    if KEYFRAME_TOOLS.contains(&name) { if let Some(t) = args.get("time").and_then(|v| v.as_f64()) { if t < 0.0 { return Err(format!("time must be >= 0 (clip-local seconds), got {t}")); } } }
     let mut r = dispatch_inner(ss, name, args).map_err(|m| polish_error(ss, args, m))?;
     if !unknown.is_empty() { if let Some(o) = r.as_object_mut() { o.insert("warnings".into(), json!(unknown.iter().map(|k| format!("ignored {}", unknown_arg_text(name, k))).collect::<Vec<_>>())); } }
     Ok(r)
