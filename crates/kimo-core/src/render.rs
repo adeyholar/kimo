@@ -517,7 +517,7 @@ pub fn export_alpha(p: &Project, path: &str, format: &str, t_in: f64, t_out: f64
     }
     let frame_bytes = (p.width as usize).checked_mul(p.height as usize).and_then(|v| v.checked_mul(4)).ok_or("frame overflow")?;
     let mut encoder = crate::color::process::EncodeStream::new(&mut cmd, frame_bytes, crate::color::process::encode_deadline(n))?;
-    let mut cache = Cache::new_export(); let nt = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1); let mut i = 0;
+    let mut cache = Cache::new_export(); let nt = crate::guard::export_threads(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1)); let mut i = 0;
     while i < n {
         crate::guard::check(); let mut end = (i + nt * 4).min(n);
         loop { let last = (f0 + end - 1) as f64 / p.fps; match prepare_export_range(p, &mut cache, (f0 + i) as f64 / p.fps, last) { Ok(()) => break, Err(e) if end - i > 1 && (e.contains("cache budget") || e.contains("memory cap") || e.contains("bounded cache")) => { end = i + (end - i).div_ceil(2); cache = Cache::new_export(); }, Err(e) => return Err(e) } }
@@ -548,7 +548,7 @@ pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mu
     let n = f1 - f0;
     let frame_bytes=(p.width as usize).checked_mul(p.height as usize).and_then(|v|v.checked_mul(4)).ok_or("legacy encoder frame overflow")?;
     let mut encoder=crate::color::process::EncodeStream::new(&mut command,frame_bytes,crate::color::process::encode_deadline(n))?;
-    let nt = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1);
+    let nt = crate::guard::export_threads(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1));
     let mut i = 0;
     while i < n {
         crate::guard::check();

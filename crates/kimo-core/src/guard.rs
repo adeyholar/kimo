@@ -10,13 +10,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 
 pub static LIVE: AtomicUsize = AtomicUsize::new(0);
 pub static BUDGET: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Hard allocation ceiling (backstop). Set in `init`: never above 85% of physical RAM, so the guard refuses before the kernel OOM killer fires.
+pub static HARD: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// Counting allocator. Install in a binary with `#[global_allocator] static A: kimo_core::guard::Counting = kimo_core::guard::Counting;`.
 pub struct Counting;
 unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, l: Layout) -> *mut u8 { let b = BUDGET.load(Relaxed); if b != usize::MAX && LIVE.load(Relaxed).saturating_add(l.size()) > b.saturating_add(b / 4).saturating_add(512 << 20) { return std::ptr::null_mut(); } let p = System.alloc(l); if !p.is_null() { LIVE.fetch_add(l.size(), Relaxed); } p }
-    unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 { let b = BUDGET.load(Relaxed); if b != usize::MAX && LIVE.load(Relaxed).saturating_add(l.size()) > b.saturating_add(b / 4).saturating_add(512 << 20) { return std::ptr::null_mut(); } let p = System.alloc_zeroed(l); if !p.is_null() { LIVE.fetch_add(l.size(), Relaxed); } p }
+    unsafe fn alloc(&self, l: Layout) -> *mut u8 { let b = BUDGET.load(Relaxed); if b != usize::MAX && LIVE.load(Relaxed).saturating_add(l.size()) > HARD.load(Relaxed) { return std::ptr::null_mut(); } let p = System.alloc(l); if !p.is_null() { LIVE.fetch_add(l.size(), Relaxed); } p }
+    unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 { let b = BUDGET.load(Relaxed); if b != usize::MAX && LIVE.load(Relaxed).saturating_add(l.size()) > HARD.load(Relaxed) { return std::ptr::null_mut(); } let p = System.alloc_zeroed(l); if !p.is_null() { LIVE.fetch_add(l.size(), Relaxed); } p }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) { System.dealloc(p, l); LIVE.fetch_sub(l.size(), Relaxed); }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 { let np = System.realloc(p, l, n); if !np.is_null() { if n >= l.size() { LIVE.fetch_add(n - l.size(), Relaxed); } else { LIVE.fetch_sub(l.size() - n, Relaxed); } } np }
 }
@@ -30,10 +32,12 @@ fn total_mem() -> usize {
     m
 }
 impl Limits { pub fn from_env() -> Self { Limits { max_num: env("KIMO_MAX_NUM", 1e8), max_array: env("KIMO_MAX_ARRAY", 200_000), max_string: env("KIMO_MAX_STRING", 8 << 20), max_depth: env("KIMO_MAX_DEPTH", 40), max_pixels: env("KIMO_MAX_PIXELS", 40_000_000), max_fps: env("KIMO_MAX_FPS", 480.0), max_clips: env("KIMO_MAX_CLIPS", 200_000), max_duration_s: env("KIMO_MAX_DURATION_S", 86_400.0),
-    mem_bytes: env::<usize>("KIMO_MEM_MB", 0).checked_mul(1 << 20).filter(|v| *v > 0).unwrap_or(total_mem() / 10 * 7), timeout_s: env("KIMO_TIMEOUT_S", 600), export_timeout_s: env("KIMO_EXPORT_TIMEOUT_S", 7200) } } }
+    mem_bytes: env::<usize>("KIMO_MEM_MB", 0).checked_mul(1 << 20).filter(|v| *v > 0).unwrap_or(total_mem() / 100 * 55), timeout_s: env("KIMO_TIMEOUT_S", 600), export_timeout_s: env("KIMO_EXPORT_TIMEOUT_S", 7200) } } }
 pub fn limits() -> &'static Limits { static L: std::sync::OnceLock<Limits> = std::sync::OnceLock::new(); L.get_or_init(Limits::from_env) }
 /// Set the memory budget from the limits (called once at server start).
-pub fn init() { BUDGET.store(limits().mem_bytes, Relaxed); }
+pub fn init() { let b = limits().mem_bytes; BUDGET.store(b, Relaxed); HARD.store(b.saturating_add(b / 4).saturating_add(512 << 20).min(total_mem() / 100 * 85), Relaxed); }
+/// Worker threads for a frame-parallel export: each in-flight frame needs about 12 full-frame f32 buffers (16 bytes per pixel each), so the count is limited by the free memory budget (at least 1).
+pub fn export_threads(w: u32, h: u32, cpus: usize) -> usize { let b = BUDGET.load(Relaxed); if b == usize::MAX { return cpus.max(1); } let per = (w as usize).saturating_mul(h as usize).saturating_mul(16 * 12).max(1); (b.saturating_sub(LIVE.load(Relaxed)) / per).clamp(1, cpus.max(1)) }
 
 /// Panic (caught by `safe_dispatch`) when over the memory budget or cancelled. Cheap; call from loops that allocate or run long.
 #[inline] pub fn check() { if CANCEL.load(Relaxed) { panic!("cancelled: call exceeded its time limit"); } let b = BUDGET.load(Relaxed); if b != usize::MAX && LIVE.load(Relaxed) > b { panic!("memory budget exceeded: {} MB live of {} MB allowed (raise with KIMO_MEM_MB)", LIVE.load(Relaxed) >> 20, b >> 20); } }
