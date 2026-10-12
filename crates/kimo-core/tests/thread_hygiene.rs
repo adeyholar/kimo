@@ -35,3 +35,15 @@ impl Drop for Stopped<'_> { fn drop(&mut self) { self.0.fetch_add(1, SeqCst); } 
     assert!(guard::with_token(&a, || std::panic::catch_unwind(|| guard::check())).is_err());
     assert!(std::panic::catch_unwind(|| guard::check()).is_ok(), "no token installed means never cancelled");
 }
+
+/// V3-2 gate: thread_local! statics are per-render state hiding in thread storage. The current ones are inventoried below (render_state_leak.rs proves they do not
+/// leak between renders or change with the worker count). A new one needs either an entry here with a reason, or a `// thread-local-ok: <reason>` comment on the line above.
+#[test] fn no_new_thread_locals_outside_the_inventory() {
+    let allowed: &[(&str, usize)] = &[("render.rs", 6), ("frosted.rs", 3), ("shards.rs", 6), ("guard.rs", 1), ("lighting.rs", 1), ("particles.rs", 3)];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"); let mut files = vec![]; walk(&root, &mut files); let mut bad = vec![];
+    for f in files { let text = std::fs::read_to_string(&f).unwrap(); let lines: Vec<&str> = text.lines().collect();
+        let n = lines.iter().enumerate().filter(|(i, l)| l.contains("thread_local!") && !(*i > 0 && lines[i - 1].contains("thread-local-ok:"))).count();
+        let name = f.file_name().unwrap().to_str().unwrap(); let ok = allowed.iter().find(|a| a.0 == name).map_or(0, |a| a.1);
+        if n > ok { bad.push(format!("{}: {n} thread_local! (allowed {ok})", f.display())); } }
+    assert!(bad.is_empty(), "new thread_local! statics: {bad:?}");
+}

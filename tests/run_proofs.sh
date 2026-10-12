@@ -10,4 +10,5 @@ for f in ${@:-tests/*_proof.py}; do
   if [ "$before" != "$after" ]; then echo "STRAY FILES after $f:"; diff <(echo "$before") <(echo "$after"); fail=1; before=$after; fi
   [ $rc -ne 0 ] && { echo "FAIL rc=$rc $f"; fail=1; }
 done
+[ -z "$1" ] && command -v cargo >/dev/null && { cargo test --release -p kimo-core --test render_state_leak >/tmp/proof_leak.txt 2>&1 || { echo "FAIL render_state_leak (see /tmp/proof_leak.txt)"; fail=1; }; }
 exit $fail
