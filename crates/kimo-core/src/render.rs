@@ -155,7 +155,7 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
         let peak=bytes_per_frame.checked_mul(2).and_then(|v|v.checked_add(raw_fs.checked_mul(4)?)).and_then(|v|v.checked_add(fs.checked_mul(4)?.checked_mul(n.max(1).checked_add(1)?)?)).ok_or("native streaming allocation overflow")?;
         crate::guard::reserve(peak);
         let mut stream=crate::color::process::DecodeStream::new(&mut command,bytes_per_frame,n.max(1),crate::color::process::decode_deadline(n.max(1)))?;
-        let mut values=Vec::with_capacity(fs*n.max(1));
+        let mut values:Vec<f32>=Vec::new();values.try_reserve_exact(fs.checked_mul(n.max(1)).ok_or("decode buffer size overflow")?).map_err(|e|format!("cannot allocate the decode buffer for {n} frames ({} MB): {e}",fs.saturating_mul(n.max(1)).saturating_mul(4)>>20))?;
         while let Some(frame)=stream.next()?{
          let d=if float_source{crate::color::interchange::unpack(&frame,dw,dh)}else{converter.as_ref().ok_or("missing integer input converter")?.decode(&frame)};
          let fitted=d.and_then(|d|{let mut source=Frame{w:dw,h:dh,d};if float_source{crate::color::pipeline::input(p,c,&mut source)?;}crate::color::interchange::fit(&source,w as usize,h as usize,fit)});values.extend(fitted?);

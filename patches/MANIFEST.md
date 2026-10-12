@@ -30,3 +30,12 @@ Each remote branch is a single-commit snapshot on top of main (web upload); each
 
 Tool count: 263 on arch-u10 (README says 255, update at merge time).
 | v2 | this branch | main + whole stack u1-u18 + test fix (grade_scopes: Arc<Clip>, delete clears refs) | consolidated, main untouched |
+
+## v3 (single moving branch, from the v2 tip)
+| unit | commit | what | notes |
+|---|---|---|---|
+| 6a | bcf8d88 | RenderCtx replaces WORK_LINEAR; per-call Cancel token, guard::spawn_with_token / scope_spawn; render_purity (fails-first, 227/400 wrong on old code), render_ctx_key, thread_hygiene | no output change; golden 30 frames unchanged |
+| neg-time | b582933 | keyframe tools reject negative time (out_of_range) | also on v2 as dc6d4ba |
+| merge | merge of v2 3d26215 | export memory (ceiling, budget, low_memory, export_plan), audio:false, join_export, AAC -shortest fix | one conflict (guard.rs) resolved |
+| M3 | e1b4d99 | frame_buffers(project) 4/9/12 planner, frame_live_peak (8 scenes, worst precomp depth 3 = 8.0), render_bench | simple 1080p: 1 -> 2 workers on the 2 GB box |
+| M1/M5c | 9af7178 | Frame::try_new (Err not abort), worker_identical_proof, ranged-export proof | decode buffers still plain Vec |
