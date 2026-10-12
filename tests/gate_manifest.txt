@@ -159,3 +159,4 @@ py gate_check.py fast
 py gate_run.py helper # the gate runner itself
 py id_continuity_proof.py fast
 py cli_proof.py fast
+py inline_proof.py fast

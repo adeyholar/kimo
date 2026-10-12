@@ -3,6 +3,7 @@
 //! Every tool call runs on a worker thread under the sandbox layer (kimo_core::guard): argument sanitizer, project limits with
 //! rollback, memory budget, panic catching, and a wall-clock time limit with cooperative cancel (hard exit as the last resort).
 use kimo_core::commands::{dispatch, registry, Session};
+mod inline;
 use kimo_core::toolgroups;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -19,7 +20,13 @@ fn run_guarded(ss: &Arc<Mutex<Session>>, name: &str, args: &Value, out: &mut imp
             let _ = writeln!(out, "{msg}"); let _ = out.flush(); std::process::exit(124); }
     };
     match r {
-        Ok(v) => json!({"content":[{"type":"text","text":serde_json::to_string(&v).unwrap()}],"isError":false}),
+        Ok(v) => { let media = { let mut g = ss.lock().unwrap_or_else(|e| e.into_inner()); std::mem::take(&mut g.media) };
+            let mut content = vec![json!({"type":"text","text":serde_json::to_string(&v).unwrap()})];
+            if media.is_empty() { return json!({"content":content,"isError":false}); }
+            let (blk, ent, notes) = inline::blocks(&media, args); content.extend(blk);
+            if !notes.is_empty() { content.push(json!({"type":"text","text":notes.join("; ")})); }
+            let mut sc = ent[0].clone(); sc["time"] = args.get("time").cloned().unwrap_or(Value::Null); if ent.len() > 1 { sc = json!({"images": ent}); }
+            json!({"content":content,"structuredContent":sc,"isError":false}) }
         Err(e) => json!({"content":[{"type":"text","text":e.message}],"isError":true,"structuredContent":{"code":e.code,"param":e.param,"hint":e.hint}}),
     }
 }

@@ -16,7 +16,10 @@ mod tools_4;
 pub fn fnv64(b: &[u8]) -> u64 { let mut h = 0xcbf29ce484222325u64; for x in b { h ^= *x as u64; h = h.wrapping_mul(0x100000001b3); } h }
 struct FnvWriter<W: std::io::Write> { inner: W, h: u64 }
 impl<W: std::io::Write> std::io::Write for FnvWriter<W> { fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { let n = self.inner.write(b)?; for x in &b[..n] { self.h ^= *x as u64; self.h = self.h.wrapping_mul(0x100000001b3); } Ok(n) } fn flush(&mut self) -> std::io::Result<()> { self.inner.flush() } }
-pub struct Session { pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache, pub fcache: crate::framecache::FrameCache,
+/// Image produced by a tool call: path on disk plus size. Never bytes: only the protocol layer encodes it. Cleared at the start of every dispatch.
+#[derive(Clone, Debug)]
+pub struct Media { pub path: String, pub w: u32, pub h: u32, pub mime: &'static str }
+pub struct Session { pub media: Vec<Media>, pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache, pub fcache: crate::framecache::FrameCache,
     /// One label per undo / redo entry (tool name, plus clip id when given), parallel to `undo` / `redo`.
     pub undo_labels: Vec<String>, pub redo_labels: Vec<String>,
     /// Named snapshots of the whole project: (name, project, label of the history position when taken).
@@ -25,7 +28,7 @@ pub struct Session { pub project: Project, pub undo: Vec<Project>, pub redo: Vec
     pub snap_sz: usize, pub snap_n: u32, pub snap_clips: usize,
     /// Build that first saved the loaded/current project (kept across re-saves); None until a save or a load sets it.
     pub created_with: Option<serde_json::Value> }
-impl Session { pub fn new() -> Self { Session { project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), fcache: crate::framecache::FrameCache::new(crate::framecache::default_cap()), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0, created_with: None } } }
+impl Session { pub fn new() -> Self { Session { media: vec![], project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), fcache: crate::framecache::FrameCache::new(crate::framecache::default_cap()), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0, created_with: None } } }
 const MAX_CHECKPOINTS: usize = 24;
 
 #[derive(Clone)]
@@ -95,6 +98,7 @@ const KEYFRAME_TOOLS: [&str; 8] = ["set_keyframe", "set_keyframe_bezier", "set_m
 
 /// Public entry: runs the tool and unifies the wording of not-found and OS errors (unit 5 commit B).
 pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
+    ss.media.clear();
     let unknown = unknown_args(name, args);
     if !unknown.is_empty() {
         if let Ok(p) = std::env::var("KIMO_AUDIT_ARGS") { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) { for k in &unknown { let _ = writeln!(f, "{name} {k}"); } } }
