@@ -43,3 +43,7 @@
 42 delete_clip {"clipid":"x"}	missing string 'clip_id'
 43 cache_set_budget {}	missing number 'megabytes'
 44 cache_set_budget {"megabytes":-1.0}	megabytes must be >= 0, got -1
+45 collect_project {}	missing string 'dest_dir'
+46 collect_project {"dest_dir":"/tmp"}	dest_exists: '/tmp' is not empty; pass overwrite:true to replace a previous collect
+47 collect_project {"copy":"zip","dest_dir":"/tmp/kimo_err_row"}	invalid_argument: copy must be copy|link, got 'zip'
+48 relink_media {"match":"fuzzy","search_dirs":["/tmp"]}	invalid_argument: match must be name_size_hash|name|hash, got 'fuzzy'

@@ -14,7 +14,7 @@ pub fn font_dirs() -> Vec<std::path::PathBuf> { let mut v = vec![]; if let Ok(d)
 fn scan(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: usize) { if depth > 4 { return; } if let Ok(rd) = std::fs::read_dir(dir) { for e in rd.flatten() { let p = e.path(); if p.is_dir() { scan(&p, out, depth + 1); } else if matches!(p.extension().and_then(|x| x.to_str()), Some("ttf") | Some("otf") | Some("TTF") | Some("OTF")) { out.push(p); } } } }
 pub fn all_fonts() -> Vec<(String, std::path::PathBuf)> { let mut files = vec![]; for d in font_dirs() { scan(&d, &mut files, 0); } let mut seen = std::collections::HashSet::new(); let mut v = vec![];
     for p in files { let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string(); let n = norm(&stem); if seen.insert(n.clone()) { v.push((stem, p)); } } v.sort_by(|a, b| a.0.cmp(&b.0)); v }
-pub fn resolve_font(name: &str) -> String { if std::path::Path::new(name).is_file() { return name.into(); } let want = norm(name); let fonts = all_fonts();
+pub fn resolve_font(name: &str) -> String { if std::path::Path::new(name).is_file() { return name.into(); } if crate::deps::font_is_path(name) { let r = crate::deps::resolve_str(name); if std::path::Path::new(&r).is_file() { return r; } } let want = norm(name); let fonts = all_fonts();
     if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s) == want) { return p.to_string_lossy().into(); }
     if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s).starts_with(&want)) { return p.to_string_lossy().into(); }
     if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s) == "montserrat") { return p.to_string_lossy().into(); }

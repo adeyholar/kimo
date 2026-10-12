@@ -13,6 +13,12 @@ pub fn classify(m: &str) -> (&'static str, Option<String>) {
     if m.starts_with("time must be >= 0") { return ("out_of_range", Some("time".to_string())); }
     if m.starts_with("unknown argument") { return ("unknown_argument", quoted(m)); }
     if m.starts_with("unknown tool") { return ("unknown_tool", quoted(m).map(|_| "tool".to_string())); }
+    // RV-7 delivery codes
+    if m.starts_with("dest_exists:") { return ("dest_exists", Some("dest_dir".to_string())); }
+    if m.starts_with("disk_space_low:") { return ("disk_space_low", None); }
+    if m.starts_with("ambiguous_match:") { return ("ambiguous_match", None); }
+    if m.starts_with("font_license:") { return ("font_license", None); }
+    if let Some(r) = m.strip_prefix("invalid_argument: ") { let _ = r; return ("invalid_value", None); }
     if m.starts_with("rejected by sandbox") { return ("sandbox_rejected", None); }
     if m.contains("failed safely") { return ("internal_panic", None); }
     if m.contains("stopped: exceeded") || m.contains("hung past") { return ("timeout", None); }

@@ -20,7 +20,7 @@ pub fn key(p: &Project, t: f64, transparent: bool) -> u128 {
     let v = serde_json::to_value(p).unwrap_or(Value::Null); let json = serde_json::to_vec(&v).unwrap_or_default();
     let (mut a, mut b) = fnv128(&json, 0xcbf29ce484222325, 0x84222325cbf29ce4);
     let mut paths = vec![]; collect_paths(&v, &mut paths); paths.sort(); paths.dedup();
-    for s in &paths { if let Ok(m) = std::fs::metadata(s) { if m.is_file() { let mt = m.modified().ok().and_then(|x| x.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+    for s in &paths { if let Ok(m) = std::fs::metadata(p.resolve(s)) { if m.is_file() { let mt = m.modified().ok().and_then(|x| x.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
         let rec = format!("{s}|{}|{mt}", m.len()); let r = fnv128(rec.as_bytes(), a, b); a = r.0; b = r.1; } } }
     let tail = [t.to_bits().to_le_bytes().as_slice(), &[transparent as u8]].concat(); let r = fnv128(&tail, a, b);
     ((r.0 as u128) << 64) | r.1 as u128

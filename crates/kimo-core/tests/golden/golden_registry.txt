@@ -50,6 +50,7 @@ camera_solve_info 68eba83a999378cc
 checkpoint 4063b9f4243b3a4e
 checkpoint_delete 22a3aee8d04e2bd6
 clear_path_keys f99ff5da3693043a
+collect_project 689e1f8dd545e887
 compare_aces2_reference 59ec416ff6c4de21
 compare_linear_exposure afcdd34f6dab8f45
 connect_nodes b6edfff20b9c6d1f
@@ -111,6 +112,7 @@ lift_range 76f97b3850975a47
 light_rig 2d21a8c90d40d65f
 list_camera_solves 492655c34a9e22aa
 list_captions 524db21fe840e247
+list_dependencies e1d49882f971c00d
 list_edit_points d4ad4058dd15f335
 list_effects 09b58718710daf36
 list_fonts 72b7c1ebd21fc6d3
@@ -124,7 +126,7 @@ list_multicam 8575d1fdef62185c
 list_shape_modifiers eca977ef4f45ce0c
 list_transitions e316853ba177f3f8
 lk_residual_audit 7564748acd003aa6
-load_project 3e097b0bb3a5146e
+load_project 231dc74f5980a8b3
 loop_clip 84a9f61420f1b87c
 match_color 7826baef90c3deb6
 match_grade d8125018a0c24142
@@ -143,6 +145,7 @@ project_set 00170b74c8eb4359
 rate_stretch 16dd93dcc17cb7ed
 redo 738dbd6488fa90b3
 refine_matte 287d456bc91a84c0
+relink_media 007d3b0771ae5694
 remove_audio_effect 0efeb2144dd5d9f7
 remove_effect e5c9246d4f7c20de
 remove_grade_node 96f0bed092feb2d4

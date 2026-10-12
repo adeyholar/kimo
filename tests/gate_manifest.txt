@@ -48,6 +48,7 @@ rust color_scopes full
 rust color_shoulder full
 rust color_wrapper full
 rust contact_shadow_validation full
+rust delivery fast
 rust display_scope full
 rust display_scope_cancellation full
 rust encode_contract full
@@ -55,6 +56,7 @@ rust enum_guard fast
 rust error_table fast
 rust export_memory_guard full
 rust ext_registry full
+rust external_refs fast
 rust film_response full
 rust finish_cancellation full
 rust frame_cache full
@@ -70,6 +72,7 @@ rust negative_keyframe_time full
 rust node_expansion full
 rust ocio_tool_registry full
 rust ocio_view full
+rust path_wiring fast
 rust readme_count fast
 rust registry_lint fast
 rust registry_unique full
@@ -100,6 +103,7 @@ py boundary_test.py full
 py cast_shadow_proof.py full
 py contract_fixes_proof.py fast
 py dead_arg_report.py helper # benchmark or data generator, not a pass/fail proof
+py delivery_proof.py full
 py discovery_metric.py fast
 py dispatch_latency_proof.py full
 py effect_param_warning_proof.py full

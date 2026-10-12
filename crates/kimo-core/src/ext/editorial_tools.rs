@@ -294,7 +294,7 @@ fn clip_pcm(ss: &Session, id: &str) -> Result<Vec<f32>, String> {
     let Source::Media { asset } = &c.source else {
         return Err("media clip required".into());
     };
-    let path = &ss.project.assets.get(asset).ok_or("no asset")?.path;
+    let path = &ss.project.resolve(&ss.project.assets.get(asset).ok_or("no asset")?.path);
     crate::audio::strict_decode(path, c).map_err(|e| e.to_string())
 }
 fn measure_loudness(ss: &mut Session, a: &Value) -> Result<Value, String> {
@@ -451,12 +451,7 @@ fn sync_clips_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
             let Source::Media { asset } = &c.source else {
                 return Err("audio sync requires media".into());
             };
-            let path = &ss
-                .project
-                .assets
-                .get(asset)
-                .ok_or("missing sync asset")?
-                .path;
+            let path = &ss.project.resolve(&ss.project.assets.get(asset).ok_or("missing sync asset")?.path);
             let mut clean = c.clone();
             clean.duration = c.duration.min(window);
             clean.audio = Audio::default();

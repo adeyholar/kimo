@@ -51,6 +51,13 @@ for name, a in seq:
 r = ok(sh('--json', 'call', 'render_frame', '--args', json.dumps({'path': D + '/cli.png', 'time': 1.0}), '--project', P_CLI), 'render_frame')
 r = ok(sh('--json', 'export', P_CLI, D + '/cli.mp4', '--range', '0:1'), 'export'); print('cli export:', r)
 assert H(P_CLI) == H(P_MCP), 'project bytes differ CLI vs MCP'; print('project sha256 identical', H(P_CLI)[:16])
+# 2b in-memory parity (F1): a long-running MCP session that NEVER reloads between calls gives the same ids and project bytes as the CLI (which loads each time)
+P_MEM = D + '/mem.kimo'; km = Kimo(); track = None
+for name, a in seq:
+    a = {x: (track if y == 'TRACK' else y) for x, y in a.items()}
+    r = km.call(name, **a); track = r.get('track_id', track) if isinstance(r, dict) else track
+km.call('save_project', path=P_MEM); km.close()
+assert H(P_CLI) == H(P_MEM), 'in-memory MCP session differs from CLI (id allocation after load?)'; print('in-memory MCP session == CLI project bytes', H(P_MEM)[:16])
 assert H(D + '/cli.png') == H(D + '/mcp.png'), 'frame bytes differ'; print('frame sha256 identical', H(D + '/cli.png')[:16])
 # export: compare decoded frames (container metadata may carry the file name), via ffmpeg framemd5
 def md5(p): return subprocess.run(['ffmpeg', '-v', 'error', '-i', p, '-map', '0:v', '-f', 'framemd5', '-'], capture_output=True, text=True).stdout

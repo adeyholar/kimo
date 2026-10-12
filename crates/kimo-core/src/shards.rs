@@ -251,7 +251,7 @@ pub fn tex_key(ctx: &RenderCtx, path: &str, region: [f64; 2]) -> String { format
 fn load_tex(ctx: &RenderCtx, path: &str, region: [f64; 2]) -> Option<std::sync::Arc<Tex>> {
     let wl = ctx.work_linear; let key = tex_key(ctx, path, region); if let Some((k, t)) = TEX.with(|c| c.borrow().clone()) { if k == key { return Some(t); } }
     let (w, hh) = ((region[0].round() as usize).clamp(8, 4096), (region[1].round() as usize).clamp(8, 4096));
-    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", path, "-vf", &format!("scale={}:{}", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
+    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", &crate::deps::resolve_str(path), "-vf", &format!("scale={}:{}", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
     if out.stdout.len() != w * hh * 3 { return None; }
     let lin = |b: u8| { let c = b as f32 / 255.0; if !wl { c } else if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) } }; let lut: Vec<f32> = (0..256).map(|i| lin(i as u8)).collect();
     let d: Vec<f32> = out.stdout.iter().map(|&b| lut[b as usize]).collect(); let mut mean = [0.0f64; 3]; for (i, v) in d.iter().enumerate() { mean[i % 3] += *v as f64; } for m in mean.iter_mut() { *m /= (w * hh) as f64; } let t = std::sync::Arc::new(Tex { w, h: hh, d, mean }); TEX.with(|c| *c.borrow_mut() = Some((key, t.clone()))); Some(t)
@@ -269,7 +269,7 @@ fn load_occ(pat: &str, frame: i64, w: usize, hh: usize) -> Option<std::sync::Arc
     let path = if let Some(i) = pat.find('%') { let rest = &pat[i + 1..]; let digs: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect(); let wid: usize = digs.parse().unwrap_or(0); if rest[digs.len()..].starts_with('d') { format!("{}{:0wid$}{}", &pat[..i], frame.max(0), &rest[digs.len() + 1..], wid = wid) } else { pat.to_string() } } else { pat.to_string() };
     let key = format!("{}|{}|{}", path, w, hh); if let Some((k, m)) = OCC.with(|c| c.borrow().clone()) { if k == key { return Some(m); } }
     // alpha if present, else luma; sized to the canvas
-    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", &path, "-vf", &format!("scale={}:{},format=rgba,alphaextract", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
+    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", &crate::deps::resolve_str(&path), "-vf", &format!("scale={}:{},format=rgba,alphaextract", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
     let rgbmode = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", &path, "-vf", &format!("scale={}:{}", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
     let a = if out.stdout.len() == w * hh { out.stdout } else { Vec::new() }; let l = if rgbmode.stdout.len() == w * hh { rgbmode.stdout } else { Vec::new() };
     let src = if !a.is_empty() && a.iter().any(|&v| v < 250) { a } else { l }; if src.len() != w * hh { return None; }

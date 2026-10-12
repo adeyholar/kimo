@@ -446,3 +446,20 @@ fn auto_duck_leaves_clips_outside_the_dialogue_shared_with_the_undo_snapshot() {
     assert_eq!(&shared[1..], &[false, true, true], "the clip under the voice is copied; the two clips after it stay shared: {shared:?}"); eprintln!("auto_duck shared flags per clip: {shared:?}");
     call(&mut ss, "undo", json!({})); assert_eq!(pj(&ss), before); let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- RV-7 delivery tools (apply/undo of relink_media is covered in tests/delivery.rs; its contract here is argument validation)
+#[test] fn list_dependencies_and_collect_project_leave_the_project_unchanged() {
+    let (s, _t1, _t2, _c) = one_clip();
+    row(&s, "list_dependencies", json!({}), |res, _b, _a| { assert_eq!(res["summary"]["missing"], 0); assert!(res["items"].is_array()); });
+    let d = std::env::temp_dir().join(format!("kimo_tc_collect_{}", std::process::id())); let _ = std::fs::remove_dir_all(&d);
+    row(&s, "collect_project", json!({"dest_dir": d.to_str().unwrap()}), |res, _b, _a| { assert_eq!(res["missing"], 0); assert!(d.join("project.kimo").exists() && d.join("collect_manifest.json").exists()); assert!(!d.join(".collect-tmp").exists()); });
+    let _ = std::fs::remove_dir_all(&d);
+}
+#[test] fn collect_and_relink_reject_bad_arguments_without_touching_the_project() {
+    let (s, _t1, _t2, _c) = one_clip();
+    row_err(&s, "collect_project", json!({"dest_dir": "/tmp", "copy": "zip"}), Some("copy must be"));
+    row_err(&s, "collect_project", json!({"dest_dir": "/tmp"}), Some("dest_exists"));
+    row_err(&s, "relink_media", json!({"search_dirs": []}), Some("search_dirs"));
+    row_err(&s, "relink_media", json!({"search_dirs": ["/nonexistent_kimo_dir"]}), Some("not a directory"));
+    row_err(&s, "relink_media", json!({"search_dirs": ["/tmp"], "match": "x"}), Some("match must be"));
+}
