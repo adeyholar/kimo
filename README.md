@@ -140,97 +140,30 @@ Windows: use the path to `kimo-mcp.exe` (the installer puts it in `%LOCALAPPDATA
 
 **3. Try it.** Ask your assistant: "Use kimo to import /path/to/clip.mp4, add a title, and render a frame." Or drive it yourself with the Python client in `examples/mcp_client.py`.
 
-### Grouped or flat tool list
-By default the server lists 16 grouped tools (about 15.7 KB) so small context windows are not flooded; call a group with `action` and `args`, or use `kimo_search` to find a tool by intent and `kimo_describe` to see its arguments. Every one of the 255 tools can still be called by its own name. To list all 255 individually, set `KIMO_TOOLS=flat` in the server's environment:
+### Tool list profiles and recommended client setup
+`KIMO_TOOLS` picks what `tools/list` returns. Every one of the 268 tools can be called by its own name under every profile.
+
+| Profile | `tools/list` size | Use when |
+|---|---|---|
+| `grouped` (default) | 17 entries, about 4.5 KB | small context windows. Call a group with `action` and `args`, find tools with `search_tools`. |
+| `core` | 29 entries, about 19 KB | the 26 most used tools with full schemas, plus `search_tools`, `kimo_describe`, `kimo_enable_group`. |
+| `flat` | 270 entries, about 185 KB | clients with large context or tool search of their own. |
+| `audio,color_grade` (group names) | those groups listed flat, the rest grouped | you work in a few areas. |
+
+`search_tools(query, limit=8, group?)` returns ranked tools, effects and transitions with the required args and a `call_as` hint, so one search reaches any tool. `kimo_enable_group(name)` lists a group's tools individually from then on and sends `notifications/tools/list_changed` (the server advertises `tools.listChanged`). `tests/discovery_metric.py` measures calls and bytes to the first correct call for 10 tasks under each profile.
+
+Recommended: start with the default. If your client re-reads the list on every turn and has the room, use `core`. Set it like this:
 
 ```
-claude mcp add --transport stdio --env KIMO_TOOLS=flat kimo -- /home/you/.local/bin/kimo-mcp
+claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -- /home/you/.local/bin/kimo-mcp
 ```
 
 ```toml
 [mcp_servers.kimo.env]
-KIMO_TOOLS = "flat"
+KIMO_TOOLS = "core"
 ```
 
-For JSON configs add `"env": { "KIMO_TOOLS": "flat" }` to the server entry (OpenCode: `"environment": { "KIMO_TOOLS": "flat" }`).
-
-### Troubleshooting
-- Server shows as failed: run the `initialize` line above by hand; if that works, the path in your config is wrong (use an absolute path).
-- Tools that read or write video fail: `ffmpeg` and `ffprobe` are not on the PATH your client launches with.
-- A long export times out in your client: raise the client's MCP tool timeout; `KIMO_TIMEOUT_S` sets the server-side limit per tool call.
-
-## Work made with kimo
-
-These are renders from the engine, driven by tool calls. Some are from the film we are building on it. Where something is still rough, it says so.
-
-### Fracture glass
-
-Glass shards with physical motion, refraction, a shutter-correct motion blur and a damped core so the break starts from the point of impact. Shown on a city plate, top row before core damping, bottom row after. The dark hole where the glass breaks can now be filled with `hole_fill` (default off): a defocused, dimmed copy of the pane (depth behind the glass), or with `hole_source=1` the layers below. The fill is a blur, not a rebuilt scene, so it reads as out-of-focus depth only.
-
-![fracture glass](docs/media/fracture-glass.jpg)
-
-Left, default hole. Right, `hole_fill=1` (same frame, 1280x720 city plate, t=1.0 s):
-
-![hole fill](docs/media/fracture-hole-fill.jpg)
-
-### Frosted glass (backdrop effect)
-
-`frosted_glass` turns any layer's alpha into a glass pane: inside it shows the composite below, blurred, tinted and refracted at a bevel, with a rim light. It runs after the layer's own position and scale, so a sliding panel frosts what is really under it. Frame from a 5 s 1280x720 clip (export took 15.0 s on the 2 GB box); the title sits on the pane. `magnify` turns the pane into a magnifier lens, and `magnify_cx` / `magnify_cy` move the zoom centre to any canvas point. It works on 3D-tilted layers (rot_x, rot_y, pos_z): the pane is the projected silhouette. Limits: the refraction is a bevel offset, not a ray-traced lens; frosting is a 3-pass box blur, not a Gaussian.
-
-![frosted glass](docs/media/frosted-glass.jpg)
-
-### Particles that hit things
-
-Emitters take `colliders` (circle, rect or plane, analytic and deterministic) that sparks bounce off with `bounce` and `friction`, plus a `vortex` swirl force. Left to right: no obstacle, a circle and a floor plane, a vortex with a floor (same seed). Colliders can also be another layer's alpha silhouette (`kind: layer`, `clip_id`), so sparks bounce off a title or shape; the silhouette is read at the current frame by default; `follow: true` on the collider uses the silhouette at each step's own time (0.1 s bins), so an animating title plows particles ahead of it. Limits: particles do not collide with each other; thin rects can be tunnelled by very fast particles (60 integration steps per second).
-
-![particle physics](docs/media/particle-physics.jpg)
-
-### Particles from a layer
-
-An emitter with `shape: layer` and `emit_clip` spawns on that clip's alpha silhouette (`emit_edge` for the outline only), so embers can rise off a title's letters; sparks can also bounce off it (`colliders` kind `layer`). Shown: a 5 s 1280x720 title clip, export 18.8 s. With `emit_follow` each particle spawns on the silhouette as it was at its own birth time (0.1 s bins), so a moving or animating title leaves a trail of its past positions; without it the silhouette at the current frame is used. Limit: bins are 0.1 s wide, so a very fast layer steps between bins, and each bin costs one clip render.
-
-![embers from title outline](docs/media/title-embers.jpg)
-
-### Motion blur on particles and on 3D scenes
-
-Both take `shutter_deg` and `blur_samples`, default off. The scene is sampled at several instants across the shutter and averaged in premultiplied space. 3D scene blur re-poses the whole scene per sample, so object animation, parenting and camera moves all blur. Measured on a 1280x720 scene: 0.19 s per frame off, 0.87 s at 8 samples. At 8 samples a very fast move shows stepped copies, so raise `blur_samples`.
-
-![particle motion blur](docs/media/particle-motion-blur.jpg)
-![scene3d motion blur](docs/media/scene3d-motion-blur.jpg)
-
-### Tracking and stabilizing
-
-Point, planar and mesh trackers, feature tracking with homography fits, long-gap tracking, and diagnostics that report jitter and residuals. The frames below are a synthetic test plate (top: a label pinned to a moving surface, bottom: the stabilized result), so they show the mechanism, not a real-footage result. A confidence score is not pixel lock, and the validation tools can show a track is unreliable, not that it is true. We say that in every report.
-
-![tracking and stabilizing](docs/media/tracking-stabilize.jpg)
-
-### Why kimo
-
-- **Built for an AI, not retrofitted.** 255 tools, each one a registered command with a schema. Nothing in the editor is reachable only by mouse. `tools/list` is grouped into 16 entries (15.7 KB instead of 176 KB, 11.2x smaller), with `kimo_search` to find a tool by intent and `kimo_describe` for its arguments, so a small context window can still drive all of it.
-- **Tested the way a server should be.** A fuzzer calls every tool with generated arguments before anything is published: 255 tools, 9359 calls, 0 failures. Features ship with a proof that can fail, for example frosted glass reduces pane detail from 114444 to 4473 on a test plate, and a moving collider leaves a corridor of 88 pixels behind it where a frozen one leaves 163.
-- **Physical effects, not presets.** Fracture glass with refraction, shutter-correct motion blur and a damped impact core. Frosted glass that frosts what is really under a moving pane, with a magnifier lens. Particles that collide with circles, planes and the moving silhouette of a layer, and that are born on that silhouette.
-- **Real tracking, honestly reported.** Point, planar, mesh and feature tracking, stabilization and camera solve, with diagnostics that say when a track is unreliable instead of a confidence number that looks good.
-- **Pro colour.** ACES and ACEScct, ASC CDL, OCIO, LUTs, HDR, grade node graphs, scopes and film response, in a float pipeline with 16-bit, EXR and TIFF output.
-- **Small and fast to start.** A static 10 MB binary that answers its first MCP request in 2 ms, CPU only, tuned for a 2 GB machine. A 5 s 1280x720 shot with a video plate, a sliding title, collider rain and embers exports in about 40 s on that box.
-- **Honest about limits.** Every feature has a tier in [FEATURES.md](FEATURES.md), with its baseline, its measured number and the cases where it lost.
-
-## What is inside
-
-| Area | Tools |
-|---|---|
-| Timeline and edit | project_set, import_media, add_track, add_clip, move/trim/split/delete, ripple_delete, ripple_trim, roll_edit, slip_clip, slide_clip, markers, multicam, sync_clips, undo/redo, save/load |
-| Look and motion | set_property, set_keyframe (any property, with easing and bezier), expressions, motion paths, motion presets, speed ramps, freeze frame, flow blur, camera shake |
-| Effects and transitions | add_effect, add_transition, blend modes, effect masks, adjustment layers |
-| Masks and roto | bezier masks, mask keyframes, roto propagation, track mattes, refine_matte, chroma_key |
-| Text and graphics | add_text with animators and paths, captions, titles, HUD frames, counters, detection boxes, shapes and path shapes with modifiers, layer styles |
-| 3D and relight | add_scene3d, camera, lights, materials, relight, shard bursts, fracture glass |
-| Particles and physics | add_emitter, add_particles, simulate_physics |
-| Tracking and vision | track_point, track_planar, track_mesh, track_features, stabilize, solve_camera, undistort_clip, validation tools |
-| Color | primaries, wheels, curves, HSL, LUTs, ACES and ACEScct, ASC CDL, OCIO, HDR, grade node graphs, scopes, film response, match_grade |
-| Audio | fades, EQ, denoise, compressor, echo, pitch, pan, loudness, auto_duck, beat detection and binding |
-| Output | render_frame, export, export_alpha, export_gif, export_audio, export_preset, high bit depth, float EXR and TIFF |
-
-The full, current tool list is whatever `tools/list` returns.
+For JSON configs add `"env": { "KIMO_TOOLS": "core" }` to the server entry (OpenCode: `"environment": { "KIMO_TOOLS": "core" }`).
 
 ## How an AI sees the tools
 
@@ -242,7 +175,7 @@ The default `tools/list` is grouped, so a client does not have to read 255 tool 
 | masks, text, graphics, vfx3d | masks and roto, text and captions, shapes and HUD, 3D, particles and fracture |
 | tracking, color_grade, color_science, scopes | tracking and camera solve, grading, color management, measurement |
 | audio, output | audio, render and export |
-| kimo_search, kimo_describe | find an action by keywords (also searches the effect and transition catalogs), get one action's full arguments |
+| search_tools, kimo_describe, kimo_enable_group | find a tool by keywords (also searches the effect and transition catalogs; kimo_search is the older, unlisted form), get one action's full arguments, list a group flat (also searches the effect and transition catalogs), get one action's full arguments |
 
 Call a group with `{"action": "<tool name>", "args": {...}}`, for example `{"name": "vfx3d", "action": "add_scene3d", "args": {...}}`. Calling a tool by its own name (`add_scene3d`) still works, and `tools/list` with `{"mode": "flat"}` (or `KIMO_TOOLS=flat`) lists all 255. A new tool is placed in a group by name rules in `crates/kimo-core/src/toolgroups.rs`, and a unit test fails if one is left unassigned. `tests/group_proof.py` checks that every tool is in exactly one group and that grouped and direct calls give the same result.
 

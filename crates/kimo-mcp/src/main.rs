@@ -39,22 +39,23 @@ fn main() {
     kimo_core::guard::init();
     std::panic::set_hook(Box::new(|i| { eprintln!("kimo: {i}"); }));
     let ss = Arc::new(Mutex::new(Session::new()));
+    let mut enabled: std::collections::HashSet<String> = std::collections::HashSet::new();
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() { continue; }
         let Ok(req): Result<Value, _> = serde_json::from_str(&line) else { continue };
-        let id = req.get("id").cloned();
+        let id = req.get("id").cloned(); let mut notify_changed = false;
         let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let params = req.get("params").cloned().unwrap_or(json!({}));
         let result: Option<Result<Value, (i64, String)>> = match method {
-            "initialize" => Some(Ok(json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"kimo","version":kimo_core::buildinfo::VERSION,"commit":kimo_core::buildinfo::COMMIT,"schema_version":kimo_core::buildinfo::SCHEMA_VERSION}}))),
+            "initialize" => Some(Ok(json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"kimo","version":kimo_core::buildinfo::VERSION,"commit":kimo_core::buildinfo::COMMIT,"schema_version":kimo_core::buildinfo::SCHEMA_VERSION}}))),
             "ping" => Some(Ok(json!({}))),
             "tools/list" => {
                 // grouped by default (about 16 entry points); mode "flat" or KIMO_TOOLS=flat lists every tool. Every tool stays callable by name either way.
-                let flat = params.get("mode").and_then(|v| v.as_str()).map(|m| m == "flat").unwrap_or_else(|| std::env::var("KIMO_TOOLS").map(|v| v == "flat").unwrap_or(false));
-                Some(Ok(json!({"tools": if flat { kimo_core::commands::registry_ref().iter().map(|c| json!({"name":c.name,"description":c.description,"inputSchema":c.schema})).collect::<Vec<_>>() } else { toolgroups::grouped_list() }})))
+                let profile = params.get("mode").and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| std::env::var("KIMO_TOOLS").unwrap_or_default());
+                Some(Ok(json!({"tools": toolgroups::profile_list(&profile, &enabled)})))
             }
             "tools/call" => {
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -64,6 +65,12 @@ fn main() {
                     "kimo_search" => { let qs = args.get("query").and_then(|v| v.as_str()).unwrap_or(""); let mut r = toolgroups::search(qs, args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize);
                         let (ef, tr) = { let mut g = ss.lock().unwrap_or_else(|e| e.into_inner()); (dispatch(&mut g, "list_effects", &json!({})).unwrap_or(json!([])), dispatch(&mut g, "list_transitions", &json!({})).unwrap_or(json!([]))) };
                         r["effects_and_transitions"] = json!(toolgroups::search_catalog(qs, &ef, &tr, 8)); text(Ok(r)) }
+                    "search_tools" => { let qs = args.get("query").and_then(|v| v.as_str()).unwrap_or(""); let lim = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize; let grp = args.get("group").and_then(|v| v.as_str());
+                        let (ef, tr) = { let mut g = ss.lock().unwrap_or_else(|e| e.into_inner()); (dispatch(&mut g, "list_effects", &json!({})).unwrap_or(json!([])), dispatch(&mut g, "list_transitions", &json!({})).unwrap_or(json!([]))) };
+                        text(Ok(toolgroups::search_tools(qs, lim, grp, &ef, &tr))) }
+                    "kimo_enable_group" => { let n = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        if toolgroups::GROUPS.iter().any(|g| g.name == n && !toolgroups::members(n).is_empty()) { enabled.insert(n.to_string()); notify_changed = true; text(Ok(json!({"enabled": n, "tools": toolgroups::members(n).len(), "note": "tools/list now lists this group's tools individually"}))) }
+                        else { text(Err(format!("unknown group '{n}'; groups: {}", toolgroups::GROUPS.iter().filter(|g| !toolgroups::members(g.name).is_empty()).map(|g| g.name).collect::<Vec<_>>().join(", ")))) } }
                     "kimo_describe" => text(toolgroups::describe(&args)),
                     n if toolgroups::is_group(n) => match toolgroups::resolve_group_call(n, &args) { Ok((a, ia)) => run_guarded(&ss, &a, &ia, &mut out, &id), Err(e) => text(Err(e)) },
                     _ => run_guarded(&ss, name, &args, &mut out, &id),
@@ -75,6 +82,7 @@ fn main() {
         if let (Some(id), Some(r)) = (id, result) {
             let msg = match r { Ok(v) => json!({"jsonrpc":"2.0","id":id,"result":v}), Err((c, m)) => json!({"jsonrpc":"2.0","id":id,"error":{"code":c,"message":m}}) };
             writeln!(out, "{msg}").ok(); out.flush().ok();
+            if notify_changed { writeln!(out, "{}", json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"})).ok(); out.flush().ok(); }
         }
     }
 }

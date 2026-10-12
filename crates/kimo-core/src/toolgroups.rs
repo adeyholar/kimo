@@ -28,7 +28,7 @@ pub const GROUPS: &[Group] = &[
 
 pub fn group_of(n: &str) -> &'static str {
     const EXACT: &[(&str, &[&str])] = &[
-        ("project", &["project_set", "import_media", "save_project", "load_project", "undo", "redo", "history_list", "checkpoint", "restore", "checkpoint_delete", "get_project", "ext_list"]),
+        ("project", &["project_set", "import_media", "save_project", "load_project", "undo", "redo", "history_list", "checkpoint", "restore", "checkpoint_delete", "get_project", "ext_list", "kimo_info", "cache_stats", "cache_clear", "cache_set_budget"]),
         ("tracking", &["fit_info"]),
         ("output", &["render_frame", "export", "join_export", "export_alpha", "export_gif", "export_audio", "export_preset", "inspect_export_preset", "export_with_subtitles", "burn_in", "export_camera_solve", "export_grade_lut", "export_asc_cdl", "export_color_pipeline_lut", "set_ocio_view_delivery", "export_ocio_view_video", "export_high_bit", "export_aces2_reference_video", "render_float_tiff", "render_float_exr", "render_high_bit_still", "render_ocio_display_view", "render_aces2_reference"]),
         ("effects", &["list_effects", "add_effect", "set_effect_param", "remove_effect", "list_transitions", "add_transition", "set_effect_mask", "add_adjustment_layer", "set_echo", "set_posterize_time", "add_speed_lines", "add_glitch_confetti", "add_managed_linear_effect", "set_effect_encoding"]),
@@ -66,16 +66,59 @@ fn first_sentence(d: &str) -> String { let e = d.find(". ").map(|i| i + 1).unwra
 
 pub fn members(group: &str) -> Vec<&'static Command> { reg().iter().filter(|c| group_of(c.name) == group).collect() }
 
-/// The grouped tools/list: one tool per non-empty group plus kimo_search and kimo_describe.
-pub fn grouped_list() -> Vec<Value> {
-    let mut out = vec![];
-    for g in GROUPS { let m = members(g.name); if m.is_empty() { continue; }
-        let names: Vec<&str> = m.iter().map(|c| c.name).collect();
-        out.push(json!({"name": g.name, "description": format!("{} {} actions: {}. Call with action and args. Use kimo_describe for an action's arguments.", g.about, names.len(), names.join(", ")),
-            "inputSchema": {"type":"object","properties":{"action":{"type":"string","enum":names,"description":"which action to run"},"args":{"type":"object","description":"arguments for that action (see kimo_describe)"}},"required":["action"]}})); }
-    out.push(json!({"name":"kimo_search","description":"Find actions by keywords (any word matches; ranked by name, argument names, description). Also searches the effect and transition catalogs and says how to use each hit, e.g. chroma_key is an effect used with add_effect. Returns group, action and a one-line summary.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}}));
-    out.push(json!({"name":"kimo_describe","description":"Full description and argument schema of one action, or the action list of a group. Pass action (a tool name) or group.","inputSchema":{"type":"object","properties":{"action":{"type":"string"},"group":{"type":"string"}}}}));
-    out
+/// Short text for the compact list: cut at a word boundary so the whole description stays within `max` chars.
+fn short(d: &str, max: usize) -> String { if d.len() <= max { return d.to_string(); } let cut = d[..max].rfind(' ').unwrap_or(max); format!("{}...", d[..cut].trim_end_matches(|c| c == ',' || c == ';')) }
+
+/// Compact grouped tools/list (RV-23): one entry per non-empty group with a short description and the member count, and no action names (they cost 2x
+/// 300-700 bytes per group: once in the description, once as the schema enum). The AI finds actions with search_tools or kimo_describe(group).
+pub fn grouped_list() -> Vec<Value> { profile_list("grouped", &std::collections::HashSet::new()) }
+
+fn group_entry(g: &Group) -> Value { let n = members(g.name).len();
+    json!({"name": g.name, "description": format!("{} [{} actions]", short(g.about, 100), n), "inputSchema": {"type":"object","properties":{"action":{"type":"string"},"args":{"type":"object"}},"required":["action"]}}) }
+fn tool_entry(c: &Command) -> Value { json!({"name": c.name, "description": c.description, "inputSchema": c.schema}) }
+fn meta_tools(with_enable: bool) -> Vec<Value> {
+    let mut v = vec![json!({"name":"search_tools","description":"Find a tool, effect or transition by keywords. Returns ranked matches with required args and how to call each. Call any listed name directly.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"},"group":{"type":"string"}},"required":["query"]}}),
+        json!({"name":"kimo_describe","description":"Full description and argument schema of one action (action) or the action list of a group (group).","inputSchema":{"type":"object","properties":{"action":{"type":"string"},"group":{"type":"string"}}}})];
+    if with_enable { v.push(json!({"name":"kimo_enable_group","description":"List every tool of a group individually from now on (the server sends notifications/tools/list_changed).","inputSchema":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}})); }
+    v }
+
+/// The ~25 most used tools, listed with full schemas in the `core` profile.
+pub const CORE: &[&str] = &["project_set", "import_media", "save_project", "load_project", "undo", "redo", "get_project", "add_track", "add_clip", "move_clip", "trim_clip", "split_clip",
+    "delete_clip", "set_property", "set_keyframe", "add_effect", "set_effect_param", "add_transition", "add_text", "set_text_style", "add_shape", "add_mask", "set_blend", "set_audio", "render_frame", "export"];
+
+/// Profile names: grouped (default), flat, core, or a comma list of group names to expand (the other groups stay collapsed). Unknown text falls back to grouped.
+pub fn parse_profile(p: &str) -> String { let p = p.trim().to_lowercase(); if matches!(p.as_str(), "" | "grouped" | "flat" | "core") { return if p.is_empty() { "grouped".into() } else { p }; }
+    let ok: Vec<&str> = p.split(',').map(|x| x.trim()).filter(|x| GROUPS.iter().any(|g| g.name == *x && !members(g.name).is_empty())).collect(); if ok.is_empty() { "grouped".into() } else { ok.join(",") } }
+
+/// tools/list for a profile. `enabled` holds groups switched on with kimo_enable_group (their tools are listed individually, their group entry is dropped).
+pub fn profile_list(profile: &str, enabled: &std::collections::HashSet<String>) -> Vec<Value> {
+    let p = parse_profile(profile);
+    match p.as_str() {
+        "flat" => { let mut v: Vec<Value> = reg().iter().map(tool_entry).collect(); v.extend(meta_tools(false)); v }
+        "core" => { let mut v: Vec<Value> = CORE.iter().filter_map(|n| reg().iter().find(|c| c.name == *n)).map(tool_entry).collect(); v.extend(meta_tools(true)); for g in GROUPS { if enabled.contains(g.name) { v.extend(members(g.name).into_iter().filter(|c| !CORE.contains(&c.name)).map(tool_entry)); } } v }
+        _ => { let mut expand: std::collections::HashSet<String> = enabled.clone(); if p != "grouped" { for g in p.split(',') { expand.insert(g.to_string()); } }
+            let mut v = vec![]; for g in GROUPS { let m = members(g.name); if m.is_empty() { continue; } if expand.contains(g.name) { v.extend(m.into_iter().map(tool_entry)); } else { v.push(group_entry(g)); } }
+            v.extend(meta_tools(true)); v }
+    }
+}
+
+fn required_args(c: &Command) -> Vec<String> { c.schema.get("required").and_then(|r| r.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() }
+
+/// search_tools: one call from a plain-language need to a callable tool. Ranked tool hits plus effect/transition catalog hits (those are reached through add_effect / add_transition).
+pub fn search_tools(q: &str, limit: usize, group: Option<&str>, effects: &Value, transitions: &Value) -> Value {
+    let limit = limit.clamp(1, 25); let r = search(q, 50); let total = r["total"].as_u64().unwrap_or(0);
+    let mut tools: Vec<Value> = vec![];
+    for m in r["matches"].as_array().into_iter().flatten() { let name = m["action"].as_str().unwrap_or(""); let Some(c) = reg().iter().find(|c| c.name == name) else { continue }; if let Some(g) = group { if group_of(name) != g { continue; } }
+        let req = required_args(c); tools.push(json!({"type":"tool","name":name,"group":group_of(name),"summary":m["summary"],"required":req,"call_as":format!("{}({})", name, req.join(", "))})); }
+    let words: Vec<String> = q.split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 2).map(|w| w.to_lowercase()).collect();
+    let mut cat: Vec<Value> = vec![]; if group.map_or(true, |g| g == "effects") { for h in search_catalog(q, effects, transitions, 8) { let ty = h["type"].as_str().unwrap_or(""); let kind = h["kind"].as_str().unwrap_or("");
+        let (tool, extra) = if ty == "transition" { ("add_transition", ", duration") } else { ("add_effect", "") };
+        cat.push(json!({"type":ty,"name":kind,"group":"effects","summary":h["summary"],"call_as":format!("{tool}(clip_id{extra}, kind=\"{kind}\")")})); } }
+    let matches_all = |h: &Value| { let t = format!("{} {}", h["name"].as_str().unwrap_or(""), h["summary"].as_str().unwrap_or("")).to_lowercase(); !words.is_empty() && words.iter().all(|w| t.contains(w.as_str())) };
+    let mut out: Vec<Value> = vec![]; let mut rest: Vec<Value> = vec![];
+    for (i, h) in cat.into_iter().enumerate() { if i == 0 && matches_all(&h) { out.push(h); } else { rest.push(h); } }
+    out.extend(tools); out.extend(rest); out.truncate(limit);
+    json!({"matches": out, "total": total, "note": "call any listed name directly as a tool; effects and transitions are used through add_effect / add_transition"})
 }
 
 /// Resolve a grouped call to (tool name, args). Err carries a message for the client.
@@ -95,7 +138,10 @@ pub fn search(q: &str, limit: usize) -> Value {
     let mut words: Vec<String> = q.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty()).map(|w| w.to_string()).collect();
     let kept: Vec<String> = words.iter().filter(|w| !STOP.contains(&w.to_lowercase().as_str())).cloned().collect(); if !kept.is_empty() { words = kept; }
     let words: Vec<String> = words.iter().map(|w| stem(w)).collect();
-    fn alts<'a>(w: &'a str) -> Vec<&'a str> { let mut v = vec![w]; match w { "slow" | "slowmo" | "fast" => v.push("speed"), "shatter" | "break" | "smash" => { v.push("fracture"); v.push("shard"); } "green" | "greenscreen" => { v.push("chroma"); v.push("key"); } "shake" | "shaky" => { v.push("stabilize"); v.push("shake"); } "fade" => { v.push("volume"); v.push("opacity"); } "subtitle" => v.push("caption"), "cut" => { v.push("split"); v.push("trim"); } _ => {} } v }
+    // two-word phrases: "slow motion" is about speed, "green screen key" is about chroma keying; the second word would otherwise outrank the intent
+    let has = |x: &[&str]| words.iter().any(|w| x.contains(&w.to_lowercase().as_str()));
+    let words: Vec<String> = { let sp = has(&["slow", "slowmo", "fast"]); let gs = has(&["green", "greenscreen", "screen", "chroma"]); words.iter().filter(|w| !(sp && w.as_str() == "motion") && !(gs && w.as_str() == "key")).cloned().collect() };
+    fn alts<'a>(w: &'a str) -> Vec<&'a str> { let mut v = vec![w]; match w { "slow" | "slowmo" | "fast" => v.push("speed"), "shatter" | "break" | "smash" => { v.push("fracture"); v.push("shard"); } "speech" | "spoken" | "voice" => { v.push("transcribe"); v.push("caption"); } "green" | "greenscreen" | "screen" => { v.push("chroma"); } "shake" | "shaky" => { v.push("stabilize"); v.push("shake"); } "fade" => { v.push("volume"); v.push("opacity"); } "subtitle" => v.push("caption"), "cut" => { v.push("split"); v.push("trim"); } _ => {} } v }
     let mut hits: Vec<(usize, usize, &Command)> = reg().iter().filter_map(|c| {
         let nm = c.name.to_lowercase(); let ds = c.description.to_lowercase();
         let args: String = c.schema.get("properties").and_then(|p| p.as_object()).map(|o| o.iter().map(|(k, v)| format!("{} {}", k, v.get("description").and_then(|d| d.as_str()).unwrap_or(""))).collect::<Vec<_>>().join(" ").to_lowercase()).unwrap_or_default();
@@ -128,7 +174,8 @@ mod tests {
     #[test] fn group_call_resolves_and_rejects_wrong_group() {
         let (n, a) = resolve_group_call("project", &json!({"action":"project_set","args":{"width":640}})).unwrap(); assert_eq!(n, "project_set"); assert_eq!(a["width"], 640);
         assert!(resolve_group_call("audio", &json!({"action":"project_set"})).is_err()); assert!(resolve_group_call("audio", &json!({})).is_err()); }
-    #[test] fn grouped_list_is_small() { let l = grouped_list(); assert!(l.len() <= 20, "{}", l.len()); }
+    #[test] fn grouped_list_is_small() { let l = grouped_list(); assert!(l.len() <= 20, "{}", l.len()); let bytes = serde_json::to_string(&l).unwrap().len(); assert!(bytes <= 6144, "default tools/list is {bytes} bytes, ceiling 6144"); }
+    #[test] fn core_tools_exist() { for n in CORE { assert!(reg().iter().any(|c| c.name == *n), "core tool {n} missing"); } assert!(CORE.len() <= 26); }
 }
 
 /// Effects and transitions are catalogs reached through add_effect / add_transition, so tool search alone cannot find them.
