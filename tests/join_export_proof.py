@@ -34,5 +34,11 @@ dj, dp = worst_seam_dip(J, F, seams), worst_seam_dip(P, F, seams)
 print(f"seam energy ratio vs full export (min over +-5 ms; 1.0 = no dip): joined {dj:.3f}  per-range aac concat {dp:.3f}")
 n = min(len(J), len(F)); diff = max(abs(J[i]-F[i]) for i in range(0, n, 7)); print(f"max |joined - single full export| = {diff:.5f}, lengths {len(J)} vs {len(F)}")
 vd = float(probe(f"{T}/joined.mp4","v:0")["duration"]); ad = float(probe(f"{T}/joined.mp4","a:0")["duration"]); print(f"A/V duration diff {abs(vd-ad)*1000:.1f} ms (1 frame = 41.7 ms)")
-ok = dj > 0.97 and diff < 0.02 and abs(vd-ad) < 1/24 and dj > dp
+# (c) export_range guarantee: a ranged export (start,end) keeps exact picture+audio span and equals the slice of the full export's audio
+C("export", path=f"{T}/range.mp4", start=1.0, end=2.5)
+R = pcm(f"{T}/range.mp4"); s0 = int(1.0*48000); seg = F[s0:s0+len(R)]
+rd = max(abs(R[i]-seg[i]) for i in range(2048, min(len(R), len(seg)) - 2048, 7)); rv = float(probe(f"{T}/range.mp4","v:0")["duration"]); ra = float(probe(f"{T}/range.mp4","a:0")["duration"])
+print(f"(c) range 1.0-2.5: video {rv:.3f} s, audio {ra:.3f} s, max |range - slice of full audio| = {rd:.4f} (interior, 2048 samples at each edge excluded: AAC priming/overlap)")
+okc = abs(rv-1.5) < 1e-3 and abs(ra-rv) < 1/24 and rd < 0.01
+ok = okc and dj > 0.97 and diff < 0.02 and abs(vd-ad) < 1/24 and dj > dp
 print("PASS" if ok else "FAIL"); sys.exit(0 if ok else 1)

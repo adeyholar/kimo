@@ -4,7 +4,14 @@ use std::collections::BTreeMap;
 
 pub struct Frame { pub w: usize, pub h: usize, pub d: Vec<f32> }
 impl Frame {
-    pub fn new(w: usize, h: usize) -> Self { crate::guard::reserve(w.saturating_mul(h).saturating_mul(16)); Frame { w, h, d: vec![0.0; w * h * 4] } }
+    pub fn new(w: usize, h: usize) -> Self { crate::guard::reserve(w.saturating_mul(h).saturating_mul(16)); match Self::try_new(w, h) { Ok(f) => f, Err(e) => panic!("{e}") } }
+    /// Fallible allocation: `Err` (never an abort) when the pixels do not fit the budget, the hard ceiling, or real memory.
+    pub fn try_new(w: usize, h: usize) -> Result<Self, String> {
+        let n = w.checked_mul(h).and_then(|v| v.checked_mul(4)).ok_or_else(|| format!("frame {w}x{h} overflows"))?;
+        let b = n.saturating_mul(4); let (budget, live) = (crate::guard::BUDGET.load(std::sync::atomic::Ordering::Relaxed), crate::guard::LIVE.load(std::sync::atomic::Ordering::Relaxed));
+        if budget != usize::MAX && live.saturating_add(b) > budget { return Err(format!("memory budget exceeded: a {w}x{h} frame needs {} MB, {} MB of the {} MB budget is in use", b >> 20, live >> 20, budget >> 20)); }
+        let mut d: Vec<f32> = Vec::new(); d.try_reserve_exact(n).map_err(|e| format!("cannot allocate a {w}x{h} frame ({} MB): {e}", b >> 20))?; d.resize(n, 0.0); Ok(Frame { w, h, d })
+    }
 }
 
 pub type Params = BTreeMap<String, Prop>;
