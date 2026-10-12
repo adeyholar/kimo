@@ -532,6 +532,26 @@ pub fn export_alpha(p: &Project, path: &str, format: &str, t_in: f64, t_out: f64
     encoder.finish()?; Ok(n as f64 / p.fps)
 }
 
+/// Join picture-only range exports (`export` with `audio:false`) in order with a stream copy, then mux ONE continuous audio stream for the same
+/// timeline span, so no AAC priming gap appears at the seams. `start` is the timeline time of the first part's first frame.
+pub fn join_export(p: &Project, parts: &[String], path: &str, start: f64) -> Result<f64, String> {
+    if parts.is_empty() { return Err("parts must list at least one picture-only export".into()); }
+    if !start.is_finite() || start < 0.0 { return Err("start must be >= 0".into()); }
+    let mut total = 0.0; let mut fps0 = 0.0;
+    for (i, f) in parts.iter().enumerate() { let (_, _, dur, fps) = probe(f)?; if i == 0 { fps0 = fps; } else if (fps - fps0).abs() > 1e-6 { return Err(format!("part {i} runs at {fps} fps but part 0 runs at {fps0}")); } total += dur; }
+    let frames = (total * fps0).round() as usize; if frames == 0 { return Err("parts contain no frames".into()); }
+    let list = std::env::temp_dir().join(format!("kimo-join-{}-{}.txt", std::process::id(), frames));
+    std::fs::write(&list, parts.iter().map(|f| format!("file '{}'\n", f.replace('\'', "'\\''"))).collect::<String>()).map_err(|e| e.to_string())?;
+    let out = Command::new("ffmpeg").args(["-v", "error", "-y", "-f", "concat", "-safe", "0", "-i"]).arg(&list).args(["-c", "copy", "-an", path]).output().map_err(|e| format!("ffmpeg: {e}"))?;
+    let _ = std::fs::remove_file(&list);
+    if !out.status.success() { return Err(format!("join failed: {}", String::from_utf8_lossy(&out.stderr).trim())); }
+    let sr = crate::audio::SR as f64; let (s0, s1) = ((start * sr) as usize * 2, ((start + frames as f64 / fps0) * sr) as usize * 2);
+    crate::guard::reserve(s1.saturating_sub(s0) * 4);
+    let pcm_full = crate::audio::mix(p); let a = s0.min(pcm_full.len()); let b = s1.min(pcm_full.len()); let mut pcm = pcm_full[a..b].to_vec(); pcm.resize(s1 - s0, 0.0);
+    if pcm.iter().any(|v| v.abs() > 1e-6) { crate::color::mux::legacy_audio(path, &pcm, frames)?; }
+    Ok(frames as f64 / fps0)
+}
+
 pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> { export_range(p, path, crf, 0.0, p.duration()) }
 pub fn export_opts(p: &Project, path: &str, crf: u32, low_memory: bool) -> Result<f64, String> { export_range_opts(p, path, crf, 0.0, p.duration(), low_memory, true) }
 /// Export [t_in, t_out) seconds. Frame k renders at t_in + k/fps (absolute time, so frames equal the same frames of a full export).
