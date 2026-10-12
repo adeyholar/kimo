@@ -2,7 +2,7 @@
 // and its `pub fn commands() -> Vec<Command>` is added to the registry. New tools never need to edit an existing file.
 use std::{env, fs, path::PathBuf};
 fn main() {
-    build_ocio();
+    build_ocio(); embed_git_commit();
     let dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("src/ext"); println!("cargo:rerun-if-changed=src/ext");
     let mut names: Vec<(String, PathBuf)> = vec![];
     if let Ok(rd) = fs::read_dir(&dir) { for e in rd.flatten() { let p = e.path(); let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
@@ -27,4 +27,15 @@ fn build_ocio() {
         .file("src/color/ocio_native.cpp").compile("kimo_ocio_native");
     println!("cargo:rustc-link-search=native={lib}");
     println!("cargo:rustc-link-lib=dylib=OpenColorIO");
+}
+
+/// KIMO_GIT_COMMIT = short commit of the checkout being built ("-dirty" with uncommitted changes, "unknown" outside git). Reruns when the checkout's HEAD log changes.
+fn embed_git_commit() {
+    let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(env::var("CARGO_MANIFEST_DIR").unwrap()).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let commit = match git(&["rev-parse", "--short=12", "HEAD"]) {
+        Some(c) if !c.is_empty() => { let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).map(|s| !s.is_empty()).unwrap_or(false); if dirty { format!("{c}-dirty") } else { c } }
+        _ => "unknown".to_string(),
+    };
+    if let Some(gd) = git(&["rev-parse", "--absolute-git-dir"]) { println!("cargo:rerun-if-changed={gd}/logs/HEAD"); println!("cargo:rerun-if-changed={gd}/HEAD"); }
+    println!("cargo:rustc-env=KIMO_GIT_COMMIT={commit}");
 }

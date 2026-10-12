@@ -22,8 +22,10 @@ pub struct Session { pub project: Project, pub undo: Vec<Project>, pub redo: Vec
     /// Named snapshots of the whole project: (name, project, label of the history position when taken).
     pub checkpoints: Vec<(String, Project, usize)>,
     /// Snapshot-size estimate for the history cap, refreshed every 16 mutations instead of serialising the project on every call.
-    pub snap_sz: usize, pub snap_n: u32, pub snap_clips: usize }
-impl Session { pub fn new() -> Self { Session { project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), fcache: crate::framecache::FrameCache::new(crate::framecache::default_cap()), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0 } } }
+    pub snap_sz: usize, pub snap_n: u32, pub snap_clips: usize,
+    /// Build that first saved the loaded/current project (kept across re-saves); None until a save or a load sets it.
+    pub created_with: Option<serde_json::Value> }
+impl Session { pub fn new() -> Self { Session { project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), fcache: crate::framecache::FrameCache::new(crate::framecache::default_cap()), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0, created_with: None } } }
 const MAX_CHECKPOINTS: usize = 24;
 
 #[derive(Clone)]

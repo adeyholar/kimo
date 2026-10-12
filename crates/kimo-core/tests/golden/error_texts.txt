@@ -9,7 +9,7 @@
 08 trim_clip {"clip_id":"clip3","duration":-1.0}	duration must be > 0 and at most 1e6 seconds
 09 set_speed {"clip_id":"clip3","speed":0.0}	speed must be 0.1..100
 10 set_speed {"clip_id":"clip3","speed":1000.0}	speed must be 0.1..100
-11 set_property {"clip_id":"clip3","property":"bogus","value":1.0}	unknown property 'bogus': nothing reads it, so it would silently do nothing. Valid: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface. For crop use add_effect/crop tools; for effect params use set_effect_param.
+11 set_property {"clip_id":"clip3","property":"bogus","value":1.0}	unknown property 'bogus': nothing reads it, so it would silently do nothing. Valid: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface, fill_alpha, stroke_alpha. For crop use add_effect/crop tools; for effect params use set_effect_param.
 12 set_property {"clip_id":"clip3","property":"opacity"}	missing number 'value'
 13 split_clip {"at":99.0,"clip_id":"clip3"}	split point outside clip
 14 split_clip {"clip_id":"clip3"}	missing number 'at'
@@ -25,7 +25,7 @@
 24 add_effect {"clip_id":"clip3","kind":"no_such_effect"}	unknown effect 'no_such_effect'
 25 add_effect {"clip_id":"nope","kind":"blur"}	no such clip 'nope'
 26 set_keyframe {"clip_id":"clip3","property":"opacity","time":0.5}	missing number 'value'
-27 set_keyframe {"clip_id":"clip3","property":"bogus","time":0.5,"value":1.0}	unknown clip property 'bogus': nothing reads it. Valid: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface. To keyframe an effect param pass effect_id.
+27 set_keyframe {"clip_id":"clip3","property":"bogus","time":0.5,"value":1.0}	unknown clip property 'bogus': nothing reads it. Valid: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface, fill_alpha, stroke_alpha. To keyframe an effect param pass effect_id.
 28 set_camera {"cam_fov":3.0}	cam_fov must be 5..170
 29 set_camera {"cam_x":"a"}	argument 'cam_x' must be a number (got string)
 30 set_track {"locked":true,"track_id":"nope"}	no such track 'nope'

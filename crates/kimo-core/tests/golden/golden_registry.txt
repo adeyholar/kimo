@@ -23,7 +23,7 @@ add_path_key cf58f43b9b5a2a16
 add_path_shape 7a38d9af75a4a47f
 add_prompt_box 1f7b236e95633eb0
 add_scene3d b2cc280b0ca42a59
-add_shape bfad734a9536fc9b
+add_shape e29888373503b215
 add_shape_modifier 25cf6df0b8d052db
 add_shard_burst 41b2c108dde0a230
 add_speed_lines 0db4bddd46e7a057
@@ -106,6 +106,7 @@ inspect_grade_scopes 4d5f550728d85ed6
 inspect_high_bit_delivery_contract 60a260a6a2377d8d
 inspect_ocio_config 04834eee72a14d76
 join_export 93d05ac7e76da91f
+kimo_info 22a891990956a689
 lift_range 76f97b3850975a47
 light_rig 2d21a8c90d40d65f
 list_camera_solves 492655c34a9e22aa
@@ -219,7 +220,7 @@ set_node_param 20b86ed963a1e02c
 set_ocio_view_delivery f6f2f235a93c3d77
 set_path 6620245c892b0ea5
 set_posterize_time 03737fb4f2ea4cab
-set_property e884eedbe80202ff
+set_property 1123a56f6fa267dd
 set_relight 99922396faa38f30
 set_speed 0e5aa672ac57bbd2
 set_speed_ramp 4b9c32bc74409983

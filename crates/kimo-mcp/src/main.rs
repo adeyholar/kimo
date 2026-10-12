@@ -49,7 +49,7 @@ fn main() {
         let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let params = req.get("params").cloned().unwrap_or(json!({}));
         let result: Option<Result<Value, (i64, String)>> = match method {
-            "initialize" => Some(Ok(json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"kimo","version":env!("CARGO_PKG_VERSION")}}))),
+            "initialize" => Some(Ok(json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"kimo","version":kimo_core::buildinfo::VERSION,"commit":kimo_core::buildinfo::COMMIT,"schema_version":kimo_core::buildinfo::SCHEMA_VERSION}}))),
             "ping" => Some(Ok(json!({}))),
             "tools/list" => {
                 // grouped by default (about 16 entry points); mode "flat" or KIMO_TOOLS=flat lists every tool. Every tool stays callable by name either way.

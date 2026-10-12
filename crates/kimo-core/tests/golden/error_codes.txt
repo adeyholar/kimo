@@ -9,7 +9,7 @@
 08 trim_clip	out_of_range	param=	hint=
 09 set_speed	out_of_range	param=	hint=
 10 set_speed	out_of_range	param=	hint=
-11 set_property	invalid_value	param=property	hint=valid values: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface. For crop use add_effect/crop tools; for effect params use set_effect_param
+11 set_property	invalid_value	param=property	hint=valid values: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface, fill_alpha, stroke_alpha. For crop use add_effect/crop tools; for effect params use set_effect_param
 12 set_property	missing_arg	param=value	hint=required arguments: clip_id, property, value
 13 split_clip	out_of_range	param=	hint=
 14 split_clip	missing_arg	param=at	hint=required arguments: clip_id, at
@@ -25,7 +25,7 @@
 24 add_effect	invalid_value	param=kind	hint=nearest effect kinds: log_wheels, offset, bleach_bypass
 25 add_effect	not_found	param=clip_id	hint=valid clip ids (up to 10): clip3
 26 set_keyframe	missing_arg	param=value	hint=required arguments: clip_id, property, time, value
-27 set_keyframe	invalid_value	param=property	hint=valid values: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface. To keyframe an effect param pass effect_id
+27 set_keyframe	invalid_value	param=property	hint=valid values: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface, fill_alpha, stroke_alpha. To keyframe an effect param pass effect_id
 28 set_camera	out_of_range	param=	hint=
 29 set_camera	bad_arg_type	param=cam_x	hint=
 30 set_track	not_found	param=track_id	hint=valid track ids (up to 10): track1, track2
