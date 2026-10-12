@@ -3,7 +3,7 @@
 use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct ToolError { pub code: &'static str, pub message: String, #[serde(skip_serializing_if = "Option::is_none")] pub param: Option<String>, #[serde(skip_serializing_if = "Option::is_none")] pub hint: Option<String> }
+pub struct ToolError { pub code: &'static str, pub message: String, #[serde(skip_serializing_if = "Option::is_none")] pub param: Option<String>, #[serde(skip_serializing_if = "Option::is_none")] pub hint: Option<String>, #[serde(skip_serializing_if = "Option::is_none")] pub allowed: Option<Vec<String>>, #[serde(skip_serializing_if = "Option::is_none")] pub allowed_total: Option<usize> }
 
 fn quoted(s: &str) -> Option<String> { let a = s.find('\'')?; let b = s[a + 1..].find('\'')?; Some(s[a + 1..a + 1 + b].to_string()) }
 
@@ -26,7 +26,7 @@ pub fn classify(m: &str) -> (&'static str, Option<String>) {
     if m.starts_with("unknown ") { return ("invalid_value", None); }
     ("other", None)
 }
-impl From<String> for ToolError { fn from(m: String) -> Self { let (code, param) = classify(&m); ToolError { code, message: m, param, hint: None } } }
+impl From<String> for ToolError { fn from(m: String) -> Self { let (code, param) = classify(&m); ToolError { code, message: m, param, hint: None, allowed: None, allowed_total: None } } }
 impl From<&str> for ToolError { fn from(m: &str) -> Self { m.to_string().into() } }
 
 fn lev(a: &str, b: &str) -> usize {

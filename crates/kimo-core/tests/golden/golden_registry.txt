@@ -31,7 +31,7 @@ add_text 371f3ef43d353038
 add_text_animator f9b22a0205bc2780
 add_title 1461c7f60bd47216
 add_track cf1da67768a18dbb
-add_transition 381981fc7c7ed042
+add_transition 79dbb9b4db2f8da5
 analyze_color 34563f36b4186ca4
 analyze_exposure 9ca9ecd0326382b4
 analyze_exposure_sequence 635cbb61a9b00303
@@ -55,7 +55,7 @@ compare_linear_exposure afcdd34f6dab8f45
 connect_nodes b6edfff20b9c6d1f
 copy_curve 5560581f371d7986
 corner_disagreement 364bb4e3f8409a46
-create_shared_grade_graph da428f80256ef0fd
+create_shared_grade_graph 58fa459ac9911fc4
 decompose_track_homography f43e9c6e1eecb210
 delete_clip f4a1f352f81309a7
 delete_track e83a622c3e4b81fe
@@ -102,7 +102,7 @@ inspect_export_preset 140b43c0a0810263
 inspect_film_response 190cd73cf64579b9
 inspect_float_media a25c42e425351d98
 inspect_grade_graph 18945dfe59130efd
-inspect_grade_scopes 4d5f550728d85ed6
+inspect_grade_scopes 8b7d146d9123670a
 inspect_high_bit_delivery_contract 60a260a6a2377d8d
 inspect_ocio_config 04834eee72a14d76
 join_export 93d05ac7e76da91f
@@ -113,7 +113,7 @@ list_camera_solves 492655c34a9e22aa
 list_captions 524db21fe840e247
 list_edit_points d4ad4058dd15f335
 list_effects 09b58718710daf36
-list_fonts df89540623e448ba
+list_fonts 72b7c1ebd21fc6d3
 list_layer_styles dbde2afd8c479198
 list_lights 7242b7eca8aa84b6
 list_markers 63ae2e496ef97ab2

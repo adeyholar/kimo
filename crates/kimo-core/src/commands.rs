@@ -101,9 +101,24 @@ pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, Str
         if std::env::var("KIMO_STRICT_ARGS").map(|v| v == "1").unwrap_or(false) { return Err(unknown_arg_text(name, &unknown[0])); }
     }
     if KEYFRAME_TOOLS.contains(&name) { if let Some(t) = args.get("time").and_then(|v| v.as_f64()) { if t < 0.0 { return Err(format!("time must be >= 0 (clip-local seconds), got {t}")); } } }
+    // RV-22: these inputs used to fall back silently on a bad value (the renderer's default arm). Rejected at tool input only; project load and render keep the old fallback.
+    let normalized; let args = match guard_enums(name, args)? { Some(a) => { normalized = a; &normalized } None => args };
     let mut r = dispatch_inner(ss, name, args).map_err(|m| polish_error(ss, args, m))?;
     if !unknown.is_empty() { if let Some(o) = r.as_object_mut() { o.insert("warnings".into(), json!(unknown.iter().map(|k| format!("ignored {}", unknown_arg_text(name, k))).collect::<Vec<_>>())); } }
     Ok(r)
+}
+
+/// (tool, property, [(alias, canonical)]). The allowed set is the schema's own enum; anything the renderer accepts beyond it is in the schema or an alias here.
+const ENUM_GUARDS: &[(&str, &str, &[(&str, &str)])] = &[("add_text", "align", &[("centre", "center")]), ("set_mask", "shape", &[]), ("add_particles", "kind", &[]), ("add_text_animator", "unit", &[]),
+    ("add_transition", "ease", &[]), ("add_transition", "kind", &[]), ("set_blend", "mode", &[])];
+fn guard_enums(name: &str, args: &Value) -> Result<Option<Value>, String> {
+    let mut out: Option<Value> = None;
+    for (tool, prop, aliases) in ENUM_GUARDS { if *tool != name { continue; } let Some(v) = args.get(*prop).and_then(|v| v.as_str()) else { continue };
+        let Some(c) = registry_ref().iter().find(|c| c.name == name) else { continue }; let Some(en) = c.schema.pointer(&format!("/properties/{prop}/enum")).and_then(|e| e.as_array()) else { continue };
+        let vals: Vec<&str> = en.iter().filter_map(|x| x.as_str()).collect(); let lv = v.trim().to_lowercase(); let canon = aliases.iter().find(|(a, _)| *a == lv).map(|(_, c)| c.to_string()).unwrap_or(lv);
+        if !vals.contains(&canon.as_str()) { return Err(format!("unknown {prop} '{v}'. Valid: {}", vals.join(", "))); }
+        if canon != v { out.get_or_insert_with(|| args.clone())[*prop] = json!(canon); } }
+    Ok(out)
 }
 
 /// Argument keys that the tool's schema does not declare (empty when the schema is free-form).
@@ -171,10 +186,17 @@ pub fn dispatch_ex(ss: &mut Session, name: &str, args: &Value) -> Result<Value, 
             "invalid_value" => {
                 if let Some(r) = e.message.split("Valid: ").nth(1) { e.param = Some(if e.message.starts_with("unknown shape") { "shape".into() } else if e.message.starts_with("unknown clip property") || e.message.starts_with("unknown property") { "property".into() } else { "value".into() }); e.hint = Some(format!("valid values: {}", r.trim_end_matches('.'))); }
                 else if let Some(k) = e.message.strip_prefix("unknown effect '").and_then(|r| r.split('\'').next()).map(String::from) {
-                    let kinds: Vec<String> = dispatch(ss, "list_effects", &json!({})).ok().and_then(|v| v.as_array().map(|a| a.iter().filter_map(|x| x.get("kind").and_then(|k| k.as_str()).map(String::from)).collect())).unwrap_or_default(); e.param = Some("kind".into()); e.hint = Some(format!("nearest effect kinds: {}", crate::errors::nearest(&k, &kinds, 3).join(", "))); }
+                    let kinds: Vec<String> = dispatch(ss, "list_effects", &json!({})).ok().and_then(|v| v.as_array().map(|a| a.iter().filter_map(|x| x.get("kind").and_then(|k| k.as_str()).map(String::from)).collect())).unwrap_or_default(); e.param = Some("kind".into()); e.allowed_total = Some(kinds.len()); e.hint = Some(format!("nearest effect kinds: {}. list_effects returns all {} kinds", crate::errors::nearest(&k, &kinds, 3).join(", "), kinds.len())); }
             }
             _ => {}
         }
+        // RV-22: when a string argument is outside the schema's own enum, name the allowed values (generated from the same enum the schema advertises, never a hand list), with a did-you-mean. Message text is unchanged.
+        if matches!(e.code, "invalid_value" | "other" | "out_of_range") && e.allowed.is_none() { if let (Some(c), Some(obj)) = (registry_ref().iter().find(|c| c.name == name), args.as_object()) {
+            if let Some(props) = c.schema.get("properties").and_then(|p| p.as_object()) { for (pn, p) in props { let (Some(en), Some(v)) = (p.get("enum").and_then(|x| x.as_array()), obj.get(pn).and_then(|v| v.as_str())) else { continue };
+                let vals: Vec<String> = en.iter().filter_map(|x| x.as_str().map(String::from)).collect(); if vals.is_empty() || vals.iter().any(|x| x == v) { continue; }
+                let total = vals.len(); let near = crate::errors::nearest(v, &vals, 1); let mut hint = format!("valid values for '{pn}' ({total}): {}", vals.iter().take(40).cloned().collect::<Vec<_>>().join(", ")); if total > 40 { hint.push_str(", ... (first 40 shown)"); }
+                if let Some(n) = near.first() { if crate::errors::lev_pub(v, n) <= (v.len() / 2).max(2) { hint.push_str(&format!(". Did you mean '{n}'?")); } }
+                let ours = ENUM_GUARDS.iter().any(|(t, p, _)| *t == name && *p == pn.as_str()) && e.message.starts_with(&format!("unknown {pn} '")); if ours || e.param.is_none() { e.param = Some(pn.clone()); } if ours || e.hint.is_none() { e.hint = Some(hint); } e.allowed = Some(vals.iter().take(40).cloned().collect()); e.allowed_total = Some(total); break; } } } }
         e
     })
 }

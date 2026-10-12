@@ -3,7 +3,7 @@
 use crate::effects::Frame;
 use crate::model::Transition;
 
-pub const KINDS: &[&str] = &["crossfade", "wipe", "wipe_left", "wipe_right", "wipe_up", "wipe_down", "diagonal", "blinds", "checker", "iris", "clock", "split_h", "split_v", "noise_dissolve", "slide_left", "slide_right", "slide_up", "slide_down", "zoom", "zoom_blur", "spin", "flash", "dip_black", "dip_white", "dip_color", "light_leak", "glitch", "whip_left", "whip_right", "shatter", "shatter_cells"];
+pub const KINDS: &[&str] = &["crossfade", "dissolve", "wipe", "wipe_left", "wipe_right", "wipe_up", "wipe_down", "diagonal", "blinds", "checker", "iris", "clock", "split_h", "split_v", "noise_dissolve", "slide_left", "slide_right", "slide_up", "slide_down", "zoom", "zoom_blur", "spin", "flash", "dip_black", "dip_white", "dip_color", "light_leak", "glitch", "whip_left", "whip_right", "shatter", "shatter_cells"];
 pub const EASES: &[&str] = &["linear", "in", "out", "in_out", "in_cubic", "out_cubic", "in_out_cubic", "in_out_expo", "out_back", "out_bounce"];
 
 pub fn ease(name: &str, t: f64) -> f64 {
