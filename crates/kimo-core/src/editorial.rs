@@ -41,6 +41,23 @@ pub fn caption_visible(p: &Project, id: &str) -> bool {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AudioEffect {
+    Biquad {
+        sections: Vec<[f64; 5]>,
+        #[serde(default)]
+        channels: Option<Vec<usize>>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        keys: BTreeMap<String, crate::keyframe::Prop>,
+    },
+    Fir {
+        coeffs: Vec<f64>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        keys: BTreeMap<String, crate::keyframe::Prop>,
+    },
+    MixMatrix {
+        matrix: Vec<Vec<f64>>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        keys: BTreeMap<String, crate::keyframe::Prop>,
+    },
     Eq {
         frequency: f64,
         width: f64,
@@ -70,6 +87,7 @@ pub enum AudioEffect {
 impl AudioEffect {
     pub fn filter(&self) -> String {
         match self {
+ Self::Biquad{..}|Self::Fir{..}|Self::MixMatrix{..}=>"anull".into(),
  Self::Eq{frequency,width,gain_db}=>format!("equalizer=f={frequency}:t=q:w={width}:g={gain_db}"),
  Self::Compressor{threshold_db,ratio,attack_ms,release_ms,makeup_db}=>format!("acompressor=threshold={}dB:ratio={ratio}:attack={attack_ms}:release={release_ms}:makeup={}dB",threshold_db,makeup_db),
  Self::Deesser{intensity,max,frequency}=>format!("deesser=i={intensity}:m={max}:f={frequency}"),
@@ -193,11 +211,75 @@ pub fn reverb(pcm: &mut [f32], decay: f64, delay_ms: f64) {
     }
 }
 pub fn process_pcm(pcm: &mut [f32], effects: &[AudioEffect]) {
+    process_pcm_checked(pcm, effects).unwrap_or_else(|e| panic!("{e}"));
+}
+pub fn process_pcm_checked(pcm: &mut [f32], effects: &[AudioEffect]) -> Result<(), String> {
     for e in effects {
+        use crate::perception::audio_raw::{Samples, Section};
+        let raw = matches!(
+            e,
+            AudioEffect::Biquad { .. } | AudioEffect::Fir { .. } | AudioEffect::MixMatrix { .. }
+        );
+        if raw {
+            if raw_keys(e).map_or(false, |k| !k.is_empty()) {
+                process_keyed_raw(pcm, e)?;
+                continue;
+            }
+            let input = Samples {
+                rate: 48000,
+                planes: vec![
+                    pcm.chunks_exact(2).map(|p| p[0]).collect(),
+                    pcm.chunks_exact(2).map(|p| p[1]).collect(),
+                ],
+            };
+            let result = match e {
+                AudioEffect::Biquad {
+                    sections,
+                    channels,
+                    keys,
+                } => {
+                    let sec: Vec<_> = sections
+                        .iter()
+                        .map(|s| Section {
+                            b: [s[0], s[1], s[2]],
+                            a: [1., s[3], s[4]],
+                        })
+                        .collect();
+                    crate::perception::audio_raw::biquad(&input, &sec).map(|mut out| {
+                        if let Some(ch) = channels {
+                            for c in 0..2 {
+                                if !ch.contains(&c) {
+                                    out.planes[c] = input.planes[c].clone();
+                                }
+                            }
+                        }
+                        out
+                    })
+                }
+                AudioEffect::Fir { coeffs, keys } => {
+                    crate::perception::audio_raw::fir(&input, coeffs)
+                }
+                AudioEffect::MixMatrix { matrix, keys } => {
+                    crate::perception::audio_raw::mix_matrix(&input, matrix)
+                }
+                _ => unreachable!(),
+            };
+            match result {
+                Ok(out) => {
+                    for (i, p) in pcm.chunks_exact_mut(2).enumerate() {
+                        p[0] = out.planes[0][i];
+                        p[1] = out.planes[1][i];
+                    }
+                }
+                Err(e) => return Err(e),
+            };
+            continue;
+        }
         if let AudioEffect::Reverb { decay, delay_ms } = e {
             reverb(pcm, *decay, *delay_ms)
         }
     }
+    Ok(())
 }
 
 /// Four-phase windowed-sinc reconstruction estimate of intersample peak.
@@ -330,4 +412,79 @@ mod truepeak_tests {
         }
         std::fs::remove_file(path).unwrap();
     }
+}
+
+fn raw_keys(e: &AudioEffect) -> Option<&BTreeMap<String, crate::keyframe::Prop>> {
+    match e {
+        AudioEffect::Biquad { keys, .. }
+        | AudioEffect::Fir { keys, .. }
+        | AudioEffect::MixMatrix { keys, .. } => Some(keys),
+        _ => None,
+    }
+}
+fn process_keyed_raw(pcm: &mut [f32], e: &AudioEffect) -> Result<(), String> {
+    let keys = raw_keys(e).unwrap();
+    let at = |name: &str, d: f64, t: f64| keys.get(name).map(|p| p.raw(t)).unwrap_or(d);
+    let input = pcm.to_vec();
+    let mut states = match e {
+        AudioEffect::Biquad { sections, .. } => vec![[[0f64; 2]; 2]; sections.len()],
+        _ => vec![],
+    };
+    for i in 0..pcm.len() / 2 {
+        if i % 16384 == 0 {
+            crate::guard::check();
+        }
+        let t = i as f64 / 48000.;
+        let mut pair = [input[i * 2] as f64, input[i * 2 + 1] as f64];
+        match e {
+            AudioEffect::Biquad {
+                sections, channels, ..
+            } => {
+                for (k, s) in sections.iter().enumerate() {
+                    let mut co = *s;
+                    for (c, name) in ["b0", "b1", "b2", "a1", "a2"].iter().enumerate() {
+                        co[c] = at(&format!("sections.{k}.{name}"), co[c], t);
+                    }
+                    for ch in 0..2 {
+                        if channels.as_ref().map_or(false, |c| !c.contains(&ch)) {
+                            continue;
+                        }
+                        let st = &mut states[k][ch];
+                        let x = pair[ch];
+                        let y = co[0] * x + st[0];
+                        st[0] = co[1] * x - co[3] * y + st[1];
+                        st[1] = co[2] * x - co[4] * y;
+                        pair[ch] = y;
+                    }
+                }
+            }
+            AudioEffect::Fir { coeffs, .. } => {
+                pair = [0.; 2];
+                for (k, &c) in coeffs.iter().enumerate().take(i + 1) {
+                    let c = at(&format!("coeffs.{k}"), c, t);
+                    for ch in 0..2 {
+                        pair[ch] += c * input[(i - k) * 2 + ch] as f64;
+                    }
+                }
+            }
+            AudioEffect::MixMatrix { matrix, .. } => {
+                let x = pair;
+                for ch in 0..2 {
+                    pair[ch] = 0.;
+                    for src in 0..2 {
+                        pair[ch] += at(&format!("matrix.{ch}.{src}"), matrix[ch][src], t) * x[src];
+                    }
+                }
+            }
+            _ => {}
+        }
+        for ch in 0..2 {
+            let v = pair[ch] as f32;
+            if !v.is_finite() {
+                return Err(format!("invalid_filter: keyed raw coefficient output nonfinite at sample {i}, no substitution"));
+            }
+            pcm[i * 2 + ch] = v;
+        }
+    }
+    Ok(())
 }

@@ -34,9 +34,9 @@ pub fn render(s: &SpeedLines, f: &mut Frame, lt: f64) {
     let rmax = ((w * w + h * h) as f64).sqrt() * 0.5 * (1.0 + (0.5 - s.cx).abs().max((0.5 - s.cy).abs()) * 2.0);
     let rot = (s.spin * lt).to_radians();
     // rays: (angle, half-width rad at outer, inner radius px)
-    let rays: Vec<(f64, f64, f64)> = (0..n).map(|i| { let k = s.seed.wrapping_mul(7919).wrapping_add(step * 104729).wrapping_add(i as u64 * 31);
-        let a = (i as f64 + hash(k) * 0.9) / n as f64 * std::f64::consts::TAU + rot; let hw = (s.width[0] + (s.width[1] - s.width[0]) * hash(k + 1).powf(1.5)).to_radians();
-        let inn = rmax * s.inner * (0.8 + 0.5 * hash(k + 2)); (a, hw, inn) }).collect();
+    let rays: Vec<(f64, f64, f64)> = (0..n).map(|i| { let k = s.seed.wrapping_mul(7919).wrapping_add(step.wrapping_mul(104729)).wrapping_add((i as u64).wrapping_mul(31));
+        let a = (i as f64 + hash(k) * 0.9) / n as f64 * std::f64::consts::TAU + rot; let hw = (s.width[0] + (s.width[1] - s.width[0]) * hash(k.wrapping_add(1)).powf(1.5)).to_radians();
+        let inn = rmax * s.inner * (0.8 + 0.5 * hash(k.wrapping_add(2))); (a, hw, inn) }).collect();
     let col = [s.color[0] as f32, s.color[1] as f32, s.color[2] as f32];
     let tau = std::f64::consts::TAU;
     for y in 0..h { for x in 0..w {
@@ -49,4 +49,22 @@ pub fn render(s: &SpeedLines, f: &mut Frame, lt: f64) {
         if cov > 0.0 { let i = (y * w + x) * 4; let a = cov as f32; let da = f.d[i + 3]; let oa = a + da * (1.0 - a);
             for j in 0..3 { f.d[i + j] = (col[j] * a + f.d[i + j] * da * (1.0 - a)) / oa.max(1e-6); } f.d[i + 3] = oa; }
     }}
+}
+
+#[cfg(test)]
+mod prng_overflow_tests {
+    use super::*;
+    #[test]
+    fn extreme_seed_and_flicker_step_are_deterministic() {
+        // seed * 7919 wraps to u64::MAX, exercising hash offset overflow.
+        for (seed, time, flicker) in [(5627899189554524145u64, 0.0, 0.0), (0, 1e16, 12.0)] {
+            let s: SpeedLines = serde_json::from_value(serde_json::json!({"seed":seed,"flicker_fps":flicker})).unwrap();
+            let mut a = Frame::new(16, 16);
+            let mut b = Frame::new(16, 16);
+            render(&s, &mut a, time);
+            render(&s, &mut b, time);
+            assert_eq!(a.d, b.d);
+            assert!(a.d.iter().all(|v| v.is_finite()));
+        }
+    }
 }

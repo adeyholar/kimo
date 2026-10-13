@@ -1,5 +1,5 @@
 00 no_such_tool	unknown_tool	param=tool	hint=nearest tools: match_color, connect_nodes, edit_caption
-01 set_propertyy	unknown_tool	param=tool	hint=nearest tools: set_property, get_project, get_scopes
+01 set_propertyy	unknown_tool	param=tool	hint=nearest tools: set_property, bake_property, get_project
 02 delete_clip	missing_arg	param=clip_id	hint=required arguments: clip_id
 03 delete_clip	bad_arg_type	param=clip_id	hint=
 04 delete_clip	not_found	param=clip_id	hint=valid clip ids (up to 10): clip3
@@ -22,7 +22,7 @@
 21 add_shape	missing_arg	param=shape	hint=required arguments: track_id, shape, start, duration
 22 add_shape	not_found	param=track_id	hint=valid track ids (up to 10): track1, track2
 23 add_shape	invalid_value	param=shape	hint=valid values: rect, ellipse, polygon, line
-24 add_effect	invalid_value	param=kind	hint=nearest effect kinds: log_wheels, offset, bleach_bypass. list_effects returns all 114 kinds
+24 add_effect	invalid_value	param=kind	hint=nearest effect kinds: log_wheels, offset, bleach_bypass. list_effects returns all 118 kinds
 25 add_effect	not_found	param=clip_id	hint=valid clip ids (up to 10): clip3
 26 set_keyframe	missing_arg	param=value	hint=required arguments: clip_id, property, time, value
 27 set_keyframe	invalid_value	param=property	hint=valid values: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface, fill_alpha, stroke_alpha. To keyframe an effect param pass effect_id
@@ -58,3 +58,20 @@
 57 batch	invalid_reference	param=ops[0]	hint=
 58 batch	batch_failed	param=ops[1]	hint=
 59 batch	project_drift	param=	hint=
+60 audio_speech_intervals	other	param=mode	hint=valid values for 'mode' (2): vad, silence
+61 audio_speech_intervals	out_of_range	param=	hint=
+62 audio_speech_intervals	not_found	param=	hint=valid clip ids (up to 10): clip3
+63 set_keyframes	other	param=	hint=
+64 set_keyframes	other	param=	hint=
+65 set_keyframes	invalid_value	param=property	hint=valid values: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface, fill_alpha, stroke_alpha, flow_blur, flow_quality, pin_gain, reveal, path. To keyframe an effect param pass effect_id
+66 sample_property	other	param=	hint=
+67 sample_property	other	param=	hint=
+68 sample_property	other	param=space	hint=valid values for 'space' (2): timeline, clip
+69 bake_property	other	param=	hint=
+70 bake_property	other	param=	hint=
+71 bake_property	other	param=	hint=
+72 bake_property	invalid_state	param=	hint=
+73 set_expression	other	param=	hint=
+74 set_expression	other	param=	hint=
+75 set_expression	other	param=	hint=
+76 set_expression	other	param=	hint=

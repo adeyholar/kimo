@@ -53,7 +53,7 @@ impl Limits { pub fn from_env() -> Self { Limits { max_num: env("KIMO_MAX_NUM", 
     mem_bytes: env::<usize>("KIMO_MEM_MB", 0).checked_mul(1 << 20).filter(|v| *v > 0).unwrap_or(total_mem() / 100 * 55), timeout_s: env("KIMO_TIMEOUT_S", 600), export_timeout_s: env("KIMO_EXPORT_TIMEOUT_S", 7200) } } }
 pub fn limits() -> &'static Limits { static L: std::sync::OnceLock<Limits> = std::sync::OnceLock::new(); L.get_or_init(Limits::from_env) }
 /// Set the memory budget from the limits (called once at server start).
-pub fn init() { let b = limits().mem_bytes; BUDGET.store(b, Relaxed); HARD.store(b.saturating_add(b / 4).saturating_add(512 << 20).min(total_mem() / 100 * 85), Relaxed); }
+pub fn init() { let b = match std::env::var("KIMO_MEMORY_BUDGET_BYTES") { Ok(v)=>{let b=v.parse::<usize>().expect("KIMO_MEMORY_BUDGET_BYTES must be integer");let ceiling=crate::resource_limits::memory_ceiling() as usize;if b>ceiling {panic!("KIMO_MEMORY_BUDGET_BYTES exceeds physical RAM minus 1 GiB ceiling {ceiling}")}b},Err(_)=>limits().mem_bytes }; BUDGET.store(b, Relaxed); HARD.store(b.saturating_add(b / 4).saturating_add(512 << 20).min(total_mem() / 100 * 85), Relaxed); }
 /// Encoder child (ffmpeg/x264) RSS measured at 1920x1080, default settings: 479 MB; with the opt-in low_memory x264 params: 257 MB (see FEATURES.md, export memory). Scaled by pixel count.
 pub const ENCODER_RSS_1080P: usize = 479 << 20;
 pub const ENCODER_RSS_1080P_LOW: usize = 257 << 20;
@@ -130,3 +130,6 @@ pub fn run_tool_guarded(ss: &std::sync::Arc<std::sync::Mutex<crate::commands::Se
         }
     }
 }
+
+pub mod limits;
+pub use limits::effective_limits;

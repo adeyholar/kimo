@@ -9,6 +9,8 @@ fn quoted(s: &str) -> Option<String> { let a = s.find('\'')?; let b = s[a + 1..]
 
 /// Classify an error text by prefix/pattern. Returns (code, param).
 pub fn classify(m: &str) -> (&'static str, Option<String>) {
+    for code in ["no_audio","range_empty","insufficient_data","decode_failed","invalid_source","size_mismatch","invalid_metric","invalid_method","out_of_range","too_many_frames","invalid_event","invalid_samples","invalid_filter","limit_exceeded"] { if m.starts_with(&format!("{code}:")) { return (code,None); } }
+    if m.starts_with("expr_timeout_ms exceeded"){return ("timeout",Some("expr_timeout_ms".into()))}
     if m.contains("has no time; use set_keyframe") { return ("invalid_argument_combo", Some("time".to_string())); }
     if m.starts_with("time must be >= 0") { return ("out_of_range", Some("time".to_string())); }
     if m.starts_with("unknown argument") { return ("unknown_argument", quoted(m)); }

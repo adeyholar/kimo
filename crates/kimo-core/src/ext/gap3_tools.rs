@@ -4,7 +4,7 @@ use crate::keyframe::{Op, Prop};
 use crate::model::{Effect, Source};
 use std::collections::BTreeMap;
 
-fn kind_of(o: &Op) -> &'static str { match o { Op::Wiggle { .. } => "wiggle", Op::LoopOut { .. } | Op::LoopIn { .. } => "loop", Op::Sin { .. } => "sin", Op::Inertia { .. } => "inertia", Op::Bounce { .. } => "bounce", Op::Overshoot { .. } => "overshoot", Op::PosterizeTime { .. } => "posterize_time", Op::Clamp { .. } => "clamp", Op::Round { .. } => "round" } }
+fn kind_of(o: &Op) -> &'static str { match o { Op::Wiggle { .. } => "wiggle", Op::LoopOut { .. } | Op::LoopIn { .. } => "loop", Op::Sin { .. } => "sin", Op::Inertia { .. } => "inertia", Op::Bounce { .. } => "bounce", Op::Overshoot { .. } => "overshoot", Op::PosterizeTime { .. } => "posterize_time", Op::Clamp { .. } => "clamp", Op::Round { .. } => "round", Op::Spring { .. } => "spring", Op::NoiseImpulse { .. } => "noise_impulse", Op::Bezier { .. } => "bezier" } }
 fn hash_seed(s: &str) -> u64 { let mut h: u64 = 0xcbf29ce484222325; for b in s.bytes() { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); } h }
 fn prop_of<'a>(ss: &'a mut Session, a: &Value) -> Result<&'a mut Prop, String> {
     let cid = str_arg(a, "clip_id")?.to_string(); let k = str_arg(a, "property")?.to_string(); let eid = a.get("effect_id").and_then(|v| v.as_str()).map(String::from);

@@ -183,3 +183,25 @@ rust lower_third fast
 
 rust narration_section fast
 rust recipes fast
+rust vad fast
+rust audio_transients fast
+py audio_transients_mutation.py full
+
+rust diff_frames fast
+rust detect_cuts fast
+rust match_events fast
+py visual_perception_proof.py fast
+py visual_perception_mutation.py full
+py perception_e2e.py full
+py match_events_mutation.py full
+rust curves fast
+rust pixels fast
+rust pixel_expr fast
+rust distortion_audit fast
+
+rust asset_metadata fast
+rust audio_raw fast
+rust audio_legacy_hashes fast
+py audio_raw_mutation.py full
+py audio_samples_stdio.py fast
+rust xform_lint fast

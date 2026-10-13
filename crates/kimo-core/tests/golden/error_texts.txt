@@ -58,3 +58,20 @@
 57 batch {"ops":[{"args":{"name":"$zz.x"},"tool":"add_track"}]}	invalid_reference: ops[0] (add_track): reference '$zz.x' names an unknown op 'zz'\n{"applied":0,"rolled_back":false,"validation_errors":[{"code":"invalid_reference","id":"1","index":0,"message":"reference '$zz.x' names an unknown op 'zz'","tool":"add_track"}]}
 58 batch {"ops":[{"args":{"clip_id":"clip3"},"tool":"delete_clip"},{"args":{"clip_id":"clip3"},"tool":"delete_clip"}]}	batch_failed: ops[1] (delete_clip) failed: no such clip 'clip3' (rolled back, nothing applied)\n{"applied":0,"failed_op":{"error":{"code":"not_found","message":"no such clip 'clip3'","param":null},"id":"2","index":1,"tool":"delete_clip"},"rolled_back":true}
 59 batch {"expect_revision":"deadbeef","ops":[{"tool":"add_track"}]}	project_drift: the project changed since the dry run (expected revision deadbeef, live revision 8a8b3d0306f7a0d8); run the dry_run again
+60 audio_speech_intervals {"mode":"bogus"}	mode must be vad|silence
+61 audio_speech_intervals {"aggressiveness":4}	aggressiveness must be an integer 0..3
+62 audio_speech_intervals {"target":{"clip_id":"missing"}}	no such clip 'missing'
+63 set_keyframes {"clip_id":"clip3","keys":[{"t":0.0}],"property":"opacity"}	keys[0].v must be a number
+64 set_keyframes {"clip_id":"clip3","keys":[],"property":"opacity"}	keys must have at least one key
+65 set_keyframes {"clip_id":"clip3","keys":[{"t":0.0,"v":1.0}],"property":"nope"}	unknown clip property 'nope': nothing reads it. Valid: opacity, x, y, scale, rotation, rot_x, rot_y, pos_z, backface, fill_alpha, stroke_alpha, flow_blur, flow_quality, pin_gain, reveal, path. To keyframe an effect param pass effect_id.
+66 sample_property {"clip_id":"clip3","property":"nope","times":[0.0]}	clip has no property 'nope'. Properties on this clip: opacity, reveal, rotation, scale, x, y
+67 sample_property {"clip_id":"clip3","property":"x","times":[]}	times needs 1 to 100000 numbers
+68 sample_property {"clip_id":"clip3","property":"x","space":"zzz","times":[0.0]}	space is not allowed. Valid: timeline, clip
+69 bake_property {"clip_id":"clip3","end":1.0,"n":3,"property":"nope","start":0.0}	clip has no property 'nope'. Properties on this clip: opacity, reveal, rotation, scale, x, y
+70 bake_property {"clip_id":"clip3","end":1.0,"property":"x","start":0.0}	give fps (keys per second) or n (key count)
+71 bake_property {"clip_id":"clip3","end":1.0,"fps":10,"property":"x","start":1.0}	end must be greater than start
+72 bake_property {"clip_id":"clip3","drop_expression":false,"end":1.0,"fps":10,"property":"x","start":0.0}	drop_expression:false would apply the expression twice (the baked keys already contain it). Use sample_property to read without changing the property
+73 set_expression {"clip_id":"clip3","mass":0.0,"op":"spring","property":"x"}	spring needs stiffness > 0, mass > 0 and damping >= 0 (finite)
+74 set_expression {"clip_id":"clip3","duration":0.0,"op":"bezier","property":"x"}	bezier needs duration > 0
+75 set_expression {"clip_id":"clip3","combine":"zzz","op":"spring","property":"x"}	combine is not allowed. Valid: set, add, mul
+76 set_expression {"camera":true,"op":"spring","property":"nope"}	no camera field 'nope'. Valid: 

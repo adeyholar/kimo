@@ -100,3 +100,31 @@ fn hash_frames(ss: &Session) -> Vec<u64> { let cache = render::Cache::new(); [0.
         let mut b = fresh(); c(&mut b, "batch", json!({"ops": ops})); assert_eq!(pj(&a), pj(&b), "case {case}: batch differs from individual calls");
     }
 }
+
+fn shape_batch(floor: Option<Value>, dur: f64, atomic: bool) -> (Session, Result<Value, String>) {
+    let mut ss = fresh(); let t = c(&mut ss, "add_track", json!({}))["track_id"].as_str().unwrap().to_string();
+    let id = c(&mut ss, "add_shape", json!({"track_id": t, "shape": "rect", "width": 20, "height": 20, "fill": [1, 1, 1, 1], "start": 0.0, "duration": 2.0}))["clip_id"].as_str().unwrap().to_string();
+    let mut a = json!({"ops": [{"tool": "trim_clip", "args": {"clip_id": id, "duration": dur}}], "atomic": atomic}); if let Some(f) = floor { a["min_clip_frames"] = f; }
+    let r = dispatch(&mut ss, "batch", &a); (ss, r)
+}
+#[test] fn min_clip_frames_floor_blocks_degenerate_clips_and_rolls_back() {
+    let (ss0, _) = shape_batch(None, 2.0, true); let base = pj(&ss0);
+    let (ss, r) = shape_batch(None, 0.01, true); let m = r.unwrap_err(); assert!(m.starts_with("batch_failed:") && m.contains("clip_too_short") && m.contains("min_clip_frames"), "{m}"); assert_eq!(pj(&ss), base, "rolled back exactly");
+    let (_, r) = shape_batch(None, 0.04, true); assert!(r.unwrap_err().contains("clip_too_short"), "1 frame is under the default floor of 2");
+    let (_, r) = shape_batch(None, 0.08, true); assert!(r.is_ok(), "exactly 2 frames passes: {r:?}");
+    let (_, r) = shape_batch(Some(json!(1)), 0.04, true); assert!(r.is_ok(), "floor 1 allows a 1-frame clip");
+    let (_, r) = shape_batch(Some(json!(4)), 0.12, true); assert!(r.unwrap_err().contains("clip_too_short"), "floor 4 rejects 3 frames");
+    let (_, r) = shape_batch(None, 0.01, true); let _ = r;
+    let (_, r) = shape_batch(Some(json!(0)), 0.001, true); assert!(r.is_ok(), "0 disables the floor: {r:?}");
+    for bad in [json!(-1), json!(5), json!("2"), json!(2.5)] { let (_, r) = shape_batch(Some(bad), 1.0, true); assert!(r.unwrap_err().contains("0 to 4")); }
+}
+#[test] fn min_clip_frames_dry_run_fails_and_non_atomic_warns_and_untouched_clips_are_ignored() {
+    let mut ss = fresh(); let t = c(&mut ss, "add_track", json!({}))["track_id"].as_str().unwrap().to_string();
+    let tiny = c(&mut ss, "add_shape", json!({"track_id": t, "shape": "rect", "width": 20, "height": 20, "fill": [1, 1, 1, 1], "start": 0.0, "duration": 0.01}))["clip_id"].as_str().unwrap().to_string();
+    let ok = c(&mut ss, "add_shape", json!({"track_id": t, "shape": "rect", "width": 20, "height": 20, "fill": [1, 1, 1, 1], "start": 1.0, "duration": 2.0}))["clip_id"].as_str().unwrap().to_string();
+    let r = c(&mut ss, "batch", json!({"ops": [{"tool": "set_property", "args": {"clip_id": ok, "property": "opacity", "value": 0.5}}]})); assert_eq!(r["ok"], true, "a pre-existing tiny clip the batch did not touch is not flagged");
+    let before = pj(&ss);
+    let m = e(&mut ss, "batch", json!({"dry_run": true, "ops": [{"tool": "trim_clip", "args": {"clip_id": ok, "duration": 0.01}}]})); assert!(m.contains("clip_too_short")); assert_eq!(pj(&ss), before);
+    let r = c(&mut ss, "batch", json!({"atomic": false, "ops": [{"tool": "trim_clip", "args": {"clip_id": ok, "duration": 0.01}}]})); assert_eq!(r["ok"], true); assert!(r["warnings"].to_string().contains("clip_too_short"), "{r}");
+    assert!(ss.project.find_clip(&ok).unwrap().duration < 0.02, "non-atomic keeps the ops"); let _ = tiny;
+}

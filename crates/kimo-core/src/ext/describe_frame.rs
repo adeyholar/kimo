@@ -56,7 +56,7 @@ pub fn commands() -> Vec<Command> { vec![
                 "phash64": format!("{:016x}", ph)});
             // clips active at t (ids and numbers only; no project text)
             let mut vis = vec![]; let mut total = 0usize; for (ti, tr) in ss.project.tracks.iter().enumerate() { for c in &tr.clips { if t >= c.start && t < c.start + c.duration {
-                total += 1; if vis.len() < 50 { let lt = t - c.start; let op = c.props.get("opacity").map(|p| p.at(lt)).unwrap_or(1.0); let dbg = format!("{:?}", c.source); let ty = dbg.split(|ch: char| !ch.is_alphanumeric()).next().unwrap_or("").to_string();
+                total += 1; if vis.len() < 50 { let lt = t - c.start; let op = if c.props.contains_key("opacity") { crate::render::resolve_xform(&ss.project, c, lt).opacity } else { 1.0 }; let dbg = format!("{:?}", c.source); let ty = dbg.split(|ch: char| !ch.is_alphanumeric()).next().unwrap_or("").to_string();
                     vis.push(json!({"clip_id": c.id, "track": ti, "source_type": ty, "blend": c.blend, "opacity": op})); } } } }
             out["visible_clips"] = json!(vis); out["visible_clips_total"] = json!(total);
             let mut warnings = vec![]; if total == 0 { warnings.push("no clip is visible at this time"); } if mean < 0.004 && nb as f64 / np > 0.999 { warnings.push("frame is black"); } if nw as f64 / np > 0.999 { warnings.push("frame is white"); } if lapvar < 1.0 { warnings.push("very low detail: flat, blank or unrendered asset"); }

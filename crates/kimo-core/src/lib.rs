@@ -44,6 +44,12 @@ pub mod particles;
 pub mod titles;
 pub mod transitions;
 pub mod audio;
+pub mod perception;
+pub mod assets;
+pub mod pixels;
+pub mod pixel_expr;
+pub mod shader_ops;
+pub mod resource_limits;
 pub mod tracking; pub mod roto;
 pub mod edit;
 pub mod effects2;
@@ -65,3 +71,4 @@ pub mod long_gap;
 pub mod editorial;
 
 pub mod timecode;
+

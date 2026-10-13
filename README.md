@@ -25,7 +25,7 @@ Scene tools (RV-11): `batch` runs many tool calls as one atomic, undoable step (
 
 **v1.0.0.** 255 tools, fuzzed (9359 calls, 0 failures). `main` is the stable v1. The `v2` branch carries the v2 work (263 tools, fuzzed: 9549 calls, 0 failures; see patches/MANIFEST.md for the unit-by-unit changelog).
 
-**v3 branch (2.0.0-dev.1, in development).** 286 tools, fuzzed (6497 calls, 0 failures). `kimo_info` reports the build: version, git commit, project schema version, enabled features, ffmpeg/ffprobe versions. Saved projects carry a `kimo` block (schema_version, created_with, last_saved_with; set `KIMO_NO_IDENTITY=1` to omit it) and export reports carry the same identity. `add_shape` alpha semantics changed: the fill alpha no longer folds into layer opacity. Fill alpha (`fill_alpha`), stroke alpha (`stroke_alpha`) and layer opacity are separate animatable properties, so a hollow ring (fill alpha 0) keeps its stroke. Invalid enum values now error (tool input only; saved projects with old values still load and render as before): add_text align, set_mask shape, add_particles kind, add_text_animator unit, add_transition kind/ease and set_blend mode used to be accepted silently; every rejection lists the allowed values. Old saved projects are unchanged (a project without the new properties renders as before).
+**v3 branch (2.0.0-dev.1, in development).** 304 tools, fuzzed (6497 calls, 0 failures). `kimo_info` reports the build: version, git commit, project schema version, enabled features, ffmpeg/ffprobe versions. Saved projects carry a `kimo` block (schema_version, created_with, last_saved_with; set `KIMO_NO_IDENTITY=1` to omit it) and export reports carry the same identity. `add_shape` alpha semantics changed: the fill alpha no longer folds into layer opacity. Fill alpha (`fill_alpha`), stroke alpha (`stroke_alpha`) and layer opacity are separate animatable properties, so a hollow ring (fill alpha 0) keeps its stroke. Invalid enum values now error (tool input only; saved projects with old values still load and render as before): add_text align, set_mask shape, add_particles kind, add_text_animator unit, add_transition kind/ease and set_blend mode used to be accepted silently; every rejection lists the allowed values. Old saved projects are unchanged (a project without the new properties renders as before).
 
 kimo is a video editor with no GUI. You talk to it over the [Model Context Protocol](https://modelcontextprotocol.io). Cut, keyframe, grade, track, key, relight, simulate, caption, mix and export are all registered commands, and the MCP server's tool list is generated from that same registry. There is no feature a human can reach that an AI cannot.
 
@@ -36,6 +36,79 @@ The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve
 - **Measured, not claimed.** Every "better than X" line in FEATURES.md has a stated baseline and a measured number, including the cases where we lost.
 - **Few entry points.** `tools/list` returns 16 grouped tools (15.7 KB) instead of 255 (176 KB), measured 11.2x smaller (compact JSON, v1.0.0). Every individual tool is still callable by its own name.
 - **Fuzzed.** 255 tools (v1.0.0) / 263 tools (v2), 9359 / 9549 calls, 0 failures, before anything is published.
+
+## Run the v3 branch (build from source, no main merge needed)
+
+The prebuilt downloads below are v1.0.0. To run the v3 branch (the tool count in the v3 paragraph above), clone it and build it. Everything in this section was run against a build of this branch.
+
+**Prerequisites**
+
+- Rust stable (install with [rustup](https://rustup.rs)) and a C linker (`build-essential` on Debian/Ubuntu).
+- `ffmpeg` and `ffprobe` on PATH (`sudo apt install ffmpeg`; checked with ffmpeg 4.4.2). Decode, encode and probing go through them.
+- About 2 GB of RAM is enough to run. The release build is the heavy part: use `CARGO_BUILD_JOBS=1` on a small box (measured 17 minutes for a cold release build of the whole workspace on a shared 2 CPU / 2 GB machine).
+- Linux x86_64 is the tested platform. Other platforms: see the Windows and macOS notes below.
+
+**Build**
+
+```
+git clone -b v3 https://github.com/naman-sharma12345/kimo.git
+cd kimo
+CARGO_BUILD_JOBS=1 cargo build --release --workspace --bins
+ls target/release/kimo target/release/kimo-mcp
+target/release/kimo --version          # prints version 2.0.0-dev.1 and the git commit
+```
+
+`kimo-mcp` is the MCP server (stdio). `kimo` is the command line client for the same tools.
+
+**Check the MCP server answers**
+
+```
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | target/release/kimo-mcp
+```
+
+The reply contains `"serverInfo":{"commit":"...","name":"kimo",...,"version":"2.0.0-dev.1"}`.
+
+**Client config.** Use the absolute path of the binary you just built, for example `/home/you/kimo/target/release/kimo-mcp`.
+
+- Claude Code: `claude mcp add --transport stdio kimo -- /home/you/kimo/target/release/kimo-mcp`
+- Claude Desktop: add this to `claude_desktop_config.json` (Settings, Developer, Edit Config) and restart the app. The `env` block is optional; `KIMO_TOOLS=core` returns a short `tools/list`.
+
+```json
+{
+  "mcpServers": {
+    "kimo": {
+      "command": "/home/you/kimo/target/release/kimo-mcp",
+      "args": [],
+      "env": { "KIMO_TOOLS": "core" }
+    }
+  }
+}
+```
+
+- Cursor: put the same block in `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one project), then switch the server on in Cursor's MCP settings.
+- Generic MCP client (stdio): command = the absolute path, no arguments, optional env as above. Any client that registers a stdio server by command and uses the `mcpServers` shape takes the block as is.
+
+The server itself (launch, `initialize`, `tools/list`) is verified on this build; the client config file locations come from each client's docs, not from a run of those apps here.
+
+Codex and OpenCode use the formats shown under "Setup" below with the same path. `KIMO_TOOLS=core` (env var on the server entry) shrinks `tools/list`; see "Tool list profiles" below.
+
+**Quickstart with the CLI.** State lives in a project file (`--project p.kimo`, created on first use). Every command below ran against this build; replace the media path with your own file.
+
+```
+K=target/release/kimo
+$K -q call add_track --project p.kimo                                  # prints {"track_id":"track1"}
+$K -q call import_media --project p.kimo --args '{"path":"/abs/path/in.mp4"}'     # returns asset_id, e.g. asset2
+$K -q call add_clip --project p.kimo --args '{"track_id":"track1","source_type":"media","asset_id":"asset2","start":0,"duration":3}'
+$K -q call add_title --project p.kimo --args '{"track_id":"track1","style":"lower_third","text":"Hello kimo","start":0.5,"duration":2}'
+$K -q call render_frame --project p.kimo --args '{"time":1,"path":"/tmp/f.png"}'  # look at one frame
+$K -q call describe_frame --project p.kimo --args '{"time":1}'                    # numbers instead of pixels: stats, histogram, clipping, visible clips
+$K -q call contact_sheet --project p.kimo --args '{"path":"/tmp/sheet.png","times":[0,1,2]}'
+$K export p.kimo out.mp4                                               # render the timeline
+$K tools search "color grade"                                          # find tools by words
+$K tools describe add_clip                                             # argument schema of one tool
+```
+
+Ids (`track1`, `asset2`) are what the previous call returned, so read them from the output. `export` checks free memory first and refuses with a clear message when the frame would not fit; set `KIMO_MEM_MB` to override its budget. Exit codes: 0 ok, 1 tool error, 2 usage, 3 preflight failed. `kimo --help` lists every subcommand.
 
 ## Install
 
@@ -197,3 +270,7 @@ Status: early, CPU renderer. See [ROADMAP.md](ROADMAP.md) and [FEATURES.md](FEAT
 The README is updated with every product change. If a change adds, removes or regroups tools, or ships a new proof, the same commit updates this file.
 
 MIT licensed.
+
+### Speech and pause perception
+
+`audio_speech_intervals` gives deterministic speech-like regions and safe pause cut advice from clips, tracks, the mix or files. It is an energy/ZCR/spectral VAD, not neural speech recognition. Default padding is 120 ms; suggestions never edit. Aggressiveness 2-3 rejects steady tones; 0-1 can mistake tone bursts for speech. Silence mode matches audio_probe 100 ms RMS windows. Waveform images are optional. Real-speech precision/recall has not yet been measured.
