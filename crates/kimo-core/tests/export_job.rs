@@ -67,3 +67,21 @@ fn chunk(d: &std::path::Path, i: u64) -> std::path::PathBuf { d.join("out.mp4.ch
     assert!(dispatch(&mut ss, "export_job_start", &json!({"path": "/tmp/x.mp4", "crf": 99})).unwrap_err().contains("crf"));
     assert!(dispatch(&mut ss, "export_job_start", &json!({"path": "/tmp/x.mp4", "chunk_s": 0})).unwrap_err().contains("chunk_s"));
 }
+
+/// Deterministic cancel: wait until the SECOND chunk is being rendered (its .partial.mp4 exists), then cancel. Retries because a chunk can finish before the cancel lands.
+#[test] fn cancel_mid_chunk_leaves_a_marked_partial_and_resume_reuses_the_finished_chunks() {
+    for attempt in 0..4 {
+        let d = tmp(&format!("midcancel{attempt}")); let (mut ss, _) = scene(3); c(&mut ss, "project_set", json!({"width": 480, "height": 270, "fps": 25}));
+        let out = d.join("out.mp4"); let dir = d.join("out.mp4.chunks"); let id = c(&mut ss, "export_job_start", json!({"path": out.to_str().unwrap(), "chunk_s": 2}))["job_id"].as_str().unwrap().to_string();
+        let t0 = std::time::Instant::now(); while !dir.join("chunk_00001.partial.mp4").exists() && t0.elapsed().as_secs() < 60 { std::thread::sleep(std::time::Duration::from_millis(1)); }
+        let s = c(&mut ss, "cancel_job", json!({"job_id": id}));
+        if s["state"] != "cancelled" { std::fs::remove_dir_all(&d).ok(); continue; }
+        assert!(dir.join("chunk_00000.mp4").is_file(), "the finished chunk stays"); assert_eq!(s["completed_ranges"], json!([[0, 50]]), "{s}");
+        assert!(dir.join("chunk_00001.mp4.partial").is_file() && dir.join("chunk_00001.mp4.partial.marker").is_file(), "unfinished chunk is marked: {:?}", std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>());
+        assert!(!dir.join("chunk_00001.mp4").exists() && !dir.join("chunk_00001.partial.mp4").exists(), "never a finished-looking file for an unfinished chunk");
+        let r = c(&mut ss, "resume_job", json!({"path": out.to_str().unwrap(), "chunk_s": 2})); let id2 = r["job_id"].as_str().unwrap().to_string();
+        let t0 = std::time::Instant::now(); let fin = loop { let s = c(&mut ss, "job_status", json!({"job_id": id2})); if s["state"] != "running" && s["state"] != "queued" || t0.elapsed().as_secs() > 120 { break s; } std::thread::sleep(std::time::Duration::from_millis(20)); };
+        assert_eq!(fin["state"], "done", "{fin}"); assert_eq!(fin["chunks"]["reused"], 1, "{fin}"); assert_eq!(frames(&out), 150); std::fs::remove_dir_all(&d).ok(); return;
+    }
+    panic!("the cancel never landed mid-chunk in 4 attempts");
+}
