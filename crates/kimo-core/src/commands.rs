@@ -97,6 +97,26 @@ fn build_registry() -> Vec<Command> {
 const KEYFRAME_TOOLS: [&str; 8] = ["set_keyframe", "set_keyframe_bezier", "set_mask_keyframe", "set_mask_prop_key", "set_mask_path_key", "set_animator_keyframe", "set_camera_keyframe", "set_audio_volume_key"];
 
 /// Public entry: runs the tool and unifies the wording of not-found and OS errors (unit 5 commit B).
+/// U1: "@name" accepted wherever a clip or track id argument exists. Only id-shaped keys are touched (clip_id, parent_id, track_id, clip_ids and the like), never free text.
+/// A plain id passes through unchanged; a bad or ambiguous name fails before anything runs (name_not_found / ambiguous_name).
+fn resolve_names(ss: &Session, name: &str, args: &Value) -> Result<Option<Value>, String> {
+    if name == "set_meta" || name == "find" { return Ok(None); }
+    let Some(o) = args.as_object() else { return Ok(None) };
+    let kind_of = |k: &str| -> Option<&'static str> { if k == "track_id" || k.ends_with("_track_id") { Some("track") } else if k == "clip_id" || k == "parent_id" || k.ends_with("_clip_id") { Some("clip") } else { None } };
+    let mut out: Option<Value> = None;
+    for (k, v) in o {
+        let list = k == "clip_ids" || k == "track_ids";
+        let kind = if list { Some(if k == "clip_ids" { "clip" } else { "track" }) } else { kind_of(k) }; let Some(kind) = kind else { continue };
+        match v {
+            Value::String(s) if !list && s.starts_with('@') => { let id = crate::ext::names::resolve_ref(&ss.project, kind, s)?; out.get_or_insert_with(|| args.clone())[k.as_str()] = json!(id); }
+            Value::Array(a) if list && a.iter().any(|x| x.as_str().is_some_and(|s| s.starts_with('@'))) => {
+                let mut ids = vec![]; for x in a { ids.push(match x.as_str() { Some(s) => json!(crate::ext::names::resolve_ref(&ss.project, kind, s)?), None => x.clone() }); } out.get_or_insert_with(|| args.clone())[k.as_str()] = Value::Array(ids); }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
 pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
     let _resource_context=crate::resource_limits::install(ss.resource_limits);
     ss.media.clear();
@@ -107,6 +127,7 @@ pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, Str
     }
     if KEYFRAME_TOOLS.contains(&name) { if let Some(t) = args.get("time").and_then(|v| v.as_f64()) { if t < 0.0 { return Err(format!("time must be >= 0 (clip-local seconds), got {t}")); } } }
     // RV-22: these inputs used to fall back silently on a bad value (the renderer's default arm). Rejected at tool input only; project load and render keep the old fallback.
+    let named; let args = match resolve_names(ss, name, args)? { Some(a) => { named = a; &named } None => args };
     let normalized; let args = match guard_enums(name, args)? { Some(a) => { normalized = a; &normalized } None => args };
     let mut r = dispatch_inner(ss, name, args).map_err(|m| polish_error(ss, args, m))?;
     if !unknown.is_empty() { if let Some(o) = r.as_object_mut() { o.insert("warnings".into(), json!(unknown.iter().map(|k| format!("ignored {}", unknown_arg_text(name, k))).collect::<Vec<_>>())); } }
@@ -196,6 +217,7 @@ pub fn dispatch_nested(ss: &mut Session, name: &str, args: &Value) -> Result<Val
     let unknown = unknown_args(name, args);
     if std::env::var("KIMO_STRICT_ARGS").map(|v| v == "1").unwrap_or(false) && !unknown.is_empty() { return Err(unknown_arg_text(name, &unknown[0])); }
     if KEYFRAME_TOOLS.contains(&name) { if let Some(t) = args.get("time").and_then(|v| v.as_f64()) { if t < 0.0 { return Err(format!("time must be >= 0 (clip-local seconds), got {t}")); } } }
+    let named; let args = match resolve_names(ss, name, args)? { Some(a) => { named = a; &named } None => args };
     let normalized; let args = match guard_enums(name, args)? { Some(a) => { normalized = a; &normalized } None => args };
     let (mut r, _rec) = run_core(ss, name, args).map_err(|m| polish_error(ss, args, m))?;
     if !unknown.is_empty() { if let Some(o) = r.as_object_mut() { o.insert("warnings".into(), json!(unknown.iter().map(|k| format!("ignored {}", unknown_arg_text(name, k))).collect::<Vec<_>>())); } }

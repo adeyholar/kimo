@@ -195,6 +195,8 @@ py visual_perception_mutation.py full
 py perception_e2e.py full
 py match_events_mutation.py full
 rust curves fast
+rust names fast
+rust layers fast
 rust pixels fast
 rust pixel_expr fast
 rust distortion_audit fast
@@ -207,3 +209,4 @@ py audio_samples_stdio.py fast
 rust transform_nodes fast
 rust xform_lint fast
 rust export_manifest fast
+rust names_hook fast

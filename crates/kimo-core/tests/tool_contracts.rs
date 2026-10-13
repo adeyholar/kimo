@@ -576,3 +576,12 @@ let before=pj(&s);let r=call(&mut s,"audio_speech_intervals",json!({"target":"mi
     row_err(&s, "set_parent", json!({"clip_id": c, "parent_id": c}), Some("parent_cycle"));
     row_err(&s, "get_transform", json!({"clip_id": c, "space": "zzz"}), Some("Valid:"));
 }
+
+#[test] fn name_meta_rows() {
+    let (s, t1, _t2, c) = one_clip();
+    row(&s, "set_meta", json!({"id": c, "name": "hero", "role": "bg", "add_tags": ["lint:allow_bleed"]}), |r, b, a| { assert_ne!(b, a); assert_eq!(r["name"], "hero"); });
+    row(&s, "set_meta", json!({"target": "track", "id": t1, "name": "main"}), |_, b, a| { assert_ne!(b, a); });
+    row(&s, "find", json!({"name_glob": "*", "limit": 5}), |r, b, a| { assert_eq!(b, a); assert!(r["total"].as_u64().unwrap() >= 1); });
+    row_err(&s, "set_meta", json!({"id": c, "name": "bad name"}), Some("invalid_name"));
+    row_err(&s, "find", json!({"limit": 0}), Some("limit"));
+}

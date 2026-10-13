@@ -92,7 +92,10 @@ pub struct Clip {
     pub transition_in: Option<Transition>,
     /// A5: transform parent (clip id). The child's x/y/scale/rotation/opacity compose with the parent's, per `inherit`.
     #[serde(default, skip_serializing_if = "Option::is_none")] pub parent: Option<String>,
-    #[serde(default, skip_serializing_if = "Inherit::is_default")] pub inherit: Inherit,
+    #[serde(default, skip_serializing_if = "Inherit::is_default")] pub inherit: Inherit,    /// U1: optional project-unique handle for `@name` references, a free-form role label, and tags. All skipped when empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub tags: Vec<String>,
 }
 /// Which parts of the parent's transform a child inherits (all on by default).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]

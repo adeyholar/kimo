@@ -40,6 +40,8 @@ fn calls(t1: &str, c: &str) -> Vec<(&'static str, Value)> {
         ("set_expression", json!({"clip_id": c, "property": "x", "op": "spring", "mass": 0.0})), ("set_expression", json!({"clip_id": c, "property": "x", "op": "bezier", "duration": 0.0})), ("set_expression", json!({"clip_id": c, "property": "x", "op": "spring", "combine": "zzz"})), ("set_expression", json!({"camera": true, "property": "nope", "op": "spring"})),
         ("set_parent", json!({"clip_id": c, "parent_id": c})), ("set_parent", json!({"clip_id": c, "parent_id": "nope"})), ("set_parent", json!({"clip_id": c, "parent_id": null, "mode": "zip"})), ("set_parent", json!({"clip_id": c, "parent_id": null, "inherit": {"time": true}})),
         ("get_transform", json!({"clip_id": c, "space": "zzz"})), ("get_transform", json!({"clip_id": "nope"})), ("add_null", json!({"track_id": "nope", "start": 0.0, "duration": 1.0})),
+        ("set_meta", json!({"id": c, "name": "has space"})), ("set_meta", json!({"id": "@nope"})), ("set_meta", json!({"target": "zzz", "id": c})), ("set_meta", json!({"id": c, "tags": ["bad tag"]})), ("set_meta", json!({"target": "track", "id": t1, "role": "x"})),
+        ("find", json!({"limit": 0})), ("find", json!({"kind": "zzz"})), ("find", json!({"time_range": [2.0, 1.0]})), ("find", json!({"track": "@missing"})),
     ]
 }
 #[test] fn error_texts_are_byte_identical_to_the_baseline() {
