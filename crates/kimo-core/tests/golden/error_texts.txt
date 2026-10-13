@@ -75,3 +75,10 @@
 74 set_expression {"clip_id":"clip3","duration":0.0,"op":"bezier","property":"x"}	bezier needs duration > 0
 75 set_expression {"clip_id":"clip3","combine":"zzz","op":"spring","property":"x"}	combine is not allowed. Valid: set, add, mul
 76 set_expression {"camera":true,"op":"spring","property":"nope"}	no camera field 'nope'. Valid: 
+77 set_parent {"clip_id":"clip3","parent_id":"clip3"}	parent_cycle: clip clip3 cannot be its own parent
+78 set_parent {"clip_id":"clip3","parent_id":"nope"}	no such clip 'nope'
+79 set_parent {"clip_id":"clip3","mode":"zip","parent_id":null}	mode is not allowed. Valid: keep_world, keep_local
+80 set_parent {"clip_id":"clip3","inherit":{"time":true},"parent_id":null}	inherit.time is not supported: parents do not pass time on (v1). Valid: position, scale, rotation, opacity
+81 get_transform {"clip_id":"clip3","space":"zzz"}	space is not allowed. Valid: local, world, canvas_px
+82 get_transform {"clip_id":"nope"}	no such clip 'nope'
+83 add_null {"duration":1.0,"start":0.0,"track_id":"nope"}	no such track 'nope'

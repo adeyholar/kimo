@@ -90,7 +90,16 @@ pub struct Clip {
     pub text_fx: Option<TextFx>,
     /// Transition INTO this clip from the previous clip on the track.
     pub transition_in: Option<Transition>,
+    /// A5: transform parent (clip id). The child's x/y/scale/rotation/opacity compose with the parent's, per `inherit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Inherit::is_default")] pub inherit: Inherit,
 }
+/// Which parts of the parent's transform a child inherits (all on by default).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Inherit { #[serde(default = "yes")] pub position: bool, #[serde(default = "yes")] pub scale: bool, #[serde(default = "yes")] pub rotation: bool, #[serde(default = "yes")] pub opacity: bool }
+fn yes() -> bool { true }
+impl Default for Inherit { fn default() -> Self { Inherit { position: true, scale: true, rotation: true, opacity: true } } }
+impl Inherit { pub fn is_default(&self) -> bool { *self == Inherit::default() } }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(tag = "mode", rename_all = "snake_case")]

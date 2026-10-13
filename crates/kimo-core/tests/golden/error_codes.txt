@@ -75,3 +75,10 @@
 74 set_expression	other	param=	hint=
 75 set_expression	other	param=	hint=
 76 set_expression	other	param=	hint=
+77 set_parent	other	param=	hint=
+78 set_parent	not_found	param=	hint=valid clip ids (up to 10): clip3
+79 set_parent	other	param=mode	hint=valid values for 'mode' (2): keep_world, keep_local
+80 set_parent	other	param=	hint=
+81 get_transform	other	param=space	hint=valid values for 'space' (3): local, world, canvas_px
+82 get_transform	not_found	param=clip_id	hint=valid clip ids (up to 10): clip3
+83 add_null	not_found	param=track_id	hint=valid track ids (up to 10): track1, track2

@@ -18,6 +18,7 @@ add_mask 0146f0df799b3fb2
 add_modifier 881425bab098ce59
 add_multicam f0d46cf978e1e7f9
 add_node 80183e29bc04e1bb
+add_null ea896e17d6abe009
 add_particles eaf6e94a077c0abc
 add_path_key cf58f43b9b5a2a16
 add_path_shape 7a38d9af75a4a47f
@@ -102,6 +103,7 @@ get_curve 38df92af38965fe8
 get_limits 2c2b2d5ae5bcde50
 get_project 2fa2cd0084662a79
 get_scopes dfc03f53507f2755
+get_transform 83826286de84a06e
 grade_node_tracking 1ffa2a4a07a2951e
 group_clips 39d53498853f9730
 history_list bb1a0f89a5fcc401
@@ -246,6 +248,7 @@ set_motion_path 144fc4c2b6370cdb
 set_node_mask 19c5bb5789c89632
 set_node_param 20b86ed963a1e02c
 set_ocio_view_delivery f6f2f235a93c3d77
+set_parent e09ac27176002af4
 set_path 6620245c892b0ea5
 set_posterize_time 03737fb4f2ea4cab
 set_property 1123a56f6fa267dd

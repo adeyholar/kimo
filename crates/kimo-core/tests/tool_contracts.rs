@@ -566,3 +566,13 @@ let before=pj(&s);let r=call(&mut s,"audio_speech_intervals",json!({"target":"mi
 #[test]fn shader_resource_readonly_rows(){for tool in ["get_limits","set_limits"]{row(&[],tool,json!({}),|_,a,b|assert_eq!(a,b));}row(&[],"effect_describe",json!({"kind":"pixel_expr"}),|r,a,b|{assert_eq!(a,b);assert!(r["formula"].as_str().unwrap().contains("expression"));});row(&[],"read_pixels",json!({"time":0,"region":{"x":0,"y":0,"w":1,"h":1}}),|r,a,b|{assert_eq!(a,b);assert_eq!(r["count"],1);});}
 
 #[test]fn raw_audio_key_mutation_and_response_readonly_contracts(){let(s,_,_,_)=one_clip();row(&s,"audio_filter_response",json!({"coeffs":[1],"freqs":[100,1000]}),|r,b,a|{assert_eq!(a,b);assert_eq!(r["response"][0]["magnitude_db"],0.);});row(&s,"audio_effect_describe",json!({"kind":"biquad"}),|r,b,a|{assert_eq!(a,b);assert!(r["formula"].as_str().unwrap().contains("DF-II"));});row_err(&s,"read_samples",json!({"rate":44100}),Some("fixed 48000"));row_err(&s,"import_samples",json!({"rate":0,"channels":2,"data":[]}),Some("rate"));}
+
+#[test] fn transform_node_rows() {
+    let (s, t1, _t2, c) = one_clip();
+    row(&s, "add_null", json!({"track_id": t1, "start": 0.0, "duration": 2.0, "x": 5.0}), |r, b, a| { assert_ne!(b, a); assert_eq!(r["null"], true); });
+    let nul = json!({"track_id": t1, "start": 0.0, "duration": 2.0, "x": 5.0}); let mut s2 = s.clone(); s2.push(("add_null", nul.clone())); let mut probe = fresh(&s); let pid = call(&mut probe, "add_null", nul)["clip_id"].as_str().unwrap().to_string();
+    row(&s2, "set_parent", json!({"clip_id": c, "parent_id": pid}), |r, b, a| { assert_ne!(b, a); assert!(r["adjusted"].is_object()); });
+    row(&s, "get_transform", json!({"clip_id": c, "t": 0.5, "space": "canvas_px"}), |r, b, a| { assert_eq!(b, a); assert_eq!(r["singular"], false); });
+    row_err(&s, "set_parent", json!({"clip_id": c, "parent_id": c}), Some("parent_cycle"));
+    row_err(&s, "get_transform", json!({"clip_id": c, "space": "zzz"}), Some("Valid:"));
+}

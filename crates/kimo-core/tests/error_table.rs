@@ -38,6 +38,8 @@ fn calls(t1: &str, c: &str) -> Vec<(&'static str, Value)> {
         ("sample_property", json!({"clip_id": c, "property": "nope", "times": [0.0]})), ("sample_property", json!({"clip_id": c, "property": "x", "times": []})), ("sample_property", json!({"clip_id": c, "property": "x", "times": [0.0], "space": "zzz"})),
         ("bake_property", json!({"clip_id": c, "property": "nope", "start": 0.0, "end": 1.0, "n": 3})), ("bake_property", json!({"clip_id": c, "property": "x", "start": 0.0, "end": 1.0})), ("bake_property", json!({"clip_id": c, "property": "x", "start": 1.0, "end": 1.0, "fps": 10})), ("bake_property", json!({"clip_id": c, "property": "x", "start": 0.0, "end": 1.0, "fps": 10, "drop_expression": false})),
         ("set_expression", json!({"clip_id": c, "property": "x", "op": "spring", "mass": 0.0})), ("set_expression", json!({"clip_id": c, "property": "x", "op": "bezier", "duration": 0.0})), ("set_expression", json!({"clip_id": c, "property": "x", "op": "spring", "combine": "zzz"})), ("set_expression", json!({"camera": true, "property": "nope", "op": "spring"})),
+        ("set_parent", json!({"clip_id": c, "parent_id": c})), ("set_parent", json!({"clip_id": c, "parent_id": "nope"})), ("set_parent", json!({"clip_id": c, "parent_id": null, "mode": "zip"})), ("set_parent", json!({"clip_id": c, "parent_id": null, "inherit": {"time": true}})),
+        ("get_transform", json!({"clip_id": c, "space": "zzz"})), ("get_transform", json!({"clip_id": "nope"})), ("add_null", json!({"track_id": "nope", "start": 0.0, "duration": 1.0})),
     ]
 }
 #[test] fn error_texts_are_byte_identical_to_the_baseline() {

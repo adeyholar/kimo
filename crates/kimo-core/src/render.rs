@@ -320,9 +320,40 @@ fn source_frame_h(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> (Frame, O
 
 /// The whole 2D transform of a clip at clip-local time `lt`, the ONE place the renderer reads x, y, scale, rotation and opacity (A5: parenting composes here).
 #[derive(Clone, Copy, Debug, PartialEq)] pub struct Xform { pub x: f64, pub y: f64, pub scale: f64, pub rotation: f64, pub opacity: f64 }
-pub fn resolve_xform(_p: &Project, c: &Clip, lt: f64) -> Xform { Xform { x: prop(c, "x", lt), y: prop(c, "y", lt), scale: prop(c, "scale", lt), rotation: prop(c, "rotation", lt), opacity: prop(c, "opacity", lt) } }
-/// One field of `resolve_xform`, evaluating only that field (same cost as the old direct prop read; every renderer path calls this instead of reading the props).
-fn xprop(_p: &Project, c: &Clip, k: &str, lt: f64) -> f64 { match k { "x" => prop(c, "x", lt), "y" => prop(c, "y", lt), "scale" => prop(c, "scale", lt), "rotation" => prop(c, "rotation", lt), _ => prop(c, "opacity", lt) } }
+/// Clip-local time at timeline time `t`, exactly as the renderer derives it (posterize-aware, never negative).
+pub fn clip_local_time(c: &Clip, t: f64) -> f64 { if c.posterize_fps > 0.0 { (((t - c.start) * c.posterize_fps + 1e-6).floor() / c.posterize_fps).max(0.0) } else { (t - c.start).max(0.0) } }
+/// The clip's own (local) transform at clip-local time `lt`, ignoring any parent.
+pub fn local_xform(c: &Clip, lt: f64) -> Xform { /* xform-lint: ok */ Xform { x: prop(c, "x", lt), y: prop(c, "y", lt), scale: prop(c, "scale", lt), rotation: prop(c, "rotation", lt), opacity: prop(c, "opacity", lt) } }
+/// parent o child, in the renderer's convention (transform_bb: f = c + d + R(rot) S (q - c), y down): d_w = d_P + R_P S_P d_c, scales multiply, rotations add, opacities multiply. `inh` switches each part off.
+pub fn compose_xform(pw: &Xform, c: &Xform, inh: &crate::model::Inherit) -> Xform {
+    let (mut ox, mut oy) = (c.x, c.y); if inh.scale { ox *= pw.scale; oy *= pw.scale; } if inh.rotation { let r = pw.rotation.to_radians(); let (sn, co) = (r.sin(), r.cos()); let (rx, ry) = (ox * co - oy * sn, ox * sn + oy * co); ox = rx; oy = ry; }
+    Xform { x: if inh.position { pw.x + ox } else { c.x }, y: if inh.position { pw.y + oy } else { c.y }, scale: if inh.scale { pw.scale * c.scale } else { c.scale }, rotation: if inh.rotation { pw.rotation + c.rotation } else { c.rotation }, opacity: if inh.opacity { pw.opacity * c.opacity } else { c.opacity } }
+}
+pub fn resolve_xform(p: &Project, c: &Clip, lt: f64) -> Xform {
+    let me = local_xform(c, lt); if c.parent.is_none() { return me; }
+    let t = c.start + lt; let mut chain: Vec<&Clip> = vec![]; let mut cur = c;
+    for _ in 0..64 { match cur.parent.as_deref().and_then(|id| p.find_clip(id)) { Some(pc) if pc.id != c.id && !chain.iter().any(|x| x.id == pc.id) => { chain.push(pc); cur = pc; } _ => break } }
+    if chain.is_empty() { return me; }
+    let root = chain[chain.len() - 1]; let mut w = local_xform(root, clip_local_time(root, t));
+    for node in chain[..chain.len() - 1].iter().rev() { w = compose_xform(&w, &local_xform(node, clip_local_time(node, t)), &node.inherit); }
+    compose_xform(&w, &me, &c.inherit)
+}
+// thread-local-ok: frame-scoped parented-pose memo; MemoScope clears it at frame entry and restores the previous value on drop (also on error/panic), so nothing survives a render
+thread_local! { static XMEMO: std::cell::RefCell<Option<std::collections::HashMap<(usize, u64, u64), (String, Xform)>>> = const { std::cell::RefCell::new(None) }; }
+/// Frame-scoped memo for parented clips: the project cannot change inside one render_frame call, so (project, clip id, lt) fixes the resolved transform. Active only between `MemoScope::enter` and drop on this thread; outside a frame every call resolves afresh.
+pub struct MemoScope(Option<std::collections::HashMap<(usize, u64, u64), (String, Xform)>>);
+impl MemoScope { pub fn enter() -> MemoScope { MemoScope(XMEMO.with(|m| m.borrow_mut().replace(Default::default()))) } }
+impl Drop for MemoScope { fn drop(&mut self) { let prev = self.0.take(); XMEMO.with(|m| *m.borrow_mut() = prev); } }
+fn id_hash(s: &str) -> u64 { let mut h: u64 = 0xcbf29ce484222325; for b in s.bytes() { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); } h }
+fn resolve_memo(p: &Project, c: &Clip, lt: f64) -> Xform {
+    let key = (p as *const Project as usize, id_hash(&c.id), lt.to_bits());
+    if let Some(x) = XMEMO.with(|m| m.borrow().as_ref().and_then(|h| h.get(&key).filter(|(id, _)| *id == c.id).map(|(_, x)| *x))) { return x; }
+    let x = resolve_xform(p, c, lt); XMEMO.with(|m| if let Some(h) = m.borrow_mut().as_mut() { h.insert(key, (c.id.clone(), x)); }); x
+}
+/// One field of `resolve_xform`. Without a parent it evaluates only the requested field (same cost and values as the old direct prop read).
+fn xprop(p: &Project, c: &Clip, k: &str, lt: f64) -> f64 {
+    if c.parent.is_some() { let t = resolve_memo(p, c, lt); return match k { "x" => t.x, "y" => t.y, "scale" => t.scale, "rotation" => t.rotation, _ => t.opacity }; }
+    /* xform-lint: ok */ match k { "x" => prop(c, "x", lt), "y" => prop(c, "y", lt), "scale" => prop(c, "scale", lt), "rotation" => prop(c, "rotation", lt), _ => prop(c, "opacity", lt) } }
 fn prop(c: &Clip, k: &str, lt: f64) -> f64 { c.props.get(k).map(|x| x.at(lt)).unwrap_or(0.0) }
 /// like prop, but a missing property is `d` (fill_alpha / stroke_alpha default to 1 so old projects render as before)
 fn prop_or(c: &Clip, k: &str, lt: f64, d: f64) -> f64 { c.props.get(k).map(|x| x.at(lt)).unwrap_or(d) }
@@ -418,6 +449,7 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
 /// `transparent`: start from a clear canvas (used for precomps) instead of opaque black.
 pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) -> Result<Frame, String> {
     if !t.is_finite(){return Err("render time must be finite".into())}
+    let _memo = MemoScope::enter();
     p.color_pipeline.validate()?;p.grade_scopes.validate(p)?;
     for c in flat_clips(&p.tracks,0.) {if let Some(g)=&c.grade_graph{g.validate_project(p)?;}for e in c.effects {if let Some(w)=e.strings.get("bound_linear_gamut"){let g=w.parse::<usize>().map_err(|_|"bad bound linear gamut")?;if !p.color_pipeline.enabled||g!=p.color_pipeline.working_gamut||e.params.get("gamut").map(|v|(v.base,v.keys.is_empty(),v.expr.is_empty()))!=Some((g as f64,true,true)){return Err("managed linear effect no longer matches working gamut; re-add it".into())}}if let Some(white)=e.strings.get("wrapper_reference_white"){if white.parse::<f64>().ok()!=Some(p.color_pipeline.reference_white){return Err("effect wrapper reference white changed; reconfigure wrapper".into())}}if let Some(w)=e.strings.get("wrapper_working_gamut"){if !p.color_pipeline.enabled||w.parse::<usize>().ok()!=Some(p.color_pipeline.working_gamut){return Err("effect encoding wrapper no longer matches project working gamut; reconfigure or clear it".into())}}}}
     let (w, h) = (p.width as usize, p.height as usize);

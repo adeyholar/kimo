@@ -5,7 +5,7 @@ fn rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) { for e in
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"); let mut files = vec![]; rs_files(&src, &mut files); let mut bad = vec![];
     for f in files { let name = f.file_name().unwrap().to_string_lossy().to_string(); if name == "curves.rs" || name == "subject_preview.rs" || name == "tools_0.rs" { continue; } // non-render: sampling, preview diff, clip setup
         for (i, l) in fs::read_to_string(&f).unwrap().lines().enumerate() {
-            if l.contains("pub fn resolve_xform") || l.contains("fn xprop(") { continue; }
+            if l.contains("xform-lint: ok") { continue; }
             for k in ["x", "y", "scale", "rotation", "opacity"] { for pat in [format!("props.get(\"{k}\")"), format!("props[\"{k}\"]")] { if l.contains(&pat) { bad.push(format!("{}:{}: {}", name, i + 1, l.trim().chars().take(100).collect::<String>())); } } for pat in [format!("prop(c, \"{k}\""), format!("prop(&c, \"{k}\""), format!("prop_or(c, \"{k}\"")] { if l.contains(&pat) && !l.contains(&format!("xprop(p, {}", &pat[5..])) && !l.contains(&format!("xprop(p, &{}", &pat[5..])) { bad.push(format!("{}:{}: {}", name, i + 1, l.trim().chars().take(100).collect::<String>())); } } } } }
     assert!(bad.is_empty(), "direct transform prop reads (use resolve_xform):\n{}", bad.join("\n"));
 }

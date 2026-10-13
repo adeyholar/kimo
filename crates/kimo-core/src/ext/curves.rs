@@ -40,7 +40,7 @@ fn set_keyframes(ss: &mut Session, a: &Value) -> Result<Value, String> {
 pub(crate) fn static_default(k: &str) -> Option<Prop> { if let Some(p) = crate::model::default_props().remove(k) { return Some(p); } if !CLIP_PROPS.contains(&k) { return None; } Some(Prop::new(if matches!(k, "fill_alpha" | "stroke_alpha" | "pin_gain") { 1.0 } else { 0.0 })) }
 const MAX_SAMPLES: usize = 100_000;
 /// Local clip time exactly as the renderer derives it for transform props (render.rs: lt0): posterized when the clip has posterize_fps, never negative.
-fn local_time(c: &crate::model::Clip, t: f64) -> f64 { if c.posterize_fps > 0.0 { (((t - c.start) * c.posterize_fps + 1e-6).floor() / c.posterize_fps).max(0.0) } else { (t - c.start).max(0.0) } }
+fn local_time(c: &crate::model::Clip, t: f64) -> f64 { crate::render::clip_local_time(c, t) }
 fn sample_times(a: &Value) -> Result<Vec<f64>, String> {
     match a.get("times") {
         Some(Value::Array(v)) => { if v.is_empty() || v.len() > MAX_SAMPLES { return Err(format!("times needs 1 to {MAX_SAMPLES} numbers")); } v.iter().enumerate().map(|(i, x)| x.as_f64().filter(|f| f.is_finite()).ok_or_else(|| format!("times[{i}] must be a finite number"))).collect() }
