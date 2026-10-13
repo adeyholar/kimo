@@ -154,6 +154,19 @@ fn polish_error(ss: &Session, args: &Value, m: String) -> String {
 }
 
 fn dispatch_inner(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
+    let (r, rec) = run_core(ss, name, args)?;
+    if let Some(before) = rec { record_undo(ss, before, name, args); }
+    Ok(r)
+}
+/// Pushes ONE undo snapshot (`before`) with its label, clears redo and enforces the history cap. The only part of `dispatch_inner` a nested call skips.
+fn record_undo(ss: &mut Session, before: Project, name: &str, args: &Value) {
+    let nclips: usize = ss.project.tracks.iter().map(|t| t.clips.len()).sum(); let moved = nclips.abs_diff(ss.snap_clips) * 4 > ss.snap_clips.max(4); if ss.snap_n % 16 == 0 || ss.undo.is_empty() || moved { ss.snap_clips = nclips; ss.snap_sz = serde_json::to_vec(&before).map(|v| v.len()).unwrap_or(1 << 20).max(1); } ss.snap_n = ss.snap_n.wrapping_add(1); let sz = ss.snap_sz; ss.undo.push(before); ss.redo.clear(); ss.redo_labels.clear(); ss.undo_labels.push(match args.get("clip_id").and_then(|v| v.as_str()) { Some(id) => format!("{name} {id}"), None => name.to_string() });
+        // bounded history: at most 100 steps and roughly 256 MB of snapshots, so a 200-layer timeline cannot grow until the OS kills the engine
+        let cap = ((256usize << 20) / sz).clamp(8, 100); if ss.undo.len() > cap { let drop = ss.undo.len() - cap; ss.undo.drain(0..drop); ss.undo_labels.drain(0..drop.min(ss.undo_labels.len())); }
+}
+/// Everything `dispatch_inner` does except the history record: tool lookup, sandbox limits, the (panic-safe) run, track locks, dangling-ref clearing and the
+/// project size check. Returns the tool result and, when a history entry is due (mutating, ok, not no_history), the `before` snapshot for `record_undo`.
+fn run_core(ss: &mut Session, name: &str, args: &Value) -> Result<(Value, Option<Project>), String> {
     let t = reg_tables(); let c = t.1.get(name).map(|&i| &t.0[i]).ok_or(format!("unknown tool '{name}'"))?;
     let l = crate::guard::limits(); crate::guard::sanitize(args, l, 0).map_err(|e| format!("rejected by sandbox: {e}"))?;
     // read-only tools skip the whole-project snapshot (it cost O(project) on every call); mutating tools still snapshot for undo and rollback
@@ -162,16 +175,28 @@ fn dispatch_inner(ss: &mut Session, name: &str, args: &Value) -> Result<Value, S
     let fp = if audit { serde_json::to_vec(&ss.project).ok() } else { None }; let audit_before = if audit { Some(ss.project.clone()) } else { None };
     let before = if c.mutates { ss.project.clone() } else { Project::default() };
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (c.run)(ss, args)));
+    let mut rec: Option<Project> = None;
     let mut r = match r { Ok(r) => r, Err(e) => { if c.mutates { ss.project = before; } let m = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "internal error".into()); return Err(format!("tool '{name}' failed safely (project rolled back): {m}")); } };
     // a mutating tool whose result carries "no_history": true changed nothing (a dry run); it pushes no undo snapshot and keeps the redo stack
     let no_history = r.as_ref().ok().and_then(|v| v.get("no_history")).and_then(|b| b.as_bool()).unwrap_or(false);
     if c.mutates && r.is_ok() && !no_history { if !matches!(name, "set_track" | "undo" | "redo" | "restore" | "load_project" | "checkpoint" | "project_set") && !name.starts_with("history_") && before.tracks.iter().any(|t| t.locked) {
         let hit = before.tracks.iter().filter(|t| t.locked).find(|bt| match ss.project.tracks.iter().find(|t| t.id == bt.id) { None => true, Some(at) => at.clips.len() != bt.clips.len() || bt.clips.iter().zip(at.clips.iter()).any(|(x, y)| !std::sync::Arc::ptr_eq(x, y) && serde_json::to_value(&**x).ok() != serde_json::to_value(&**y).ok()) }).map(|t| t.id.clone());
-        if let Some(tid) = hit { ss.project = before; return Err(format!("track '{tid}' is locked: tool '{name}' would modify it; unlock with set_track locked=false")); } } let removed: Vec<String> = if before.tracks.iter().map(|t| t.clips.len()).sum::<usize>() > ss.project.tracks.iter().map(|t| t.clips.len()).sum::<usize>() || matches!(name, "lift_range" | "remove_track") { let now: std::collections::HashSet<&str> = ss.project.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.id.as_str()).collect(); before.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.id.clone()).filter(|i| !now.contains(i.as_str())).collect() } else { vec![] }; let cleared = ss.project.clear_refs_to(&removed); if !cleared.is_empty() { if let Ok(v) = r.as_mut() { if let Some(o) = v.as_object_mut() { o.insert("cleared_refs".into(), serde_json::to_value(&cleared).unwrap_or_default()); } } } if let Err(e) = crate::guard::check_project(&ss.project, l) { ss.project = before; return Err(format!("rejected by sandbox (project rolled back): {e}")); } let nclips: usize = ss.project.tracks.iter().map(|t| t.clips.len()).sum(); let moved = nclips.abs_diff(ss.snap_clips) * 4 > ss.snap_clips.max(4); if ss.snap_n % 16 == 0 || ss.undo.is_empty() || moved { ss.snap_clips = nclips; ss.snap_sz = serde_json::to_vec(&before).map(|v| v.len()).unwrap_or(1 << 20).max(1); } ss.snap_n = ss.snap_n.wrapping_add(1); let sz = ss.snap_sz; ss.undo.push(before); ss.redo.clear(); ss.redo_labels.clear(); ss.undo_labels.push(match args.get("clip_id").and_then(|v| v.as_str()) { Some(id) => format!("{name} {id}"), None => name.to_string() });
-        // bounded history: at most 100 steps and roughly 256 MB of snapshots, so a 200-layer timeline cannot grow until the OS kills the engine
-        let cap = ((256usize << 20) / sz).clamp(8, 100); if ss.undo.len() > cap { let drop = ss.undo.len() - cap; ss.undo.drain(0..drop); ss.undo_labels.drain(0..drop.min(ss.undo_labels.len())); } }
+        if let Some(tid) = hit { ss.project = before; return Err(format!("track '{tid}' is locked: tool '{name}' would modify it; unlock with set_track locked=false")); } } let removed: Vec<String> = if before.tracks.iter().map(|t| t.clips.len()).sum::<usize>() > ss.project.tracks.iter().map(|t| t.clips.len()).sum::<usize>() || matches!(name, "lift_range" | "remove_track") { let now: std::collections::HashSet<&str> = ss.project.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.id.as_str()).collect(); before.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.id.clone()).filter(|i| !now.contains(i.as_str())).collect() } else { vec![] }; let cleared = ss.project.clear_refs_to(&removed); if !cleared.is_empty() { if let Ok(v) = r.as_mut() { if let Some(o) = v.as_object_mut() { o.insert("cleared_refs".into(), serde_json::to_value(&cleared).unwrap_or_default()); } } } if let Err(e) = crate::guard::check_project(&ss.project, l) { ss.project = before; return Err(format!("rejected by sandbox (project rolled back): {e}")); } rec = Some(before); }
     if let (Some(fp), Some(pre)) = (fp, audit_before) { if serde_json::to_vec(&ss.project).ok().as_ref() != Some(&fp) { ss.project = pre; return Err(format!("AUDIT: read-only tool '{name}' modified the project (rolled back); mark it mutating or fix it")); } }
-    r
+    r.map(|v| (v, rec))
+}
+
+/// RV-11: runs one tool inside a batch. Same validation, sanitising, enum guard, unknown-arg warnings, panic safety, track-lock check, ref clearing and size
+/// check as `dispatch` (one shared code path), but NO undo snapshot, label or history-cap work: the batch records ONE entry for the whole group.
+pub fn dispatch_nested(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
+    // deliberately no `ss.media.clear()`: only the outermost dispatch resets the per-call media list, a nested call must not wipe what the outer tool pushed
+    let unknown = unknown_args(name, args);
+    if std::env::var("KIMO_STRICT_ARGS").map(|v| v == "1").unwrap_or(false) && !unknown.is_empty() { return Err(unknown_arg_text(name, &unknown[0])); }
+    if KEYFRAME_TOOLS.contains(&name) { if let Some(t) = args.get("time").and_then(|v| v.as_f64()) { if t < 0.0 { return Err(format!("time must be >= 0 (clip-local seconds), got {t}")); } } }
+    let normalized; let args = match guard_enums(name, args)? { Some(a) => { normalized = a; &normalized } None => args };
+    let (mut r, _rec) = run_core(ss, name, args).map_err(|m| polish_error(ss, args, m))?;
+    if !unknown.is_empty() { if let Some(o) = r.as_object_mut() { o.insert("warnings".into(), json!(unknown.iter().map(|k| format!("ignored {}", unknown_arg_text(name, k))).collect::<Vec<_>>())); } }
+    Ok(r)
 }
 
 /// `dispatch` under a per-call cancellation token: cancelling `tok` stops this call's work (and any worker threads it spawned through `guard`) and nothing else.

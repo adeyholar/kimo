@@ -38,6 +38,7 @@ analyze_exposure_sequence 635cbb61a9b00303
 apply_asc_cdl 86d1717d70b3605b
 apply_camera_solve daaa11f9c72d2f86
 apply_motion_preset 39406bbbdd87a9e9
+audio_probe ec3e1fe9bd01d93f
 audit_color_output 58cf03598cf93fb6
 auto_duck 3739408323f8e68e
 bind_beats 2d8bcd8a43d9aad9
@@ -61,6 +62,7 @@ create_shared_grade_graph 58fa459ac9911fc4
 decompose_track_homography f43e9c6e1eecb210
 delete_clip f4a1f352f81309a7
 delete_track e83a622c3e4b81fe
+describe_frame 8fb94b6da08ed50a
 detect_beats 0a305ba852c6ffd1
 disconnect_nodes ad3dce0b755a8341
 distribute_clips de3b81a25b80ced1

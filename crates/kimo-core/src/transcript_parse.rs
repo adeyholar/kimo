@@ -70,6 +70,18 @@ fn cue_words(text: &str, start: f64, end: f64) -> Vec<PWord> {
 }
 /// Removes `<...>` tags (<i>, <b>, <v Bob>, <c.x>, VTT timestamps) and `{...}` override blocks ({\\an8}); an unclosed tag drops the rest of the line, never panics.
 pub fn strip_markup(s: &str) -> String { let (mut o, mut tag, mut brace) = (String::new(), false, false); for c in s.chars() { match c { '<' if !brace => tag = true, '>' if tag => tag = false, '{' if !tag => brace = true, '}' if brace => brace = false, _ if !tag && !brace => o.push(c), _ => {} } } o }
+/// WebVTT's named escapes. Decode once (not recursively): &amp;lt; means literal &lt;.
+fn decode_vtt_entities(s: &str) -> String {
+    let mut out = String::new(); let mut rest = s;
+    while !rest.is_empty() {
+        let mut hit = false;
+        for (escape, value) in [("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", "\u{00A0}"), ("&lrm;", "\u{200E}"), ("&rlm;", "\u{200F}")] {
+            if let Some(tail) = rest.strip_prefix(escape) { out.push_str(value); rest = tail; hit = true; break; }
+        }
+        if !hit { let ch = rest.chars().next().unwrap(); out.push(ch); rest = &rest[ch.len_utf8()..]; }
+    }
+    out
+}
 /// SRT and VTT share one cue reader: blocks separated by blank lines; the line holding `-->` carries the times.
 fn parse_cues(text: &str, vtt: bool, o: Opts) -> Result<Parsed, ParseError> {
     let mut words = vec![]; let mut lines = vec![]; let all: Vec<&str> = text.lines().collect(); let mut i = 0;
@@ -83,6 +95,8 @@ fn parse_cues(text: &str, vtt: bool, o: Opts) -> Result<Parsed, ParseError> {
         let (s, e) = match (parse_ts(a), parse_ts(b)) { (Some(s), Some(e)) => (s, e), _ => return Err(ParseError::at("bad_time", j + 1, format!("cannot read timestamps in '{}'", sanitize(tl)))) };
         let mut body = vec![]; let mut k = j + 1; while k < all.len() && !all[k].trim().is_empty() { body.push(all[k]); k += 1; }
         let t = strip_markup(&body.join(" "));
+        // Decode only after stripping markup, so escaped literal angle brackets stay text.
+        let t = if vtt { decode_vtt_entities(&t) } else { t };
         let t = sanitize(&t);
         if t.is_empty() { i = k; continue; } // an empty cue carries no words
         if e < s { return Err(ParseError::at("bad_time", j + 1, format!("cue end {e} is before start {s}"))); }
