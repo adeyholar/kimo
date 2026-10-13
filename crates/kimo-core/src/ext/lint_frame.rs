@@ -8,6 +8,10 @@ pub const CHECKS: &[&str] = &[
     "invisible_layer",
     "low_res_upscale",
     "static_frame",
+    "text_contrast",
+    "min_text_size",
+    "safe_zone",
+    "text_overflow",
 ];
 fn number(a: &Value, k: &str, d: f64, lo: f64, hi: f64) -> Result<f64, String> {
     let v = match a.get(k) {
@@ -178,6 +182,10 @@ fn run(ss: &mut Session, a: &Value) -> Result<Value, String> {
         ("pixel_threshold", 0.04, 0., 1.),
         ("opacity_epsilon", 0.001, 0., 1.),
         ("upscale_ratio", 1.5, 1., 1e8),
+        ("contrast_normal", 4.5, 1., 100.),
+        ("contrast_large", 3., 1., 100.),
+        ("large_cap_px", 24., 0., 1e8),
+        ("min_cap_px", 20., 0., 1e8),
     ] {
         used[k] = json!(number(&params, k, d, lo, hi)?);
     }
@@ -186,9 +194,7 @@ fn run(ss: &mut Session, a: &Value) -> Result<Value, String> {
             return Err(format!("out_of_range: unknown params.{k}"));
         }
     }
-    if a.get("profile").is_some() {
-        return Err("out_of_range: profile is pending shared safe margins in this slice".into());
-    }
+
     let cap = used["max_frames"].as_f64().unwrap();
     if cap.fract() != 0. {
         return Err("out_of_range: max_frames must be an integer".into());
@@ -308,6 +314,7 @@ fn run(ss: &mut Session, a: &Value) -> Result<Value, String> {
                 }
             }
         }
+        text_findings(ss, *t, &checks, &used, a, &mut findings, &mut suppressed)?;
         if checks.contains("static_frame") {
             let img = analysis::render(
                 ss,
@@ -422,7 +429,7 @@ fn run(ss: &mut Session, a: &Value) -> Result<Value, String> {
         }
     }
     Ok(
-        json!({"frames":frames,"intervals":intervals,"summary":{"counts_by_code":counts,"ignored_by_tag":suppressed.len(),"suppressed":suppressed,"frames_checked":ts.len(),"omitted_findings":omitted},"params_used":used,"notes":["Advisory only, not a design certification. No edit, undo entry or export block.","Geometry is matrix-transformed source layer bounds, not effect-expanded ink. Fully masked visibility and text checks are pending shared pixel/text metrics; unsupported checks fail explicitly.","Static results cover sampled times only; audio presence does not establish speech or intentional holding."]}),
+        json!({"frames":frames,"intervals":intervals,"summary":{"counts_by_code":counts,"ignored_by_tag":suppressed.len(),"suppressed":suppressed,"frames_checked":ts.len(),"omitted_findings":omitted},"params_used":used,"notes":["Advisory only, not a design certification. No edit, undo entry or export block.","Geometry is matrix-transformed source layer bounds, not effect-expanded ink. Fully masked visibility is not measured. Text uses static C2 ink, excluding shadow/glow/bg and animator deformation; contrast is a WCAG heuristic on background under that bbox, not certification. Overflow is canvas only, not own-box wrapping.","Static results cover sampled times only; audio presence does not establish speech or intentional holding."]}),
     )
 }
 fn severity_score(f: &Value) -> f64 {
@@ -454,5 +461,233 @@ fn static_interval(ss: &Session, t0: f64, t1: f64) -> Value {
     json!({"code":"static_frame","t0":t0,"t1":t1,"layers":[],"worst":{"duration_s":t1-t0,"audio_present":audio},"severity":"info"})
 }
 pub fn commands() -> Vec<Command> {
-    vec![Command{name:"lint_frame",mutates:false,description:"Read-only advisory frame lint, report-only, not a design certification. Initial geometry/static checks: out_of_bounds (source layer bounds, not ink), invisible_layer (sampled), low_res_upscale, static_frame. Never edits or blocks export. time OR times OR range {start,end,step default .5}, max120 samples. checks defaults to implemented checks. params echoes thresholds, overridable. Tags lint:allow_bleed and lint:ignore=<code> suppress with an explicit counted list. annotate default true writes boxed PNG paths and inline images. Text/contrast/safe-zone checks are not implemented in this slice and fail invalid_check rather than passing silently.",schema:obj(vec![("time",n("timeline seconds")),("times",json!({"type":"array","items":{"type":"number"}})),("range",json!({"type":"object"})),("checks",json!({"type":"array","items":{"type":"string"}})),("params",json!({"type":"object"})),("delivery_height",n("pixels, default canvas height")),("profile",s("reserved for shared safe margins")),("annotate",json!({"type":"boolean"})),("max_findings",n("default200"))],&[]),run}]
+    vec![Command{name:"lint_frame",mutates:false,description:"Read-only advisory frame lint, report-only, not a design certification. Initial geometry/static checks: out_of_bounds (source layer bounds, not ink), invisible_layer (sampled), low_res_upscale, static_frame. Never edits or blocks export. time OR times OR range {start,end,step default .5}, max120 samples. checks defaults to implemented checks. params echoes thresholds, overridable. Tags lint:allow_bleed and lint:ignore=<code> suppress with an explicit counted list. annotate default true writes boxed PNG paths and inline images. Text checks: text_contrast (WCAG heuristic), min_text_size (capital-H ink), safe_zone (platform estimates), text_overflow (canvas only, not own-box overflow).",schema:obj(vec![("time",n("timeline seconds")),("times",json!({"type":"array","items":{"type":"number"}})),("range",json!({"type":"object"})),("checks",json!({"type":"array","items":{"type":"string"}})),("params",json!({"type":"object"})),("delivery_height",n("pixels, default canvas height")),("profile",s("safe margins profile, default title_safe")),("annotate",json!({"type":"boolean"})),("max_findings",n("default200"))],&[]),run}]
+}
+// Text metrics adapters staged from the delivered C1/C2/C3 contracts.
+fn text_cap(c: &Clip, w: f64, h: f64) -> Result<f64, String> {
+    let Source::Text {
+        font,
+        size,
+        letter_spacing,
+        align,
+        ..
+    } = &c.source
+    else {
+        return Ok(0.);
+    };
+    let fx = c.text_fx.clone().unwrap_or_default();
+    let m = crate::text::measure_text(
+        "H",
+        font,
+        *size,
+        *letter_spacing,
+        fx.weight,
+        align,
+        w,
+        h,
+        Some(&fx),
+    )?;
+    Ok(m.ink.map_or(0., |r| r[3] - r[1]))
+}
+fn outside(r: [f64; 4], zone: [f64; 4]) -> [f64; 4] {
+    [
+        (zone[0] - r[0]).max(0.),
+        (zone[1] - r[1]).max(0.),
+        (r[0] + r[2] - zone[0] - zone[2]).max(0.),
+        (r[1] + r[3] - zone[1] - zone[3]).max(0.),
+    ]
+}
+fn edges_json(e: [f64; 4]) -> Value {
+    json!({"left":e[0],"top":e[1],"right":e[2],"bottom":e[3]})
+}
+fn srgb_luma(rgb: [f64; 3]) -> f64 {
+    let linear = |x: f64| {
+        let x = x.clamp(0., 1.);
+        if x <= 0.04045 {
+            x / 12.92
+        } else {
+            ((x + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2])
+}
+fn contrast_ratio(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let (a, b) = (srgb_luma(a), srgb_luma(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+fn text_findings(
+    ss: &mut Session,
+    t: f64,
+    checks: &BTreeSet<String>,
+    used: &Value,
+    a: &Value,
+    out: &mut Vec<Value>,
+    suppressed: &mut Vec<Value>,
+) -> Result<(), String> {
+    if ![
+        "text_contrast",
+        "min_text_size",
+        "safe_zone",
+        "text_overflow",
+    ]
+    .iter()
+    .any(|x| checks.contains(*x))
+    {
+        return Ok(());
+    }
+    let (w, h) = (ss.project.width as f64, ss.project.height as f64);
+    let texts: Vec<Clip> = ss
+        .project
+        .tracks
+        .iter()
+        .filter(|tr| !tr.muted)
+        .flat_map(|tr| tr.clips.iter())
+        .filter(|c| {
+            t >= c.start && t < c.start + c.duration && matches!(c.source, Source::Text { .. })
+        })
+        .map(|c| (**c).clone())
+        .collect();
+    let margins = if checks.contains("safe_zone") {
+        Some(crate::commands::dispatch(
+            ss,
+            "query_safe_margins",
+            &json!({"profile":a.get("profile").cloned().unwrap_or(json!("title_safe")),"zones":a.get("zones")}),
+        )?)
+    } else {
+        None
+    };
+    for c in texts {
+        let lt = crate::render::clip_local_time(&c, t);
+        let xf = crate::render::resolve_xform(&ss.project, &c, lt);
+        if xf.opacity <= used["opacity_epsilon"].as_f64().unwrap() {
+            continue;
+        }
+        let b =
+            crate::commands::dispatch(ss, "compute_text_bounds", &json!({"clip_id":c.id,"t":t}))?;
+        let Some(v) = b["canvas_rect"].as_array() else {
+            continue;
+        };
+        let r = [
+            v[0].as_f64().unwrap(),
+            v[1].as_f64().unwrap(),
+            v[2].as_f64().unwrap(),
+            v[3].as_f64().unwrap(),
+        ];
+        let cap = text_cap(&c, w, h)? * xf.scale.abs();
+        let delivery = used["delivery_height"].as_f64().unwrap();
+        let cap_delivery = cap * delivery / h;
+        let cap1080 = cap_delivery * 1080. / delivery;
+        if checks.contains("min_text_size")
+            && cap_delivery < used["min_cap_px"].as_f64().unwrap() * delivery / 1080.
+        {
+            emit(
+                &c,
+                "min_text_size",
+                "warn",
+                r,
+                json!({"cap_height_canvas_px":cap,"cap_height_delivery_px":cap_delivery,"cap_height_1080_px":cap1080,"metric":"capital_H_ink","font":b["font"],"line_count":b["line_count"]}),
+                "Capital-H ink is below the delivery-scaled minimum.",
+                out,
+                suppressed,
+            );
+        }
+        if checks.contains("text_overflow") {
+            let e = outside(r, [0., 0., w, h]);
+            if e.iter().any(|x| *x > 1e-8) {
+                emit(
+                    &c,
+                    "text_overflow",
+                    "warn",
+                    r,
+                    json!({"outside_px":edges_json(e),"scope":"canvas_only"}),
+                    "Text ink extends outside the canvas; own-box wrapping is not checked.",
+                    out,
+                    suppressed,
+                )
+            }
+        }
+        if let Some(m) = &margins {
+            for z in m["zones"].as_array().unwrap() {
+                let zv = z["rect"].as_array().unwrap();
+                let zr = [
+                    zv[0].as_f64().unwrap(),
+                    zv[1].as_f64().unwrap(),
+                    zv[2].as_f64().unwrap(),
+                    zv[3].as_f64().unwrap(),
+                ];
+                let e = outside(r, zr);
+                let overlap = (r[0] + r[2]).min(zr[0] + zr[2]) - r[0].max(zr[0]);
+                let overlap_y = (r[1] + r[3]).min(zr[1] + zr[3]) - r[1].max(zr[1]);
+                let hit = if z["kind"] == "safe" {
+                    e.iter().any(|x| *x > 1e-8)
+                } else {
+                    overlap > 0. && overlap_y > 0.
+                };
+                if hit {
+                    let est = m["estimated"] == true;
+                    emit(
+                        &c,
+                        "safe_zone",
+                        "warn",
+                        r,
+                        json!({"zone":z,"outside_px":edges_json(e),"estimated":m["estimated"],"as_of":m["as_of"],"basis":m["basis"],"profile":m["profile"]}),
+                        if est {
+                            "Text intersects a platform estimate; check the current app before relying on it."
+                        } else {
+                            "Text violates the selected geometric safe/avoid zone."
+                        },
+                        out,
+                        suppressed,
+                    );
+                }
+            }
+        }
+        if checks.contains("text_contrast") {
+            let Source::Text { color, .. } = c.source else {
+                continue;
+            };
+            let p = super::view::view_of(&ss.project, None, Some(&[c.id.clone()]));
+            let bg = crate::render::render_frame(&p, t, &crate::render::Cache::new())?;
+            let img = Image::from_frame(&bg);
+            let (x0, y0, x1, y1) = (
+                r[0].floor().max(0.) as usize,
+                r[1].floor().max(0.) as usize,
+                (r[0] + r[2]).ceil().max(0.).min(w) as usize,
+                (r[1] + r[3]).ceil().max(0.).min(h) as usize,
+            );
+            let mut ratios = vec![];
+            let mut worst = [0usize; 2];
+            let mut min = f64::INFINITY;
+            for y in y0.min(img.h)..y1 {
+                for x in x0.min(img.w)..x1 {
+                    let i = y * img.w + x;
+                    let b = [img.rgb[0][i], img.rgb[1][i], img.rgb[2][i]];
+                    let opacity = xf.opacity.clamp(0., 1.);
+                    let fg = [0, 1, 2].map(|k| opacity * color[k] + (1. - opacity) * b[k]);
+                    let ratio = contrast_ratio(fg, b);
+                    if ratio < min {
+                        min = ratio;
+                        worst = [x, y]
+                    }
+                    ratios.push(ratio);
+                }
+            }
+            if ratios.is_empty() {
+                continue;
+            }
+            ratios.sort_by(f64::total_cmp);
+            let mean = ratios.iter().sum::<f64>() / ratios.len() as f64;
+            let limit = used[if cap1080 >= used["large_cap_px"].as_f64().unwrap() {
+                "contrast_large"
+            } else {
+                "contrast_normal"
+            }]
+            .as_f64()
+            .unwrap();
+            if min < limit {
+                emit(&c,"text_contrast","warn",r,json!({"min_ratio":min,"p10_ratio":ratios[(ratios.len()-1)/10],"mean_ratio":mean,"spread":ratios.last().unwrap()-min,"worst_point":worst,"threshold":limit,"heuristic":true}),"WCAG contrast heuristic below threshold; bbox sampling does not certify legibility.",out,suppressed)
+            }
+        }
+    }
+    Ok(())
 }

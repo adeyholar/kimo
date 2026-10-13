@@ -277,6 +277,213 @@ fn checks_select_only_requested_and_cap_before_render() {
     assert!(
         dispatch(&mut s, "lint_frame", &json!({"time":1,"profile":"social"}))
             .unwrap_err()
-            .starts_with("out_of_range:")
+            .starts_with("invalid_profile:")
+    );
+}
+
+// U4 text slice: failing rows pre-staged before C1-C3 land. These exercise the
+// public tools; no guessed font-size-to-cap-height ratio is used.
+fn text_scene(color: [f64; 3], size: f64, w: u32, h: u32) -> (Session, String) {
+    let mut s = Session::new();
+    c(
+        &mut s,
+        "project_set",
+        json!({"width":w,"height":h,"fps":25}),
+    );
+    let bg = c(&mut s, "add_track", json!({}))["track_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    c(
+        &mut s,
+        "add_clip",
+        json!({"track_id":bg,"source_type":"solid","color":[1,1,1],"start":0,"duration":3}),
+    );
+    let tr = c(&mut s, "add_track", json!({}))["track_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let id=c(&mut s,"add_text",json!({"track_id":tr,"text":"H title","font":"DejaVuSans","size":size,"color":color,"start":0,"duration":3}))["clip_id"].as_str().unwrap().to_string();
+    c(
+        &mut s,
+        "set_meta",
+        json!({"id":id,"name":"title","role":"title"}),
+    );
+    (s, id)
+}
+#[test]
+fn text_contrast_known_ratios_threshold_and_read_only() {
+    let (mut s, id) = text_scene([119. / 255.; 3], 24., 640, 360);
+    let before = serde_json::to_vec(&s.project).unwrap();
+    let hist = c(&mut s, "history_list", json!({}));
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["text_contrast"],"params":{"large_cap_px":10000},"annotate":false}),
+    );
+    let f = findings(&r);
+    assert_eq!(f.len(), 1, "#777 white must warn at 4.5: {r}");
+    assert!(
+        (f[0]["measured"]["min_ratio"].as_f64().unwrap() - 4.478089).abs() < 1e-5,
+        "{r}"
+    );
+    assert_eq!(f[0]["layer"]["name"], "title");
+    assert_eq!(before, serde_json::to_vec(&s.project).unwrap());
+    assert_eq!(hist, c(&mut s, "history_list", json!({})));
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["text_contrast"],"params":{"contrast_normal":4.47,"large_cap_px":10000},"annotate":false}),
+    );
+    assert!(findings(&r).is_empty(), "{r}");
+    assert_eq!(r["params_used"]["contrast_normal"], 4.47);
+    c(&mut s, "set_text", json!({"clip_id":id,"color":[0,0,0]}));
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["text_contrast"],"params":{"contrast_normal":22,"large_cap_px":10000},"annotate":false}),
+    );
+    assert!((findings(&r)[0]["measured"]["min_ratio"].as_f64().unwrap() - 21.).abs() < 1e-8);
+}
+#[test]
+fn h_ink_size_exact_boundary_and_delivery_scaling() {
+    let (mut s, id) = text_scene([0.; 3], 24., 640, 360);
+    let m = c(
+        &mut s,
+        "compute_text_bounds",
+        json!({"text":"H","font":"DejaVuSans","size":24}),
+    );
+    let cap = m["ink"][3].as_f64().unwrap() - m["ink"][1].as_f64().unwrap();
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["min_text_size"],"delivery_height":1080,"params":{"min_cap_px":cap*3.},"annotate":false}),
+    );
+    assert!(
+        findings(&r).is_empty(),
+        "exact threshold must not warn: {r}"
+    );
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["min_text_size"],"delivery_height":540,"params":{"min_cap_px":cap*3.+0.01},"annotate":false}),
+    );
+    let f = findings(&r);
+    assert_eq!(f.len(), 1, "{r}");
+    assert!(
+        (f[0]["measured"]["cap_height_delivery_px"].as_f64().unwrap() - cap * 1.5).abs() < 1e-8
+    );
+    c(
+        &mut s,
+        "set_meta",
+        json!({"id":id,"tags":["lint:ignore=min_text_size"]}),
+    );
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["min_text_size"],"delivery_height":540,"params":{"min_cap_px":cap*3.+0.01},"annotate":false}),
+    );
+    assert!(findings(&r).is_empty());
+    assert_eq!(r["summary"]["ignored_by_tag"], 1);
+}
+#[test]
+fn text_canvas_overflow_exact_forty_and_allow_bleed() {
+    let (mut s, id) = text_scene([0.; 3], 24., 640, 360);
+    let b = c(&mut s, "compute_text_bounds", json!({"clip_id":id,"t":1}));
+    let right = b["canvas_rect"][0].as_f64().unwrap() + b["canvas_rect"][2].as_f64().unwrap();
+    c(
+        &mut s,
+        "set_property",
+        json!({"clip_id":id,"property":"x","value":680.-right}),
+    );
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["text_overflow"],"annotate":false}),
+    );
+    let f = findings(&r);
+    assert_eq!(f.len(), 1, "{r}");
+    assert!((f[0]["measured"]["outside_px"]["right"].as_f64().unwrap() - 40.).abs() < 1e-6);
+    assert_eq!(f[0]["measured"]["scope"], "canvas_only");
+    c(
+        &mut s,
+        "set_meta",
+        json!({"id":id,"tags":["lint:ignore=text_overflow"]}),
+    );
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["text_overflow"],"annotate":false}),
+    );
+    assert!(findings(&r).is_empty());
+    assert_eq!(r["summary"]["ignored_by_tag"], 1);
+}
+#[test]
+fn safe_zone_title_geometry_and_platform_estimate_provenance() {
+    let (mut s, id) = text_scene([0.; 3], 24., 360, 640);
+    let b = c(&mut s, "compute_text_bounds", json!({"clip_id":id,"t":1}));
+    c(
+        &mut s,
+        "set_property",
+        json!({"clip_id":id,"property":"y","value":-b["canvas_rect"][1].as_f64().unwrap()+4.}),
+    );
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["safe_zone"],"profile":"title_safe","annotate":false}),
+    );
+    let f = findings(&r);
+    assert!(!f.is_empty(), "{r}");
+    assert!((f[0]["measured"]["outside_px"]["top"].as_f64().unwrap() - 28.).abs() < 1e-6);
+    assert_eq!(f[0]["measured"]["estimated"], false);
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["safe_zone"],"profile":"tiktok","annotate":false}),
+    );
+    let f = findings(&r);
+    assert!(!f.is_empty(), "{r}");
+    assert!(f.iter().all(|f| f["measured"]["estimated"] == true
+        && f["message"].as_str().unwrap().contains("estimate")));
+}
+#[test]
+fn gradient_contrast_distribution_and_opacity_are_reported() {
+    let (mut s, id) = text_scene([0.; 3], 24., 640, 360);
+    let bg = std::sync::Arc::make_mut(&mut s.project.tracks[0].clips[0]);
+    bg.source = kimo_core::model::Source::Gradient {
+        c1: [0.; 3],
+        c2: [1.; 3],
+    };
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["text_contrast"],"params":{"contrast_normal":100,"large_cap_px":10000},"annotate":false}),
+    );
+    let f = findings(&r);
+    assert_eq!(f.len(), 1, "{r}");
+    let m = &f[0]["measured"];
+    let min = m["min_ratio"].as_f64().unwrap();
+    let p10 = m["p10_ratio"].as_f64().unwrap();
+    let mean = m["mean_ratio"].as_f64().unwrap();
+    assert!(
+        min <= p10 && p10 <= mean && m["spread"].as_f64().unwrap() > 0.,
+        "{r}"
+    );
+    assert!(m["worst_point"].is_array());
+    std::sync::Arc::make_mut(&mut s.project.tracks[0].clips[0]).source =
+        kimo_core::model::Source::Solid { color: [1.; 3] };
+    c(
+        &mut s,
+        "set_property",
+        json!({"clip_id":id,"property":"opacity","value":0.5}),
+    );
+    let r = c(
+        &mut s,
+        "lint_frame",
+        json!({"time":1,"checks":["text_contrast"],"params":{"large_cap_px":10000},"annotate":false}),
+    );
+    assert!(
+        (findings(&r)[0]["measured"]["min_ratio"].as_f64().unwrap() - 3.976653).abs() < 1e-5,
+        "{r}"
     );
 }

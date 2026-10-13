@@ -162,7 +162,7 @@ fn open_sites_are_classified() {
         ("ext/cdl_files.rs", 1, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/delivery.rs", 5, "PROJECT-DERIVED, resolved through deps (resolve / resolve_str) at the call site"),
         ("ext/editorial_tools.rs", 3, "PROJECT-DERIVED, resolved through deps (resolve / resolve_str) at the call site"),
-        ("ext/export_job.rs", 7, "caller path (job chunk directory: index.json / manifest.json / chunk files), not stored in the project"),
+        ("ext/export_job.rs", 9, "caller path under the job directory or fixed OS probes, nothing stored in the project: 2 fsync opens (sync_dir, sync_file of files this module just wrote), 2 /proc reads for the job.lock owner check (hostname, pid start ticks), 1 read_json of index.json / manifest.json / job.lock in the job dir, 2 metadata calls on chunk files (reuse_check size verify, index entry bytes), 2 ffmpeg -i inputs of the join (concat list + optional audio wav, both inside the job dir)"),
         ("ext/export_presets.rs", 3, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/ocio_tools.rs", 2, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/ocio_view.rs", 2, "caller path (tool argument / output / temp file / test), not stored in the project"),

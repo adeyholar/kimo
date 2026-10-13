@@ -226,3 +226,6 @@ rust batch_benchmark fast
 rust template_examples fast
 rust export_job_lock fast
 rust export_job_recover fast
+rust export_job_join fast
+rust export_job_errors fast
+rust export_job_kill fast

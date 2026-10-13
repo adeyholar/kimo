@@ -106,6 +106,71 @@ fn quarantine(dir: &std::path::Path, old: &Option<Value>) -> Vec<Value> {
     out
 }
 
+
+fn ffprobe(args: &[&str], p: &std::path::Path) -> Result<(String, String), String> { let o = std::process::Command::new("ffprobe").args(["-v", "error"]).args(args).arg(p).output().map_err(|e| format!("ffprobe: {e}"))?; Ok((String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).trim().to_string())) }
+/// Join contract: every chunk must start on a key frame (I) and share codec parameters; a chunk that does not cannot be stream-copied at a seam.
+pub fn chunk_contract(parts: &[String]) -> Result<(), String> {
+    let mut first: Option<String> = None;
+    for (i, f) in parts.iter().enumerate() {
+        let pth = std::path::Path::new(f);
+        let (fr, _) = ffprobe(&["-select_streams", "v:0", "-read_intervals", "%+#1", "-show_entries", "frame=key_frame,pict_type", "-of", "csv=p=0"], pth)?;
+        let l = fr.lines().next().unwrap_or("").trim().to_string(); if l != "1,I" { return Err(format!("join_contract: chunk {i} ({f}) does not start with a key frame (first frame is '{l}'); it cannot be stream-copied into the join")); }
+        let (par, _) = ffprobe(&["-select_streams", "v:0", "-show_entries", "stream=codec_name,profile,width,height,pix_fmt,r_frame_rate", "-of", "csv=p=0"], pth)?; let par = par.trim().to_string();
+        match &first { None => first = Some(par), Some(f0) if *f0 != par => return Err(format!("join_contract: chunk {i} has codec parameters '{par}' but chunk 0 has '{f0}'")), _ => {} }
+    }
+    Ok(())
+}
+/// Final verification of a joined file: decoded frame count, video and audio duration, monotonic timestamps. `verified` is true only when all hold.
+pub fn verify_output(path: &std::path::Path, frames_total: u64, fps: f64, audio_secs: Option<f64>) -> Value {
+    let mut problems: Vec<String> = vec![]; let one = 1.0 / fps;
+    let (cnt, err) = ffprobe(&["-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames,duration", "-of", "csv=p=0"], path).unwrap_or_default();
+    let mut it = cnt.trim().split(','); let vdur: f64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(-1.0); let decoded: u64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    if !err.is_empty() { problems.push(format!("decode errors: {}", err.lines().next().unwrap_or(""))); }
+    if decoded != frames_total { problems.push(format!("decoded {decoded} frames, expected {frames_total}")); }
+    let want = frames_total as f64 / fps; if (vdur - want).abs() > one + 1e-9 { problems.push(format!("video duration {vdur:.4}s, expected {want:.4}s within one frame ({one:.4}s)")); }
+    let (pk, _) = ffprobe(&["-select_streams", "v:0", "-show_entries", "packet=pts_time,dts_time", "-of", "csv=p=0"], path).unwrap_or_default();
+    let (mut dts, mut pts): (Vec<f64>, Vec<f64>) = (vec![], vec![]); for l in pk.lines() { let mut c = l.split(','); if let (Some(a), Some(b)) = (c.next().and_then(|x| x.parse::<f64>().ok()), c.next().and_then(|x| x.parse::<f64>().ok())) { pts.push(a); dts.push(b); } }
+    let mono = dts.windows(2).all(|w| w[1] > w[0]); pts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)); let pmono = pts.windows(2).all(|w| w[1] > w[0]);
+    if !mono || !pmono { problems.push("timestamps are not strictly monotonic".into()); }
+    let mut adur = Value::Null;
+    if let Some(a) = audio_secs { let (o, _) = ffprobe(&["-select_streams", "a:0", "-show_entries", "stream=duration", "-of", "csv=p=0"], path).unwrap_or_default();
+        match o.trim().parse::<f64>() { Ok(d) => { adur = json!(d); let tol = 1024.0 / crate::audio::SR as f64; if (d - a).abs() > tol { problems.push(format!("audio duration {d:.4}s, expected {a:.4}s within one AAC frame ({tol:.4}s)")); } } Err(_) => problems.push("expected an audio stream and found none".into()) } }
+    json!({"verified": problems.is_empty(), "decoded_frames": decoded, "frames_total": frames_total, "video_duration": vdur, "audio_duration": adur, "pts_monotonic": mono && pmono, "problems": problems})
+}
+/// RV-20 join: contract check, then concat demuxer -c copy (audio rendered ONCE and muxed in the same ffmpeg step) into `<out>.joining.tmp`, fsync,
+/// verify, atomic rename. A failure leaves nothing at `out` (an earlier good output is not touched) and removes the temp file.
+pub fn join_verified(p: &crate::model::Project, parts: &[String], out: &str) -> Result<Value, String> {
+    if parts.is_empty() { return Err("parts must list at least one picture-only export".into()); }
+    chunk_contract(parts)?;
+    let fps = if p.fps > 0.0 { p.fps } else { 30.0 }; let mut frames = 0u64; for f in parts { frames += ffprobe(&["-count_packets", "-select_streams", "v:0", "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0"], std::path::Path::new(f))?.0.trim().parse::<u64>().map_err(|_| format!("cannot count frames of {f}"))?; }
+    let outp = std::path::Path::new(out); let tmp = std::path::PathBuf::from(format!("{out}.joining.tmp")); let wav = std::path::PathBuf::from(format!("{out}.joining.wav")); let list = std::path::PathBuf::from(format!("{out}.joining.txt"));
+    let cleanup = |tmp: &std::path::Path| { let _ = std::fs::remove_file(tmp); let _ = std::fs::remove_file(&wav); let _ = std::fs::remove_file(&list); };
+    cleanup(&tmp);
+    let sr = crate::audio::SR as f64; let (s1, secs) = (((frames as f64 / fps) * sr) as usize * 2, frames as f64 / fps);
+    crate::guard::reserve(s1 * 4); let full = crate::audio::mix(p); let mut pcm = full[..s1.min(full.len())].to_vec(); pcm.resize(s1, 0.0); let audible = pcm.iter().any(|v| v.abs() > 1e-6);
+    std::fs::write(&list, parts.iter().map(|f| format!("file '{}'\n", f.replace('\'', "'\\''"))).collect::<String>()).map_err(|e| e.to_string())?;
+    if audible { crate::audio::write_wav(wav.to_str().ok_or("invalid path")?, &pcm)?; }
+    let fmt = match outp.extension().and_then(|e| e.to_str()).unwrap_or("mp4") { "mov" => "mov", "mkv" => "matroska", _ => "mp4" };
+    let mut cmd = std::process::Command::new("ffmpeg"); cmd.args(["-v", "error", "-y", "-f", "concat", "-safe", "0", "-i"]).arg(&list); if audible { cmd.arg("-i").arg(&wav).args(["-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-b:a", "192k"]); } else { cmd.arg("-an"); }
+    cmd.args(["-c:v", "copy", "-f", fmt]).arg(&tmp);
+    let o = cmd.output().map_err(|e| format!("ffmpeg: {e}"))?; if !o.status.success() { cleanup(&tmp); return Err(format!("join failed: {}", String::from_utf8_lossy(&o.stderr).trim())); }
+    if let Err(e) = sync_file(&tmp) { cleanup(&tmp); return Err(e); }
+    let v = verify_output(&tmp, frames, fps, if audible { Some(secs) } else { None });
+    if v["verified"] != json!(true) { cleanup(&tmp); return Err(format!("join_unverified: the joined file failed verification and was discarded: {}", v["problems"])); }
+    std::fs::rename(&tmp, outp).map_err(|e| { cleanup(&tmp); format!("cannot move the verified join into place: {e}") })?; sync_dir(outp.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."))); cleanup(&tmp);
+    Ok(json!({"duration": secs, "verified": true, "verify": v}))
+}
+
+/// Classify a failure so the caller can act: `disk_full` (free space, then resume) or `encoder_failed` (the ffmpeg/x264 stderr tail is kept).
+pub fn classify(e: &str) -> String {
+    if e.starts_with("disk_full:") || e.starts_with("encoder_failed:") { return e.to_string(); }
+    let l = e.to_lowercase();
+    if l.contains("no space left") || l.contains("disk full") || l.contains("disk quota") || l.contains("storage full") || l.contains("enospc") { return format!("disk_full: the disk has no space left; free space and resume_job (finished chunks are kept). Detail: {}", tail(e)); }
+    if l.contains("ffmpeg") || l.contains("encoder") || l.contains("libx264") || l.contains("conversion failed") || l.contains("broken pipe") || l.contains("encode") { return format!("encoder_failed: {}", tail(e)); }
+    e.to_string()
+}
+fn tail(e: &str) -> String { let t: Vec<&str> = e.lines().rev().take(6).collect(); let mut v: Vec<&str> = t; v.reverse(); let j = v.join(" | "); if j.len() > 600 { j[j.len() - 600..].to_string() } else { j } }
+
 fn run(j: Arc<Job>, p: crate::model::Project, dir: std::path::PathBuf, out: String, cf: u64, crf: u32, force: bool, _lock: LockGuard) {
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Value, String> {
         let fps = if p.fps > 0.0 { p.fps } else { 30.0 }; let total = (em::project_end(&p) * fps).ceil() as u64; if total == 0 { return Err("nothing to export: the timeline is empty".into()); }
@@ -133,14 +198,14 @@ fn run(j: Arc<Job>, p: crate::model::Project, dir: std::path::PathBuf, out: Stri
             set(&j, |s| { s.chunks_done += 1; s.frames_done += range[1] - range[0]; if why.is_none() { s.chunks_reused += 1; } s.completed.push(range); });
         }
         let parts: Vec<String> = (0..chunks.len() as u64).map(|i| dir.join(chunk_name(i)).to_string_lossy().into_owned()).collect();
-        let dur = crate::render::join_export(&p, &parts, &out, 0.0)?;
+        let joined = join_verified(&p, &parts, &out)?; let dur = joined["duration"].clone();
         let mut reasons = serde_json::Map::new(); let mut re = 0u64; for r in &rendered { let (i, why) = (r["index"].as_u64().unwrap_or(0), r["reason"].as_str().unwrap_or("")); if matches!(why, "no_previous" | "forced") || old.as_ref().map_or(true, |o| o["chunks"].get(i.to_string()).is_none()) { continue; } re += 1; let n = reasons.get(why).and_then(|v| v.as_u64()).unwrap_or(0); reasons.insert(why.to_string(), json!(n + 1)); }
-        Ok(json!({"path": out, "duration": dur, "reverified": {"ok": reused.len(), "re_rendered": re, "reasons": reasons}, "quarantined": quarantined, "reused": reused, "rendered": rendered, "project_hash": m["project_hash"], "forced": force}))
+        Ok(json!({"path": out, "duration": dur, "verified": joined["verified"], "verify": joined["verify"], "reverified": {"ok": reused.len(), "re_rendered": re, "reasons": reasons}, "quarantined": quarantined, "reused": reused, "rendered": rendered, "project_hash": m["project_hash"], "forced": force}))
     }));
     let cancelled = j.cancel.load(std::sync::atomic::Ordering::Relaxed);
     if !matches!(res, Ok(Ok(_))) { if let Ok(rd) = std::fs::read_dir(&dir) { for e in rd.flatten() { let n = e.file_name().to_string_lossy().into_owned(); if let Some(stem) = n.strip_suffix(".partial.mp4") { let pf = dir.join(format!("{stem}.mp4.partial")); let _ = std::fs::rename(e.path(), &pf); let _ = write_atomic(&dir.join(format!("{stem}.mp4.partial.marker")), &json!({"error": "interrupted before the chunk finished", "cancelled": cancelled})); } } } }
     set(&j, |s| { s.current_range = None; match res { Ok(Ok(v)) => { s.state = "done"; s.result = Some(v); }
-        Ok(Err(e)) => { if cancelled || e == "cancelled" { s.state = "cancelled"; } else { s.state = "failed"; s.error = Some(e); } }
+        Ok(Err(e)) => { if cancelled || e == "cancelled" { s.state = "cancelled"; } else { s.state = "failed"; s.error = Some(classify(&e)); } }
         Err(_) => { if cancelled { s.state = "cancelled"; } else { s.state = "failed"; s.error = Some("export job panicked".into()); } } } });
 }
 
@@ -169,7 +234,7 @@ fn get(a: &Value) -> Result<Arc<Job>, String> { let id = str_arg(a, "job_id")?; 
 
 pub fn commands() -> Vec<Command> { vec![
     Command { name: "export_job_start", mutates: false,
-        description: "Start a chunked export in the background and return a job_id (poll with job_status). Picture-only chunks are rendered into <path>.chunks/ with a manifest.json and index.json, then joined with ONE continuous audio stream into path. Incremental: a chunk is reused only when its dependency key matches AND the chunk file's sha256 still verifies; otherwise it is rendered, and the result lists reused/rendered chunks with the reason (no_previous, key_changed, file_missing, file_hash_mismatch, forced). force:true re-renders everything. wait:true blocks until the job ends and returns the final status. The job renders a snapshot of the project taken at start.",
+        description: "Start a chunked export in the background and return a job_id (poll with job_status). Picture-only chunks are rendered into <path>.chunks/ with a manifest.json and index.json, then joined with ONE continuous audio stream into path. Incremental: a chunk is reused only when its dependency key matches AND the chunk file's sha256 still verifies; otherwise it is rendered, and the result lists reused/rendered chunks with the reason (no_previous, key_changed, file_missing, file_hash_mismatch, forced). force:true re-renders everything. wait:true blocks until the job ends and returns the final status. The job renders a snapshot of the project taken at start. Durability (RV-20): the directory holds an exclusive job.lock (same host only; a second start or resume is refused with a job-locked error, a lock left by a killed process is reclaimed). Every chunk and index write is fsynced; on start/resume an unfinished or unindexed chunk is quarantined (.partial + marker) and every indexed chunk is verified (size, sha256, frame count, key) before reuse. The join is stream-copied into <path>.joining.tmp, verified (decoded frames, durations, monotonic timestamps) and renamed atomically; a failed join leaves nothing at path. Failures are classified as disk-full or encoder-failed errors (stderr tail kept) and keep finished chunks. Limits: crash safety is chunk-granular (at most the in-flight chunk is lost), the lock is same-host only, and encodes are not guaranteed bytewise identical across runs (decoded frames were equal in tests).",
         schema: obj(vec![("path", s("output .mp4 path")), ("chunk_s", n("chunk length in seconds, default 4")), ("crf", n("quality 0..51, default 18")), ("dir", s("chunk directory, default <path>.chunks")), ("force", json!({"type":"boolean"})), ("wait", json!({"type":"boolean","description":"block until done (default false)"}))], &["path"]),
         run: |ss, a| start(ss, a, false) },
     Command { name: "job_status", mutates: false,
