@@ -98,7 +98,7 @@ fn unregistered_path_fields_fail() {
         ("model.rs", "path", "REF Asset.path and OccSpec.path"), ("model.rs", "font", "REF Source::Text.font"),
         ("shards.rs", "occlusion", "REF Plane.occlusion"), ("shards.rs", "texture", "REF Plane.texture"),
         ("color/view_video.rs", "config_path", "REF Project.ocio_view_delivery.config_path"),
-        ("deps.rs", "path", "OUTPUT: ExtRef.path / Resolved.path"), ("deps.rs", "rel_path", "OUTPUT: DepRecord.rel_path, informational"), ("model.rs", "src", "NOT A FILE: OccSpec.src is a clip id"), ("planar.rs", "src", "NOT A FILE: Anchor.src is a clip id (runtime, not serialized in the project)"),
+        ("deps.rs", "path", "OUTPUT: ExtRef.path / Resolved.path"), ("deps.rs", "rel_path", "OUTPUT: DepRecord.rel_path, informational"), ("text.rs", "font_file", "OUTPUT: TextMetrics.font_file, the font file a measurement resolved to, informational"), ("model.rs", "src", "NOT A FILE: OccSpec.src is a clip id"), ("planar.rs", "src", "NOT A FILE: Anchor.src is a clip id (runtime, not serialized in the project)"),
         ("color/bake.rs", "path", "NOT A PROJECT FIELD: bake step input, per call"), ("color/bake.rs", "config_path", "NOT A PROJECT FIELD: bake step input, per call"),
         ("color/mux.rs", "dir", "NOT A PROJECT FIELD: temp transaction dir"), ("audio.rs", "path", "NOT A PROJECT FIELD: temp wav"), ("commands.rs", "path", "OUTPUT: Media.path, an image a tool call produced (cleared every dispatch), not stored in the project"),
     ];

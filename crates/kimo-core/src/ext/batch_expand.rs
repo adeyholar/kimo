@@ -9,7 +9,9 @@ pub const DEFAULT_MAX: usize = 500;
 fn bad(m: String) -> String { format!("invalid_foreach: {m}") }
 fn too_large(cap: usize) -> String { format!("batch_expansion_too_large: the expanded batch would exceed {cap} ops (the batch cap); lower the foreach range or split the batch") }
 fn val_text(v: &Value) -> String { match v { Value::String(s) => s.clone(), o => o.to_string() } }
+fn env_num(env: &[(String, Value)], n: &str) -> Option<f64> { env.iter().rev().find(|(k, _)| k == n).and_then(|(_, x)| x.as_f64()) }
 fn subst(v: &Value, env: &[(String, Value)]) -> Result<Value, String> {
+    if super::batch_calc::is_calc(v) { let e = v["$calc"].as_str().unwrap(); return Ok(json!({"$calc": super::batch_calc::rewrite(e, &|n| env_num(env, n), &|r| r.to_string())?})); }
     match v {
         Value::String(s) => {
             if let Some(name) = s.strip_prefix("{{").and_then(|r| r.strip_suffix("}}")).filter(|n| !n.contains("{{") && !n.contains("}}")) { let n = name.trim(); return env.iter().rev().find(|(k, _)| k == n).map(|(_, x)| x.clone()).ok_or(bad(format!("unknown variable '{{{{{n}}}}}'; defined here: {}", env.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ")))); }
@@ -25,6 +27,7 @@ fn subst(v: &Value, env: &[(String, Value)]) -> Result<Value, String> {
 }
 /// "$id.x" -> "$id#sfx.x" for ids defined at this foreach level (a bare reference inside the body means the same iteration).
 fn rewrite(v: &Value, defined: &HashSet<String>, sfx: &str) -> Value {
+    if super::batch_calc::is_calc(v) { let e = v["$calc"].as_str().unwrap(); let t = super::batch_calc::rewrite(e, &|_| None, &|r| { let rest = &r[1..]; match rest.find(|c| c == '.' || c == '[') { Some(d) if defined.contains(&rest[..d]) => format!("${}{}{}", &rest[..d], sfx, &rest[d..]), _ => r.to_string() } }); return json!({"$calc": t.unwrap_or_else(|_| e.to_string())}); }
     match v {
         Value::String(s) if s.starts_with('$') && !s.starts_with("$$") => { let rest = &s[1..]; match rest.find(|c| c == '.' || c == '[') { Some(d) if defined.contains(&rest[..d]) => Value::String(format!("${}{}{}", &rest[..d], sfx, &rest[d..])), _ => v.clone() } }
         Value::Array(a) => Value::Array(a.iter().map(|x| rewrite(x, defined, sfx)).collect()),
@@ -63,16 +66,22 @@ fn expand(ss: &mut Session, ops: &[Value], env: &[(String, Value)], depth: usize
             }
         } else {
             if out.len() >= cap { return Err(too_large(cap)); }
-            let mut leaf = o.clone(); if !env.is_empty() { if let Some(args) = o.get("args") { leaf["args"] = subst(args, env)?; } } out.push(leaf);
+            let mut leaf = o.clone(); if let Some(args) = o.get("args") { let a2 = if env.is_empty() { args.clone() } else { subst(args, env)? }; leaf["args"] = fold(&a2)?; } out.push(leaf);
         }
         if out.len() > cap { return Err(too_large(cap)); }
     }
     Ok(())
 }
+/// Evaluates every {"$calc"} whose inputs are static (no $refs); the rest wait for execution.
+fn fold(v: &Value) -> Result<Value, String> {
+    if super::batch_calc::is_calc(v) { let e = v["$calc"].as_str().unwrap(); if super::batch_calc::refs(e).is_empty() { return super::batch_calc::eval(e, &|_| Ok(None)).map(super::batch_calc::num_json); } return Ok(v.clone()); }
+    match v { Value::Array(a) => a.iter().map(fold).collect::<Result<Vec<_>, _>>().map(Value::Array), Value::Object(o) => { let mut m = serde_json::Map::new(); for (k, x) in o { m.insert(k.clone(), fold(x)?); } Ok(Value::Object(m)) } _ => Ok(v.clone()) }
+}
+fn has_calc(v: &Value) -> bool { super::batch_calc::is_calc(v) || match v { Value::Array(a) => a.iter().any(has_calc), Value::Object(o) => o.values().any(has_calc), _ => false } }
 /// Returns the batch args with `ops` flattened, or None when no op uses foreach (the common path is untouched).
 pub fn expand_args(ss: &mut Session, a: &Value) -> Result<Option<Value>, String> {
     let Some(arr) = a.get("ops").and_then(|v| v.as_array()) else { return Ok(None) };
-    if !arr.iter().any(|o| o.get("foreach").is_some()) { return Ok(None); }
+    if !arr.iter().any(|o| o.get("foreach").is_some() || has_calc(o)) { return Ok(None); }
     let mut out = vec![]; expand(ss, arr, &[], 0, "", super::batch::MAX_OPS, &mut out)?;
     let mut b = a.clone(); b["ops"] = Value::Array(out); Ok(Some(b))
 }

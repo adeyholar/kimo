@@ -15,7 +15,9 @@ const STRINGS: [&str; 4] = ["Hello", "Quick brown fox", "two\nlines here", "Wrap
 }
 #[test] fn wrap_breaks_match_the_renderer_and_font_substitution_is_explicit() {
     let fx = TextFx { box_width: 300.0, ..Default::default() };
-    let m = measure_text("Wrap this long sentence at a narrow box width please", "Montserrat", 40.0, 0.0, 0.0, "left", 640.0, 360.0, Some(&fx)).unwrap();
+    // font availability differs per box: pick the first common family that resolves without substitution
+    let fam = ["Montserrat", "DejaVu Sans", "Liberation Sans", "Arial"].into_iter().find(|f| !measure_text("x", f, 20.0, 0.0, 0.0, "left", 100.0, 0.0, None).unwrap().substituted).expect("one of the common families is installed");
+    let m = measure_text("Wrap this long sentence at a narrow box width please", fam, 40.0, 0.0, 0.0, "left", 640.0, 360.0, Some(&fx)).unwrap();
     assert!(m.lines.len() >= 3 && m.lines.iter().all(|l| l.w <= 300.5), "{:?}", m.lines.iter().map(|l| (&l.text, l.w)).collect::<Vec<_>>());
     assert_eq!(m.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" "), "Wrap this long sentence at a narrow box width please");
     assert!(!m.substituted); assert!(measure_text("x", "NoSuchFamilyZZ", 20.0, 0.0, 0.0, "left", 100.0, 0.0, None).unwrap().substituted);

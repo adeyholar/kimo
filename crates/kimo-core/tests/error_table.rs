@@ -75,3 +75,13 @@ fn calls(t1: &str, c: &str) -> Vec<(&'static str, Value)> {
 #[test]fn visual_perception_errors_additive(){let(mut s,_,_,_)=setup();for(tool,a,code)in[("diff_frames",json!({"a":{"source":"bad"},"b":{}}),"invalid_source"),("diff_frames",json!({"a":{},"b":{},"metrics":["bad"]}),"invalid_metric"),("diff_frames",json!({"a":{},"b":{},"threshold":2}),"out_of_range"),("detect_cuts",json!({"source":"bad"}),"invalid_source"),("detect_cuts",json!({"method":"bad"}),"invalid_method"),("detect_cuts",json!({"fps":100}),"out_of_range")]{assert_eq!(dispatch_ex(&mut s,tool,&a).unwrap_err().code,code);}}
 
 #[test]fn raw_audio_structured_errors_additive(){let(mut s,_,_,_)=setup();for(tool,a,code)in[("import_samples",json!({"rate":48000,"channels":2,"data":[[null],[0]]}),"invalid_samples"),("audio_filter_response",json!({"coeffs":[]}),"out_of_range"),("read_samples",json!({"rate":44100}),"out_of_range")]{let e=dispatch_ex(&mut s,tool,&a).unwrap_err();assert_eq!(e.code,code,"{}",e.message);}}
+
+/// U2/RV-28/U1 prefix codes are typed (they used to fall through to "other"): the text is unchanged, only the code is new.
+#[test]fn batch_names_and_layout_prefix_codes_are_typed(){let(mut s,_,_,_)=setup();
+    let one=|f:serde_json::Value|json!({"expand_only":true,"ops":[f]});
+    for(tool,a,code)in[
+        ("batch",one(json!({"tool":"find","args":{"limit":{"$calc":"1/0"}}})),"calc_error"),
+        ("batch",one(json!({"foreach":{"var":"a","in":{"range":[0,600]},"max":1000},"ops":[{"tool":"find","args":{}}]})),"batch_expansion_too_large"),
+        ("batch",one(json!({"foreach":{"var":"a","in":[1]},"ops":[{"foreach":{"var":"b","in":[1]},"ops":[{"foreach":{"var":"d","in":[1]},"ops":[{"foreach":{"var":"e","in":[1]},"ops":[{"tool":"find","args":{}}]}]}]}]})),"invalid_foreach"),
+        ("set_meta",json!({"id":"@nope"}),"name_not_found"),
+        ("set_meta",json!({"id":"clip3","name":"has space"}),"invalid_name")]{let e=dispatch_ex(&mut s,tool,&a).unwrap_err();assert_eq!(e.code,code,"{}",e.message);}}

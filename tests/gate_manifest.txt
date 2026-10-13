@@ -218,3 +218,4 @@ rust safe_margins fast
 rust solve_constraints fast
 rust batch_minimal fast
 rust batch_foreach fast
+rust batch_calc fast

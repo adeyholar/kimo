@@ -82,15 +82,15 @@
 81 get_transform	other	param=space	hint=valid values for 'space' (3): local, world, canvas_px
 82 get_transform	not_found	param=clip_id	hint=valid clip ids (up to 10): clip3
 83 add_null	not_found	param=track_id	hint=valid track ids (up to 10): track1, track2
-84 set_meta	out_of_range	param=	hint=
-85 set_meta	other	param=	hint=
+84 set_meta	invalid_name	param=	hint=
+85 set_meta	name_not_found	param=	hint=
 86 set_meta	other	param=target	hint=valid values for 'target' (2): clip, track
-87 set_meta	out_of_range	param=	hint=
+87 set_meta	invalid_name	param=	hint=
 88 set_meta	other	param=	hint=
 89 find	out_of_range	param=	hint=
 90 find	other	param=kind	hint=valid values for 'kind' (2): clip, track
 91 find	out_of_range	param=	hint=
-92 find	other	param=	hint=
+92 find	name_not_found	param=	hint=
 93 project_diff	other	param=	hint=
 94 project_diff	other	param=	hint=
 95 project_diff	other	param=	hint=
