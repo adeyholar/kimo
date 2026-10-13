@@ -62,6 +62,7 @@ clear_path_keys f99ff5da3693043a
 collect_project 689e1f8dd545e887
 compare_aces2_reference 59ec416ff6c4de21
 compare_linear_exposure afcdd34f6dab8f45
+compute_text_bounds a1e565a4cc3fe0e4
 connect_nodes b6edfff20b9c6d1f
 contact_sheet 4c3841fa11139b4c
 copy_curve 5560581f371d7986
@@ -167,6 +168,7 @@ preview_material 91a9515ab10a6608
 preview_subject_match 8fbee66dc3095cb4
 project_diff 9156e2b0c03e1a9a
 project_set 00170b74c8eb4359
+query_safe_margins 5cfccf0378618180
 rate_stretch 16dd93dcc17cb7ed
 read_pixels 75dec9c4fee7b361
 read_samples 58d6a9f3ea9c7b16
@@ -279,6 +281,7 @@ slip_clip 2c0858c74b31b006
 smooth_curve 76c3081df1b15c57
 snap_time 724db0acdc620969
 solve_camera 109d6fc96592a39e
+solve_constraints 3ea242b079bf2ed1
 split_all_at 846f25f325036668
 split_clip 1a109f15314ba83d
 stabilize 9e45db97224ae6db

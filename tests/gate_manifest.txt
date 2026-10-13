@@ -212,3 +212,7 @@ rust xform_lint fast
 rust export_manifest fast
 rust names_hook fast
 rust export_job fast
+rust text_metrics fast
+rust text_bounds fast
+rust safe_margins fast
+rust solve_constraints fast

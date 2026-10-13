@@ -61,7 +61,7 @@ pub fn euler_to_quat(rx: f64, ry: f64, rz: f64) -> [f64; 4] { let h = |d: f64| (
 pub fn quat_slerp(a: [f64; 4], b: [f64; 4], u: f64) -> [f64; 4] { let mut b = b; let mut d: f64 = (0..4).map(|i| a[i] * b[i]).sum(); if d < 0.0 { d = -d; for x in b.iter_mut() { *x = -*x; } }
     if d > 0.9995 { let mut q = [0.0; 4]; for i in 0..4 { q[i] = a[i] + (b[i] - a[i]) * u; } let n = q.iter().map(|x| x * x).sum::<f64>().sqrt(); return [q[0] / n, q[1] / n, q[2] / n, q[3] / n]; }
     let th = d.clamp(-1.0, 1.0).acos(); let (s0, s1) = (((1.0 - u) * th).sin() / th.sin(), (u * th).sin() / th.sin()); let mut q = [0.0; 4]; for i in 0..4 { q[i] = a[i] * s0 + b[i] * s1; } q }
-fn get_transform(ss: &mut Session, a: &Value) -> Result<Value, String> {
+pub(crate) fn get_transform(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let cid = str_arg(a, "clip_id")?; let c = ss.project.find_clip(cid).ok_or(format!("no clip '{cid}'"))?;
     let space = a.get("space").and_then(|v| v.as_str()).unwrap_or("world"); if !["local", "world", "canvas_px"].contains(&space) { return Err("space is not allowed. Valid: local, world, canvas_px".into()); }
     let t = match a.get("t") { None | Some(Value::Null) => c.start, Some(v) => v.as_f64().filter(|f| f.is_finite()).ok_or("t must be a finite number of timeline seconds")? };
