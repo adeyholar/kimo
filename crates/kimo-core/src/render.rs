@@ -603,7 +603,7 @@ pub fn join_export(p: &Project, parts: &[String], path: &str, start: f64) -> Res
     let mut total = 0.0; let mut fps0 = 0.0;
     for (i, f) in parts.iter().enumerate() { let (_, _, dur, fps) = probe(f)?; if i == 0 { fps0 = fps; } else if (fps - fps0).abs() > 1e-6 { return Err(format!("part {i} runs at {fps} fps but part 0 runs at {fps0}")); } total += dur; }
     let frames = (total * fps0).round() as usize; if frames == 0 { return Err("parts contain no frames".into()); }
-    let list = std::env::temp_dir().join(format!("kimo-join-{}-{}.txt", std::process::id(), frames));
+    let list = std::env::temp_dir().join({ static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0); format!("kimo-join-{}-{}-{}.txt", std::process::id(), frames, N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) });
     std::fs::write(&list, parts.iter().map(|f| format!("file '{}'\n", f.replace('\'', "'\\''"))).collect::<String>()).map_err(|e| e.to_string())?;
     let out = Command::new("ffmpeg").args(["-v", "error", "-y", "-f", "concat", "-safe", "0", "-i"]).arg(&list).args(["-c", "copy", "-an", path]).output().map_err(|e| format!("ffmpeg: {e}"))?;
     let _ = std::fs::remove_file(&list);

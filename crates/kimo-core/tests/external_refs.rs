@@ -162,7 +162,7 @@ fn open_sites_are_classified() {
         ("ext/cdl_files.rs", 1, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/delivery.rs", 5, "PROJECT-DERIVED, resolved through deps (resolve / resolve_str) at the call site"),
         ("ext/editorial_tools.rs", 3, "PROJECT-DERIVED, resolved through deps (resolve / resolve_str) at the call site"),
-        ("ext/export_job.rs", 2, "caller path (job chunk directory: index.json / manifest.json / chunk files), not stored in the project"),
+        ("ext/export_job.rs", 7, "caller path (job chunk directory: index.json / manifest.json / chunk files), not stored in the project"),
         ("ext/export_presets.rs", 3, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/ocio_tools.rs", 2, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/ocio_view.rs", 2, "caller path (tool argument / output / temp file / test), not stored in the project"),

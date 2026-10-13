@@ -224,3 +224,5 @@ rust templates fast
 rust lint_frame fast
 rust batch_benchmark fast
 rust template_examples fast
+rust export_job_lock fast
+rust export_job_recover fast
