@@ -216,3 +216,5 @@ rust text_metrics fast
 rust text_bounds fast
 rust safe_margins fast
 rust solve_constraints fast
+rust batch_minimal fast
+rust batch_foreach fast
