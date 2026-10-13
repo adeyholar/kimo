@@ -173,7 +173,7 @@ query_safe_margins 5cfccf0378618180
 rate_stretch 16dd93dcc17cb7ed
 read_pixels 75dec9c4fee7b361
 read_samples 58d6a9f3ea9c7b16
-recipe_apply 71a94887ee9adc49
+recipe_apply 2fc7a3ef7390467a
 recipe_describe d6500745b10aabda
 recipe_list 260d6e832e090377
 redo 738dbd6488fa90b3
@@ -290,7 +290,7 @@ stabilize 9e45db97224ae6db
 swap_clips 7e618d3ff4d26a38
 switch_angle 2a55c52c71e95121
 sync_clips 9a610496e2de2b51
-template_apply 3171da1bed90de7c
+template_apply 3247d4fd322df44c
 template_define c18959a3360d1cb0
 template_delete 6b938f0f0f89fa07
 template_describe 6840c663f33496bf

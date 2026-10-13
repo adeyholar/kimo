@@ -22,10 +22,10 @@ fn define(ss: &mut Session) { c(ss, "template_define", json!({"name": "captions"
     let (mut a, ta) = fresh(); let (mut b, tb) = fresh(); define(&mut a); let before = pj(&a); let u0 = a.undo.len();
     let ex = c(&mut a, "template_apply", json!({"name": "captions", "args": {"track": ta, "label": "Line"}, "expand_only": true})); assert_eq!(pj(&a), before, "expand_only changes nothing"); assert_eq!(ex["ops"].as_array().unwrap().len(), 6);
     let dry = c(&mut a, "template_apply", json!({"name": "captions", "args": {"track": ta, "label": "Line"}, "dry_run": true})); assert_eq!(dry["expansion"], ex["ops"], "dry_run echo equals expand_only"); assert_eq!(a.undo.len(), u0);
-    let r = c(&mut a, "template_apply", json!({"name": "captions", "args": {"track": ta, "label": "Line"}})); assert_eq!(a.undo.len(), u0 + 1, "one undo entry"); assert_eq!(r["expansion"], ex["ops"], "executed ops equal the echoed ops"); assert_eq!(r["args"]["n"], 3);
+    let r = c(&mut a, "template_apply", json!({"name": "captions", "args": {"track": ta, "label": "Line"}, "expansion": true})); assert_eq!(a.undo.len(), u0 + 1, "one undo entry"); assert_eq!(r["expansion"], ex["ops"], "executed ops equal the echoed ops"); assert_eq!(r["args"]["n"], 3);
     c(&mut b, "batch", json!({"ops": ex["ops"]})); let mut pa: Value = serde_json::from_str(&pj(&a)).unwrap(); pa.as_object_mut().unwrap().remove("templates"); assert_eq!(pa, serde_json::from_str::<Value>(&pj(&b)).unwrap(), "template apply == hand-written batch");
     c(&mut a, "undo", json!({})); assert_eq!(pj(&a), before, "a single undo reverts the whole template");
-    let r2 = c(&mut a, "template_apply", json!({"name": "captions", "args": {"track": ta, "label": "Z", "n": 2, "gap": 5}})); assert_eq!(r2["expansion"][2]["args"]["start"], 5, "defaults and overrides resolve, calc folded");
+    let r2 = c(&mut a, "template_apply", json!({"name": "captions", "args": {"track": ta, "label": "Z", "n": 2, "gap": 5}, "expansion": true})); assert_eq!(r2["expansion"][2]["args"]["start"], 5, "defaults and overrides resolve, calc folded");
 }
 #[test] fn parameter_errors_name_the_parameter() {
     let (mut ss, t) = fresh(); define(&mut ss); let before = pj(&ss);

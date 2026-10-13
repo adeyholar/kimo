@@ -1,6 +1,6 @@
 # A reference film, one step at a time
 
-> Draft measured on v3 3f0384e. Sixteen calls below were run on this head. Foreach, frame lint, range preview, project diff and incremental export/job status are still pending. This is not the final runnable example.
+> Draft measured on v3 3f0384e. Sixteen calls below were run on this head. Foreach and the repeated-structure call budget are measured in their own section below; frame lint, range preview, project diff and incremental export/job status are still pending. This is not the final runnable example.
 
 ## Version and scope
 
@@ -1040,6 +1040,35 @@ Counts are MCP tools/call requests. Initialization is excluded. Build rehearsal 
 | Measured prefix | 16 | 30 |
 
 The sixteen-request prefix excludes audio binding and collect/reopen (captured later), foreach, lint, range preview, project diff and export jobs. Sixteen is not an end-to-end budget.
+
+## Call budget for repeated structure
+
+The sixteen-request prefix above builds eight named elements. Repeated structure (captions, titles, per-clip keyframes) is where call count explodes if every item is its own request. This section measures one such segment three ways. Counts are top-level tool calls and response bytes as reported by `session_stats` (reset first; the `session_stats` calls themselves are excluded). Request bytes are not measured. Measured on v3 3aabd9d, 160 x 90.
+
+The segment: one track, 40 caption text clips (`start` = index x 1.5 s), and 12 named title clips, each with `opacity` and `y` keyframes written by `set_keyframes` against the clip it was created with.
+
+| Route | Calls | Response bytes | Primitive operations |
+| --- | ---: | ---: | ---: |
+| Serial: add_track, then one call per clip and per keyframe set | 77 | 2397 | 77 |
+| One `batch` with two `foreach` loops, `$calc` for times and `$title.clip_id` refs, `return: minimal` | 1 | 549 | 77 |
+| `template_define` (library file) once, then `template_apply` | 2 | 752 | 77 |
+
+All three produce the same project: the serial build and the one-call batch are byte-identical project JSON, and the template build is equal once the stored template itself is excluded. The test `docs_call_budget` asserts this and prints the numbers above.
+
+Reading the table honestly:
+
+- The saving is in calls (77 to 1), not response bytes. A single-op reply is already small (about 30 bytes), so the serial build only returns 2397 bytes in total. The win is that an agent makes one decision instead of 77.
+- `return` matters for big batches. A 40-op batch replies 3626 bytes with the default `summary`, 3426 with `ids` and 432 with `minimal` (measured on 40 `add_text` ops). Use `minimal` when you do not need per-op results.
+- `template_apply` returns a compact result by default (`ok`, `template`, `applied_ops`, created ids, the resolved `args` and `expansion_hash`, a sha256 of the expanded op list; `return` defaults to `minimal`). The exact flat ops come back in `expansion` only for `dry_run` or `expansion: true`, and as `ops` for `expand_only`. This took the template route from 16569 bytes (when it always echoed the ops) to 752 bytes for define plus apply. `recipe_apply` works the same way.
+- Template calls pay off when the same structure is applied more than once: define once, then each use is one call with its arguments.
+- `foreach` expands before anything runs and is atomic with the rest of the batch: one undo entry, and any failure restores the project exactly. Pass `expand_only` to see the flat operation list.
+
+Reference data (plain JSON, runnable as written):
+
+- `docs/examples/call_budget/segment_one_batch.json` is the body of the one-call `batch`.
+- `docs/examples/call_budget/segment_template.json` is the template library for `template_define` (`library_path`), applied with `template_apply` name `codex_segment` (arguments `captions` and `titles` default to 40 and 12).
+
+Limits: `$calc` is arithmetic over the loop variables (`i`, `n`, the named variable), parameters and numbers; it does not call tools. A range is bounded by the batch size limit of 500 operations after expansion.
 
 ## Reproduction and acceptance
 
