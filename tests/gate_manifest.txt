@@ -206,3 +206,4 @@ py audio_raw_mutation.py full
 py audio_samples_stdio.py fast
 rust transform_nodes fast
 rust xform_lint fast
+rust export_manifest fast

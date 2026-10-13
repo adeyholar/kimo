@@ -197,3 +197,36 @@ fn spring_ref(k: f64, cc: f64, m: f64, from: f64, to: f64, t: f64) -> f64 {
     let r = expr(&mut ss, &id, "x", json!({"op": "spring"})); assert_eq!(r["applied"]["stiffness"], 100.0); assert_eq!(r["applied"]["damping"], 10.0); assert_eq!(r["applied"]["mass"], 1.0);
     assert!(c(&mut ss, "set_expression", json!({"clip_id": id, "property": "x", "op": "clear"}))["applied"].is_null());
 }
+
+// ---- A6: per-key tangent handles ----
+use kimo_core::keyframe::{handles_to_bez, Ease, Handle, Key, Prop};
+fn kk(t: f64, v: f64, out: Option<(f64, f64)>, inn: Option<(f64, f64)>) -> Key { Key { t, v, ease: Ease::Linear, bez: None, out: out.map(|(dt, dv)| Handle { dt, dv }), inn: inn.map(|(dt, dv)| Handle { dt, dv }) } }
+fn prop2(a: Key, b: Key) -> Prop { let mut p = Prop::new(0.0); p.keys = vec![a, b]; p }
+#[test] fn handles_round_trip_to_an_equivalent_bez_within_1e_12() {
+    for (o, i, v0, v1) in [((0.4, 3.0), (0.7, 1.0), 2.0, 10.0), ((1.0, -4.0), (0.25, 6.0), -3.0, 5.0), ((0.1, 0.0), (0.1, 0.0), 0.0, 1.0)] {
+        let (a, b) = (kk(1.0, v0, Some(o), None), kk(3.0, v1, None, Some(i))); assert!(handles_to_bez(&Key { out: None, ..a }, &b).is_none(), "needs both handles");
+        let (a, b) = (kk(1.0, v0, Some(o), None), kk(3.0, v1, Some(o), Some(i))); let bz = handles_to_bez(&a, &b).unwrap();
+        let hp = prop2(a, b); let mut bp = prop2(Key { out: None, inn: None, bez: Some(bz), ..a }, Key { out: None, inn: None, ..b });
+        for n in 0..=100 { let t = 1.0 + 2.0 * n as f64 / 100.0; assert!((hp.at(t) - bp.at(t)).abs() < 1e-12, "t={t}: {} vs {}", hp.at(t), bp.at(t)); } bp.keys.clear();
+    }
+}
+#[test] fn handles_overshoot_and_flat_segments_can_bump() {
+    let hp = prop2(kk(0.0, 0.0, Some((0.5, 9.0)), None), kk(1.0, 1.0, None, Some((0.5, -9.0)))); let m = (0..=100).map(|n| hp.at(n as f64 / 100.0)).fold(f64::MIN, f64::max); assert!(m > 1.5, "overshoot preserved, got {m}");
+    let flat = prop2(kk(0.0, 5.0, Some((0.3, 4.0)), None), kk(1.0, 5.0, None, Some((0.3, 0.0)))); assert!(flat.at(0.4) > 5.5, "a flat segment with a handle bumps: {}", flat.at(0.4)); assert_eq!(flat.at(0.0), 5.0); assert_eq!(flat.at(1.0), 5.0);
+}
+#[test] fn handles_win_over_bez_and_mirrored_handles_are_c1() {
+    let mut a = kk(0.0, 0.0, Some((0.4, 2.0)), None); a.bez = Some([0.9, 0.0, 0.9, 1.0]); let b = kk(1.0, 1.0, None, Some((0.4, 0.5))); let with = prop2(a, b); let mut a2 = a; a2.bez = None; assert_eq!(with.at(0.37), prop2(a2, b).at(0.37), "handles win");
+    // mirrored handles at the middle key: equal slope dv/dt on both sides
+    let (k0, k1, k2) = (kk(0.0, 0.0, Some((0.3, 0.3)), None), kk(1.0, 2.0, Some((0.4, 1.2)), Some((0.4, 1.2))), kk(2.5, 0.5, None, Some((0.5, 0.1)))); let mut p = Prop::new(0.0); p.keys = vec![k0, k1, k2];
+    let (sl, sr) = (k1.inn.unwrap().dv / k1.inn.unwrap().dt, k1.out.unwrap().dv / k1.out.unwrap().dt); assert!((sl - sr).abs() < 1e-9, "analytic handle slopes match");
+    let h = 1e-5; let (dl, dr) = ((p.at(1.0) - p.at(1.0 - h)) / h, (p.at(1.0 + h) - p.at(1.0)) / h); assert!((dl - sl).abs() < 1e-3 && (dr - sr).abs() < 1e-3, "sampled slopes {dl} {dr} vs {sl}");
+}
+#[test] fn handle_tools_set_get_sample_bake_and_errors() {
+    let (mut ss, id) = scene(); keys_on(&mut ss, &id, "x", json!([{"t": 0.0, "v": 0.0, "out": {"dt": 0.5, "dv": 8.0}}, {"t": 2.0, "v": 4.0, "in": {"dt": 0.5, "dv": -8.0}}]));
+    let r = c(&mut ss, "get_curve", json!({"clip_id": id, "property": "x"})); assert_eq!(r["keys"][0]["out"], json!({"dt": 0.5, "dv": 8.0})); assert_eq!(r["keys"][1]["in"], json!({"dt": 0.5, "dv": -8.0})); assert!(r["keys"][0].get("in").is_none());
+    let want = ss.project.find_clip(&id).unwrap().props["x"].at(0.7); let s = c(&mut ss, "sample_property", json!({"clip_id": id, "property": "x", "times": [0.7], "space": "clip"})); assert_eq!(s["values"][0].as_f64().unwrap(), want);
+    let before = pj(&ss); c(&mut ss, "bake_property", json!({"clip_id": id, "property": "x", "start": 0.0, "end": 2.0, "n": 9})); let b = c(&mut ss, "sample_property", json!({"clip_id": id, "property": "x", "times": [0.7], "space": "clip"})); assert!((b["values"][0].as_f64().unwrap() - want).abs() < 0.2); let _ = before;
+    for bad in [json!({"t": 0.0, "v": 1.0, "out": {"dt": -1.0, "dv": 0.0}}), json!({"t": 0.0, "v": 1.0, "out": {"dt": 1.0}}), json!({"t": 0.0, "v": 1.0, "in": "x"}), json!({"t": 0.0, "v": 1.0, "in": {"dt": "NaN", "dv": 0.0}})] { let h = pj(&ss); assert!(!e(&mut ss, "set_keyframes", json!({"clip_id": id, "property": "x", "keys": [bad]})).is_empty()); assert_eq!(pj(&ss), h); }
+    // old shape: keys without handles serialize with no in/out fields
+    let (mut s2, i2) = scene(); keys_on(&mut s2, &i2, "x", json!([{"t": 0.0, "v": 0.0}, {"t": 1.0, "v": 1.0}])); let j = pj(&s2); assert!(!j.contains("\"in\"") && !j.contains("\"out\""), "{j}");
+}

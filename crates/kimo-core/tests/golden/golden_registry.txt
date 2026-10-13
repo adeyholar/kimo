@@ -81,6 +81,7 @@ edit_caption 9f54f456c1123d9f
 effect_describe 4c04333355609e5d
 evaluate_grade_graph_samples e9370ef17ee49951
 evaluate_hlg_reference_display d6dcb3d3d9272b80
+explain_invalidation a2ec3e592da3b2b8
 export dd91152468c519af
 export_aces2_reference_video aeadc88e69eedbab
 export_alpha 188c7d7584e340b3
@@ -91,6 +92,7 @@ export_color_pipeline_lut cc32ea2c0dd1b8a6
 export_gif e3829ad88866844c
 export_grade_lut c25c05b9400b97b1
 export_high_bit c67d5e5efd756824
+export_manifest 5127d5c892991c43
 export_ocio_view_video 2eb3c79238b48182
 export_preset e5c29f6d9e3173dc
 export_with_subtitles 824e8be7e0dd374e
@@ -233,7 +235,7 @@ set_grade_scopes 10538c1f26d81a94
 set_hdr_mastering 7f72fec86997f9fc
 set_keyframe 69209ab2dee909f0
 set_keyframe_bezier cad87fc6c4b57af8
-set_keyframes fade5ee761d5f21d
+set_keyframes 659d40c8bc88da07
 set_layer_style a7045f9a4236ee69
 set_light 5b677c590887db11
 set_limits 0fb5b9a5542efe5a

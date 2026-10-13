@@ -1,6 +1,6 @@
 //! RV-27 lane A: curves. `set_keyframes` (A1) writes many keys on one property in one atomic call. Values are never clamped: any finite number is stored.
 use super::kit::*;
-use crate::keyframe::{Ease, Key, Prop};
+use crate::keyframe::{Ease, Handle, Key, Prop};
 
 const CLIP_PROPS: &[&str] = &["opacity", "x", "y", "scale", "rotation", "rot_x", "rot_y", "pos_z", "backface", "fill_alpha", "stroke_alpha", "flow_blur", "flow_quality", "pin_gain", "reveal", "path"];
 fn finite(a: &Value, k: &str, what: &str, i: usize) -> Result<f64, String> { let x = a.get(k).and_then(|v| v.as_f64()).ok_or_else(|| format!("keys[{i}].{what} must be a number"))?; if !x.is_finite() { return Err(format!("keys[{i}].{what} must be finite")); } Ok(x) }
@@ -13,12 +13,13 @@ fn parse_keys(a: &Value) -> Result<Vec<Key>, String> {
         let mut ease: Ease = match k.get("ease") { None | Some(Value::Null) => Ease::Linear, Some(e) => serde_json::from_value(e.clone()).map_err(|_| format!("keys[{i}].ease is not allowed. Valid: linear, in, out, in_out, hold, out_quart, out_expo, out_back, in_out_quint, in_expo"))? };
         match k.get("hold") { None | Some(Value::Null) => {} Some(Value::Bool(b)) => { if *b { ease = Ease::Hold; } } _ => return Err(format!("keys[{i}].hold must be true or false")) }
         let bez = match k.get("bez") { None | Some(Value::Null) => None, Some(b) => { let arr = b.as_array().filter(|x| x.len() == 4).ok_or_else(|| format!("keys[{i}].bez must be [x1,y1,x2,y2]"))?; let mut o = [0.0; 4]; for (j, x) in arr.iter().enumerate() { o[j] = x.as_f64().filter(|f| f.is_finite()).ok_or_else(|| format!("keys[{i}].bez[{j}] must be a finite number"))?; } Some(o) } };
-        out.push(Key { t, v, ease, bez });
+        let hd = |name: &str| -> Result<Option<Handle>, String> { match k.get(name) { None | Some(Value::Null) => Ok(None), Some(h) => { let dt = h.get("dt").and_then(|x| x.as_f64()).filter(|f| f.is_finite()).ok_or_else(|| format!("keys[{i}].{name} must be {{dt, dv}} with finite numbers"))?; let dv = h.get("dv").and_then(|x| x.as_f64()).filter(|f| f.is_finite()).ok_or_else(|| format!("keys[{i}].{name} must be {{dt, dv}} with finite numbers"))?; if dt < 0.0 { return Err(format!("keys[{i}].{name}.dt must be >= 0 (a handle never points backwards in time)")); } Ok(Some(Handle { dt, dv })) } } };
+        out.push(Key { t, v, ease, bez, out: hd("out")?, inn: hd("in")? });
     }
     Ok(out)
 }
 /// Same semantics as one `set_keyframe` call per key, in order (a key within 1e-6 s of an existing one replaces it); keeps `bez` when given.
-fn put(p: &mut Prop, k: &Key) { p.set_key(k.t, k.v, k.ease); if let Some(b) = k.bez { if let Some(x) = p.keys.iter_mut().find(|x| (x.t - k.t).abs() <= 1e-6) { x.bez = Some(b); } } }
+fn put(p: &mut Prop, k: &Key) { p.set_key(k.t, k.v, k.ease); if let Some(x) = p.keys.iter_mut().find(|x| (x.t - k.t).abs() <= 1e-6) { if k.bez.is_some() { x.bez = k.bez; } x.out = k.out; x.inn = k.inn; } }
 fn set_keyframes(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let prop = str_arg(a, "property")?.to_string(); let keys = parse_keys(a)?;
     let mode = a.get("mode").and_then(|v| v.as_str()).unwrap_or("replace_all"); if !["replace_all", "merge", "replace_range"].contains(&mode) { return Err("mode is not allowed. Valid: replace_all, merge, replace_range".into()); }
@@ -30,7 +31,7 @@ fn set_keyframes(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let old = p.keys.clone();
     match mode { "replace_all" => p.keys.clear(), "replace_range" => { let (lo, hi) = keys.iter().fold((f64::MAX, f64::MIN), |(l, h), k| (l.min(k.t), h.max(k.t))); p.keys.retain(|x| x.t < lo - 1e-6 || x.t > hi + 1e-6); } _ => {} }
     for k in &keys { put(p, k); }
-    let replaced = old.iter().filter(|o| !p.keys.iter().any(|n| (n.t - o.t).abs() <= 1e-6 && n.v == o.v && n.ease == o.ease && n.bez == o.bez)).count();
+    let replaced = old.iter().filter(|o| !p.keys.iter().any(|n| (n.t - o.t).abs() <= 1e-6 && n.v == o.v && n.ease == o.ease && n.bez == o.bez && n.out == o.out && n.inn == o.inn)).count();
     Ok(json!({"keys": p.keys.len(), "written": keys.len(), "replaced": replaced, "mode": mode}))
 }
 
@@ -80,7 +81,7 @@ fn bake_property(ss: &mut Session, a: &Value) -> Result<Value, String> {
         let cid = str_arg(a, "clip_id")?; let c = ss.project.find_clip(cid).ok_or(format!("no clip '{cid}'"))?; let have = c.props.keys().cloned().collect::<Vec<_>>().join(", ");
         let (p, nd) = match &eff { Some(id) => (c.effects.iter().find(|x| x.id == *id).ok_or("no such effect")?.params.get(&prop).cloned(), false), None => match c.props.get(&prop) { Some(p) => (Some(p.clone()), false), None => (static_default(&prop), true) } };
         (p.ok_or_else(|| format!("clip has no property '{prop}'. Properties on this clip: {have}"))?, c.duration, nd) };
-    let keys: Vec<Key> = ts.iter().map(|t| Key { t: *t, v: old.at(*t), ease: Ease::Linear, bez: None }).collect();
+    let keys: Vec<Key> = ts.iter().map(|t| Key { t: *t, v: old.at(*t), ease: Ease::Linear, bez: None, out: None, inn: None }).collect();
     if keys.iter().any(|k| !k.v.is_finite()) { return Err("the property evaluates to a non-finite value inside the range; nothing was baked".into()); }
     // 2. commit
     let p: &mut Prop = if cam { ss.project.camera.get_mut(&prop).unwrap() } else { let c = ss.project.find_clip_mut(str_arg(a, "clip_id")?).unwrap();
@@ -96,8 +97,8 @@ fn bake_property(ss: &mut Session, a: &Value) -> Result<Value, String> {
     Ok(out)
 }
 pub fn commands() -> Vec<Command> { vec![
-    Command { name: "set_keyframes", description: "Write many keyframes on ONE property in a single atomic call (any order, any finite value, no clamping). mode: replace_all (default, drops existing keys), merge (overwrite same-time keys, keep others), replace_range (drop existing keys inside the new keys' time span). Each key: t clip-local seconds, v value, optional ease, hold:true, bez [x1,y1,x2,y2]. A bad key changes nothing.", mutates: true,
-        schema: obj(vec![("clip_id", s("clip")), ("property", s("opacity|x|y|scale|rotation... or effect param name when effect_id is given")), ("effect_id", s("optional: target an effect param")), ("keys", json!({"type":"array","items":{"type":"object","properties":{"t":{"type":"number"},"v":{"type":"number"},"ease":{"type":"string","enum":["linear","in","out","in_out","hold","out_quart","out_expo","out_back","in_out_quint","in_expo"]},"hold":{"type":"boolean"},"bez":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4}},"required":["t","v"]},"description":"keys to write"})), ("mode", json!({"type":"string","enum":["replace_all","merge","replace_range"]}))], &["clip_id", "property", "keys"]), run: set_keyframes },
+    Command { name: "set_keyframes", description: "Write many keyframes on ONE property in a single atomic call (any order, any finite value, no clamping). mode: replace_all (default, drops existing keys), merge (overwrite same-time keys, keep others), replace_range (drop existing keys inside the new keys' time span). Each key: t clip-local seconds, v value, optional ease, hold:true, bez [x1,y1,x2,y2], and tangent handles out {dt,dv} (leaving this key: control point t+dt, v+dv) and in {dt,dv} (arriving: control point t-dt, v-dv; mirrored handles have equal in/out values, giving a smooth C1 key). dt is seconds >= 0 and clamped to the segment; dv is unclamped so curves can overshoot. A missing handle on a segment defaults to a straight third. Handles win over bez on the same segment. A bad key changes nothing.", mutates: true,
+        schema: obj(vec![("clip_id", s("clip")), ("property", s("opacity|x|y|scale|rotation... or effect param name when effect_id is given")), ("effect_id", s("optional: target an effect param")), ("keys", json!({"type":"array","items":{"type":"object","properties":{"t":{"type":"number"},"v":{"type":"number"},"ease":{"type":"string","enum":["linear","in","out","in_out","hold","out_quart","out_expo","out_back","in_out_quint","in_expo"]},"hold":{"type":"boolean"},"bez":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"out":{"type":"object","properties":{"dt":{"type":"number"},"dv":{"type":"number"}},"required":["dt","dv"]},"in":{"type":"object","properties":{"dt":{"type":"number"},"dv":{"type":"number"}},"required":["dt","dv"]}},"required":["t","v"]},"description":"keys to write"})), ("mode", json!({"type":"string","enum":["replace_all","merge","replace_range"]}))], &["clip_id", "property", "keys"]), run: set_keyframes },
     Command { name: "sample_property", description: "Read a property's evaluated value at any times, exactly as the renderer evaluates it (keys, easing, expressions, posterize), without baking. times: [seconds] or {start,end,n}. space: timeline (default; clip start applied) or clip (clip-local seconds). Target a clip property (clip_id + property, effect_id for an effect param) or a camera field (camera:true + property). Returns values and, for clips, whether the clip is active at each time. Unkeyed standard properties return the renderer default; flow_quality 0 means unset (the renderer clamps it to 3..6).", mutates: false,
         schema: obj(vec![("clip_id", s("clip (omit for camera)")), ("property", s("property name, effect param, or camera field")), ("effect_id", s("optional: effect whose param is read")), ("camera", json!({"type":"boolean","description":"read a camera field instead of a clip property"})), ("times", json!({"description":"array of seconds, or {start,end,n} evenly spaced inclusive"})), ("space", json!({"type":"string","enum":["timeline","clip"]}))], &["property", "times"]), run: sample_property },
     Command { name: "bake_property", description: "Turn ANY animated property (keys, easing, expressions) into dense raw linear keys you can edit, then drop its expression ops. start/end seconds in clip time, with fps (keys per second) or n (key count, at least 2). Existing keys inside the range are replaced. Returns max_error: an estimate of the worst gap to the original curve, sampled at segment midpoints (not a bound; raise fps/n to shrink it). The expression ops are dropped for the WHOLE property: when the baked range does not cover the clip span (camera: project span) outside_range_changed is true. end_requested appears when fps made the last key fall short of end. Target a clip property (clip_id + property, effect_id for an effect param) or a camera field (camera:true + property). Undoable.", mutates: true,

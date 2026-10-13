@@ -171,6 +171,7 @@ fn open_sites_are_classified() {
         ("ext/undistort.rs", 1, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("pixels.rs", 2, "PROJECT-DERIVED, resolved by pixel media/decode callers; caller file reads by tools"),
         ("resource_limits.rs", 1, "fixed /proc/meminfo physical RAM source"),
+        ("ext/export_manifest.rs", 1, "caller path (previous manifest .json), resolved through deps::resolve_str; asset hashing goes through deps::hash_file"),
         ("ext/audio_samples.rs", 3, "caller raw path resolved with project.resolve; engine-owned hash asset verification and output"),
         ("ext/pixel_tools.rs", 3, "caller input path or private hash-addressed asset verification"),
         ("framecache.rs", 1, "PROJECT-DERIVED, resolved through deps (resolve / resolve_str) at the call site"),
