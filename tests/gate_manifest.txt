@@ -50,6 +50,7 @@ rust color_shoulder full
 rust color_wrapper full
 rust contact_shadow_validation full
 rust delivery fast
+rust batch fast
 rust dispatch_nested fast
 rust display_scope full
 rust display_scope_cancellation full
@@ -177,3 +178,8 @@ py audio_probe_proof.py fast
 
 rust qa_fuzz fast
 py qa_native_baseline.py helper # QA lane helper: needs KIMO_QA_PROJECT (a saved project path), run by hand for native preview hash checks
+
+rust lower_third fast
+
+rust narration_section fast
+rust recipes fast

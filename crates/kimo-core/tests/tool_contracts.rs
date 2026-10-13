@@ -352,7 +352,7 @@ fn scoped_setup() -> (Vec<Step<'static>>, String) {
     row_err(&s, "set_camera", json!({"cam_fov": 3.0}), Some("5..170")); row_err(&s, "set_camera", json!({"cam_fov": 171.0}), Some("5..170"));
 }
 #[test] fn add_counter_and_prompt_box_add_clips_and_survive_undo() {
-    let (s, t1, _t2, _c) = one_clip(); std::env::set_var("KIMO_FONTS", concat!(env!("CARGO_MANIFEST_DIR"), "/../../fonts"));
+    let (s, t1, _t2, _c) = one_clip(); std::env::set_var("KIMO_FONTS", concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts")); assert!(kimo_core::text::resolve_font("Montserrat").ends_with("tests/fonts/Montserrat-Var.ttf"), "text test needs tests/fonts/Montserrat-Var.ttf, no silent system-font fallback");
     let ss = row(&s, "add_counter", json!({"track_id": t1, "start": 0.0, "duration": 1.0, "from": 0, "to": 100, "prefix": "$"}), |_r, b, a| assert!(clips(a).len() > clips(b).len(), "counter adds clips"));
     renders_ok(&ss);
     let ss = row(&s, "add_prompt_box", json!({"track_id": t1, "start": 0.0, "duration": 2.0, "text": "make it pop"}), |_r, b, a| assert!(clips(a).len() > clips(b).len(), "prompt box adds clips"));
@@ -490,4 +490,37 @@ fn tr_csv() -> String {
     row_err(&with_tr, "transcript_to_captions", json!({"track_id": "nope"}), Some("track"));
     row_err(&with_caps, "validate_captions", json!({}), Some("group_id"));
     row_err(&with_tr, "transcript_edit_preview", json!({"edits": [{"op": "delete", "from_index": 999}]}), Some("outside"));
+}
+#[test] fn batch_rows_success_dry_run_and_structured_failures() {
+    let (s, t1, _t2, c) = one_clip();
+    let ops = json!([{"id": "a", "tool": "add_shape", "args": {"track_id": t1, "shape": "rect", "width": 8, "height": 8, "start": 0.0, "duration": 1.0}}, {"tool": "set_blend", "args": {"clip_id": "$a.clip_id", "mode": "add"}}]);
+    row(&s, "batch", json!({"ops": ops}), |r, b, a| { assert_eq!(r["applied"], 2); assert_eq!(r["created"]["clip_ids"].as_array().unwrap().len(), 1); assert_ne!(b, a); });
+    { let mut ss = fresh(&s); let b = pj(&ss); let r = call(&mut ss, "batch", json!({"ops": ops, "dry_run": true})); assert!(r["revision"].is_string()); assert_eq!(pj(&ss), b, "dry_run changes nothing"); }
+    row_err(&s, "batch", json!({"ops": [{"tool": "undo"}]}), Some("forbidden_in_batch"));
+    row_err(&s, "batch", json!({"ops": [{"tool": "add_track", "args": {"name": "$zz.x"}}]}), Some("invalid_reference"));
+    row_err(&s, "batch", json!({"ops": [{"tool": "delete_clip", "args": {"clip_id": c}}, {"tool": "delete_clip", "args": {"clip_id": c}}]}), Some("batch_failed"));
+    row_err(&s, "batch", json!({"ops": [{"tool": "add_track"}], "expect_revision": "deadbeef", "dry_run": false}), Some("project_drift"));
+}
+// RV-12 explicit-window auto_duck contracts: project state and history remain byte-exact.
+#[test] fn auto_duck_explicit_windows_overlap_and_under_ignored_contracts() {
+ let(s,t,_under,c)=one_clip();
+ for windows in [json!([[1.2,2.4]]),json!([[1.2,2.0],[1.8,2.4]])] {
+  row(&s,"auto_duck",json!({"track":t,"speech_windows":windows,"amount_db":-18}),|r,_,a|{assert_eq!(r["mode"],"explicit_windows");let keys=clip(a,&c)["audio"]["duck_gain"]["keys"].as_array().unwrap().clone();assert!(keys.iter().any(|k|(k["v"].as_f64().unwrap()-10f64.powf(-18.0/20.0)).abs()<1e-12));});
+ }
+ row(&s,"auto_duck",json!({"track":t,"under":"absent ignored","speech_windows":[[1.2,2.4]]}),|r,_,_|assert_eq!(r["under_ignored"],true));
+ row_err(&s,"auto_duck",json!({"track":t}),Some("under"));
+}
+#[test] fn auto_duck_explicit_empty_clears_previous_envelope_contract() {
+ let(mut s,t,_,c)=one_clip();s.push(("auto_duck",json!({"track":t,"speech_windows":[[1.2,2.4]]})));
+ row(&s,"auto_duck",json!({"track":t,"speech_windows":[]}),|r,_,a|{assert_eq!(r["envelope_cleared"],true);assert!(clip(a,&c)["audio"]["duck_gain"]["keys"].as_array().unwrap().is_empty());});
+}
+#[test] fn recipe_tool_rows_list_describe_apply_and_structured_failures() {
+    let (s, t1, _t2, _c) = one_clip();
+    row(&s, "recipe_list", json!({"query": "title"}), |r, _, _| { assert!(r["count"].as_u64().unwrap() >= 2); });
+    row(&s, "recipe_describe", json!({"name": "title_card"}), |r, _, _| { assert_eq!(r["recipe_version"], 1); assert!(r["params"]["properties"]["easing"]["enum"].is_array()); });
+    row(&s, "recipe_apply", json!({"name": "title_card", "start": 0.5, "params": {"title": "Hi", "subtitle": "there"}, "track_id": t1}), |r, b, a| { assert_eq!(r["ok"], true); assert_ne!(b, a); assert!(r["roles"]["title_card/title"].is_string()); assert_eq!(r["anchors"]["unit"], "timeline seconds"); });
+    row_err(&s, "recipe_describe", json!({"name": "nope"}), Some("Valid:"));
+    row_err(&s, "recipe_apply", json!({"name": "title_card", "start": 0.0, "params": {"title": "x", "easing": "wobble"}}), Some("Valid:"));
+    row_err(&s, "recipe_apply", json!({"name": "title_card", "start": -1.0, "params": {"title": "x"}}), Some("start"));
+    row_err(&s, "recipe_apply", json!({"name": "title_card", "params": {"title": "x"}}), None);
 }

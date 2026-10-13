@@ -54,3 +54,7 @@
 53 transcript_to_captions	not_found	param=	hint=
 54 validate_captions	other	param=	hint=
 55 transcript_edit_preview	not_found	param=	hint=
+56 batch	forbidden_in_batch	param=ops[0]	hint=
+57 batch	invalid_reference	param=ops[0]	hint=
+58 batch	batch_failed	param=ops[1]	hint=
+59 batch	project_drift	param=	hint=

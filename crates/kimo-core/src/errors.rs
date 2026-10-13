@@ -13,6 +13,8 @@ pub fn classify(m: &str) -> (&'static str, Option<String>) {
     if m.starts_with("time must be >= 0") { return ("out_of_range", Some("time".to_string())); }
     if m.starts_with("unknown argument") { return ("unknown_argument", quoted(m)); }
     if m.starts_with("unknown tool") { return ("unknown_tool", quoted(m).map(|_| "tool".to_string())); }
+    // RV-11 batch codes: the failing op index is carried as param ops[i]
+    for code in ["batch_failed", "invalid_reference", "forbidden_in_batch", "project_drift"] { if let Some(r) = m.strip_prefix(&format!("{code}: ")) { let param = r.strip_prefix("ops[").and_then(|x| x.find(']').map(|e| format!("ops[{}]", &x[..e]))); return (match code { "batch_failed" => "batch_failed", "invalid_reference" => "invalid_reference", "forbidden_in_batch" => "forbidden_in_batch", _ => "project_drift" }, param); } }
     // RV-7 delivery codes
     if m.starts_with("dest_exists:") { return ("dest_exists", Some("dest_dir".to_string())); }
     if m.starts_with("disk_space_low:") { return ("disk_space_low", None); }

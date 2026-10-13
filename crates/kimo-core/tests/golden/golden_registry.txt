@@ -40,7 +40,8 @@ apply_camera_solve daaa11f9c72d2f86
 apply_motion_preset 39406bbbdd87a9e9
 audio_probe ec3e1fe9bd01d93f
 audit_color_output 58cf03598cf93fb6
-auto_duck 3739408323f8e68e
+auto_duck 9765e1ee86c49428
+batch 43caf3e9e666aafc
 bind_beats 2d8bcd8a43d9aad9
 bind_shared_grade_graphs d163ca88fc64bb1d
 burn_in 0df91ac9090a9beb
@@ -146,6 +147,9 @@ preview_material 91a9515ab10a6608
 preview_subject_match 8fbee66dc3095cb4
 project_set 00170b74c8eb4359
 rate_stretch 16dd93dcc17cb7ed
+recipe_apply 1ecb748713758319
+recipe_describe 864219e30ed232a5
+recipe_list 01b8d1de74566c24
 redo 738dbd6488fa90b3
 refine_matte 287d456bc91a84c0
 relink_media 007d3b0771ae5694

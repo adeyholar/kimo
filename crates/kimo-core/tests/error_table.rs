@@ -32,6 +32,7 @@ fn calls(t1: &str, c: &str) -> Vec<(&'static str, Value)> {
         ("cache_set_budget", json!({})), ("cache_set_budget", json!({"megabytes": -1.0})),
         ("collect_project", json!({})), ("collect_project", json!({"dest_dir": "/tmp"})), ("collect_project", json!({"dest_dir": "/tmp/kimo_err_row", "copy": "zip"})), ("relink_media", json!({"search_dirs": ["/tmp"], "match": "fuzzy"})),
         ("transcript_import", json!({})), ("transcript_import", json!({"path": "/nonexistent/x.srt"})), ("transcript_get", json!({"transcript_id": "nope"})), ("transcript_coverage", json!({})), ("transcript_to_captions", json!({"track_id": "nope"})), ("validate_captions", json!({})), ("transcript_edit_preview", json!({"edits": [{"op": "wipe", "from_index": 0}]})),
+        ("batch", json!({"ops": [{"tool": "undo"}]})), ("batch", json!({"ops": [{"tool": "add_track", "args": {"name": "$zz.x"}}]})), ("batch", json!({"ops": [{"tool": "delete_clip", "args": {"clip_id": c}}, {"tool": "delete_clip", "args": {"clip_id": c}}]})), ("batch", json!({"ops": [{"tool": "add_track"}], "expect_revision": "deadbeef"})),
     ]
 }
 #[test] fn error_texts_are_byte_identical_to_the_baseline() {

@@ -6,6 +6,7 @@
 use kimo_core::{commands::{dispatch, registry_ref, Session}, render};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+fn pin_fonts() { static O: std::sync::Once = std::sync::Once::new(); O.call_once(|| { std::env::set_var("KIMO_FONTS", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fonts")); let r = kimo_core::text::resolve_font("Montserrat"); assert!(r.replace('\\', "/").ends_with("tests/fonts/Montserrat-Var.ttf"), "text goldens need the repo-owned font tests/fonts/Montserrat-Var.ttf but resolve_font(\"Montserrat\") returned {r:?} (silent system-font fallback is not allowed in tests)"); }); }
 
 fn fnv(bytes: &[u8]) -> u64 { let mut h = 0xcbf29ce484222325u64; for b in bytes { h ^= *b as u64; h = h.wrapping_mul(0x100000001b3); } h }
 fn call(ss: &mut Session, name: &str, a: Value) -> Value { dispatch(ss, name, &a).unwrap_or_else(|e| panic!("scene setup: {name} failed: {e}")) }
@@ -47,7 +48,7 @@ fn compare(file: &str, got: &[String], update: bool, fails: &mut Vec<String>) {
 }
 
 #[test] fn golden_frames_registry_and_projects() {
-    std::env::set_var("KIMO_FONTS", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fonts")); let t0 = std::time::Instant::now(); let update = std::env::var("KIMO_UPDATE_GOLDEN").map(|v| v == "1").unwrap_or(false);
+    pin_fonts(); let t0 = std::time::Instant::now(); let update = std::env::var("KIMO_UPDATE_GOLDEN").map(|v| v == "1").unwrap_or(false);
     let (mut frames, mut projects, mut nondet) = (vec![], vec![], vec![]); let mut nframes = 0;
     for (name, b) in scenes() {
         kimo_core::par::set_threads(1); let a1 = run_scene(b); let a2 = run_scene(b); kimo_core::par::set_threads(0); let d1 = run_scene(b);
@@ -66,7 +67,7 @@ fn compare(file: &str, got: &[String], update: bool, fails: &mut Vec<String>) {
 
 /// V3-6a: for every golden scene and time, the frame cache must return exactly the uncached pixels: cold (miss), warm (hit), and after the entry was evicted by a cap of zero and refilled.
 #[test] fn golden_scenes_cold_warm_cleared_equal_uncached() {
-    std::env::set_var("KIMO_FONTS", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fonts"));
+    pin_fonts();
     let mut n = 0;
     for (name, b) in scenes() {
         let ss = build(b); let cache = render::Cache::new(); let mut fc = kimo_core::framecache::FrameCache::new(256 << 20);

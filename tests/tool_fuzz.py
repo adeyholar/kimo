@@ -59,6 +59,25 @@ def main():
             call(name, {**real, **{k: v for k, sc in props.items() if sc.get("type") in ("number", "integer")}})
         for v in (1e12, -1e12, 0):
             call(name, {k: v for k, sc in props.items() if sc.get("type") in ("number", "integer")})
+    # RV-11 batch: random op sequences. Invariant: a failed batch leaves the project byte-identical; a successful one is ONE undo step.
+    import random
+    rng = random.Random(11); pool = ["add_track", "add_shape", "set_blend", "delete_clip", "move_clip", "undo", "batch", "nope_tool", "set_property"]
+    def proj():
+        try: return json.dumps(ok("get_project"), sort_keys=True)
+        except Exception: return None
+    for k in range(40 if SMOKE else 200):
+        ops = []
+        for j in range(rng.randint(1, 12)):
+            t = rng.choice(pool); ref = f"$o{rng.randint(0, 14)}.clip_id"
+            a = {"add_shape": {"track_id": "$o0.track_id", "shape": "rect", "width": 9, "height": 9, "start": 0.0, "duration": 1.0}, "set_blend": {"clip_id": ref, "mode": rng.choice(["add", "bogus"])}, "delete_clip": {"clip_id": ref}, "move_clip": {"clip_id": ref, "start": rng.choice([0.5, -3, "x"])}, "set_property": {"clip_id": ref, "property": "opacity", "value": rng.random()}}.get(t, {})
+            ops.append({"id": f"o{j}", "tool": rng.choice(["add_track", t]) if j == 0 else t, "args": a})
+        before = proj(); atomic = rng.random() < 0.8
+        try:
+            r = s.rpc("tools/call", {"name": "batch", "arguments": {"ops": ops, "atomic": atomic, "dry_run": rng.random() < 0.2}}); n += 1
+            txt = r.get("result", {}).get("content", [{}])[0].get("text", ""); failed = r.get("result", {}).get("isError") or "error" in r
+            if failed and atomic and proj() != before: bad.append(("batch", "random ops", "failed batch changed the project"))
+        except Exception as e:
+            bad.append(("batch", "random ops", repr(e))); s = S()
     print(f"{len(tools)} tools, {n} calls, {len(bad)} failures")
     for b in bad[:60]: print(" FAIL", b)
     sys.exit(1 if bad else 0)

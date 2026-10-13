@@ -96,6 +96,23 @@ fn coverage_tool(ss: &mut Session, a: &Value) -> Result<Value, String> {
         "missing_passages": c.missing_passages.iter().map(|m| json!({"script_range": [m.script_range.0, m.script_range.1], "text_untrusted": m.text, "nearest_words": m.nearest_words})).collect::<Vec<_>>(),
         "repeated_passages": c.repeated_passages.iter().map(|r| json!({"words": r.words, "takes": r.takes})).collect::<Vec<_>>(), "extra_words": c.extra_words, "timeline": crate::transcript_coverage::timeline_alignment(tr, a.get("min_gap").and_then(|v| v.as_f64()).filter(|x| x.is_finite() && *x > 0.0).unwrap_or(0.3))}))
 }
+// Every Session can rehearse captions concurrently. PID + caption count is not unique:
+// a second session can truncate or remove the first session's SRT before it is read.
+struct CaptionScratch(std::path::PathBuf);
+impl Drop for CaptionScratch { fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); } }
+fn caption_scratch(body: &str) -> Result<CaptionScratch, String> {
+    use std::io::Write;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    loop {
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("kimo_tcap_{}_{}.srt", std::process::id(), n));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => { let scratch = CaptionScratch(path); file.write_all(body.as_bytes()).map_err(|e| e.to_string())?; return Ok(scratch); }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
 fn to_captions(ss: &mut Session, a: &Value) -> Result<Value, String> {
     use crate::transcript_captions as tc;
     let id = tid(ss, a)?; let tr = ss.project.editorial.transcripts[&id].clone(); let track = str_arg(a, "track_id")?.to_string();
@@ -112,10 +129,10 @@ fn to_captions(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let sw = tr.script_words(); let ws: Vec<tc::W> = sw.iter().map(|w| tc::W { text: w.display.clone(), start: w.start, end: w.end }).collect();
     let cues = tc::group(&ws, &p)?;
     let tri: Vec<(f64, f64, String)> = cues.iter().map(|c| (c.start, c.end, c.text.clone())).collect();
-    let tmp = std::env::temp_dir().join(format!("kimo_tcap_{}_{}.srt", std::process::id(), ss.project.editorial.captions.len())); std::fs::write(&tmp, tc::to_srt(&tri)).map_err(|e| e.to_string())?;
+    let scratch = caption_scratch(&tc::to_srt(&tri))?; let tmp = &scratch.0;
     let mut args = json!({"track_id": track, "source": "srt", "path": tmp.to_str().unwrap_or_default(), "style": a.get("style").and_then(|v| v.as_str()).unwrap_or("subtitle")});
     if let Some(f) = a.get("font") { args["font"] = f.clone(); }
-    let r = crate::commands::find_command("add_captions").ok_or("missing add_captions")?; let out = (r.run)(ss, &args); let _ = std::fs::remove_file(&tmp); let out = out?;
+    let r = crate::commands::find_command("add_captions").ok_or("missing add_captions")?; let out = (r.run)(ss, &args)?; drop(scratch);
     let gid = out["caption_id"].as_str().ok_or("add_captions returned no caption_id")?.to_string();
     let clips: Vec<String> = out["clip_ids"].as_array().map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
     if clips.len() != cues.len() { return Err(format!("expected {} cue clips, importer made {}", cues.len(), clips.len())); }

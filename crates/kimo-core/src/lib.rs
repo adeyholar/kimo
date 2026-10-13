@@ -39,6 +39,7 @@ pub mod framecache;
 pub mod buildinfo;
 pub mod effects;
 pub mod text;
+pub mod recipes;
 pub mod particles;
 pub mod titles;
 pub mod transitions;

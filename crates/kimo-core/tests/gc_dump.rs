@@ -1,6 +1,7 @@
 //! G-c helper: renders the golden scenes and dumps hashes plus raw f32 frames to $GC_OUT (never into the repo). Compiles on both main and v3. Used by tests/gc_main_compat.sh.
 use kimo_core::{commands::{dispatch, Session}, render};
 use serde_json::{json, Value};
+fn pin_fonts() { static O: std::sync::Once = std::sync::Once::new(); O.call_once(|| { std::env::set_var("KIMO_FONTS", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fonts")); let r = kimo_core::text::resolve_font("Montserrat"); assert!(r.replace('\\', "/").ends_with("tests/fonts/Montserrat-Var.ttf"), "text goldens need the repo-owned font tests/fonts/Montserrat-Var.ttf but resolve_font(\"Montserrat\") returned {r:?} (silent system-font fallback is not allowed in tests)"); }); }
 
 fn fnv(bytes: &[u8]) -> u64 { let mut h = 0xcbf29ce484222325u64; for b in bytes { h ^= *b as u64; h = h.wrapping_mul(0x100000001b3); } h }
 fn call(ss: &mut Session, name: &str, a: Value) -> Value { dispatch(ss, name, &a).unwrap_or_else(|e| panic!("scene setup: {name} failed: {e}")) }
@@ -25,7 +26,7 @@ fn scenes() -> Vec<(&'static str, Build)> { vec![
 const TIMES: [f64; 3] = [0.1, 0.5, 0.9];
 #[test] fn gc_dump() {
     let out = match std::env::var("GC_OUT") { Ok(o) => std::path::PathBuf::from(o), Err(_) => { eprintln!("GC_OUT not set: skipping"); return; } }; std::fs::create_dir_all(&out).unwrap();
-    std::env::set_var("KIMO_FONTS", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fonts"));
+    pin_fonts();
     let mut lines = vec![];
     for (name, b) in scenes() {
         let mut ss = Session::new(); call(&mut ss, "project_set", json!({"width": 320, "height": 180, "fps": 25}));
