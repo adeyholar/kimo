@@ -219,3 +219,7 @@ rust solve_constraints fast
 rust batch_minimal fast
 rust batch_foreach fast
 rust batch_calc fast
+rust session_stats fast
+rust templates fast
+rust lint_frame fast
+rust batch_benchmark fast

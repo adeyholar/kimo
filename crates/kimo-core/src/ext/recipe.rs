@@ -52,13 +52,13 @@ fn apply(ss: &mut Session, a: &Value) -> Result<Value, String> {
     out["results"] = Value::Array(out["results"].as_array().cloned().unwrap_or_default().iter().map(|x| json!({"index": x["index"], "id": x["id"], "tool": x["tool"]})).collect());
     out["recipe"] = json!({"name": e.name, "recipe_version": e.version}); out["roles"] = Value::Object(roles); out["anchors"] = if narr { let pv = params.clone(); let ws = super::narration_section::speech_windows(ss, &pv).unwrap_or_default(); json!({"first_word_start": ws.first().map(|w| w[0]), "last_word_end": ws.last().map(|w| w[1]), "speech_windows": ws, "unit": "timeline seconds"}) } else { json!({"start": start, "end": start + dur, "unit": "timeline seconds"}) };
     if let Some(t) = &track_id { out["track_id"] = json!(t); } else if let Some(t) = tracks.first() { out["track_id"] = json!(t); }
-    if dry { out["expansion"] = ops_json(&std::mem::take(&mut ops)); }
+    out["expansion"] = ops_json(&std::mem::take(&mut ops));
     Ok(out)
 }
 use serde_json::Map;
 pub fn commands() -> Vec<Command> { vec![
-    Command { name: "recipe_list", description: "List scene recipes (lower_third, narration_section, title_card, stat_counter, product_reveal, explainer_diagram). query filters by name or keyword.", mutates: false, schema: obj(vec![("query", s("optional keyword filter"))], &[]), run: list },
-    Command { name: "recipe_describe", description: "Describe one recipe: its params as a JSON schema (types, ranges, allowed values, defaults, px-from-centre spaces), roles and version.", mutates: false, schema: obj(vec![("name", s("recipe name from recipe_list"))], &["name"]), run: describe },
-    Command { name: "recipe_apply", description: "Apply a recipe as ONE atomic undoable step: expands to ordinary tool calls and runs them through batch. Layers share one track. dry_run returns the expansion and a revision. Returns created ids by role and anchors in timeline seconds. Each apply is a new independent instance.", mutates: true,
+    Command { name: "recipe_list", description: "Convenience: list scene recipes (lower_third, narration_section, title_card, stat_counter, product_reveal, explainer_diagram). query filters by name or keyword.", mutates: false, schema: obj(vec![("query", s("optional keyword filter"))], &[]), run: list },
+    Command { name: "recipe_describe", description: "Convenience: describe one recipe: its params as a JSON schema (types, ranges, allowed values, defaults, px-from-centre spaces), roles and version.", mutates: false, schema: obj(vec![("name", s("recipe name from recipe_list"))], &["name"]), run: describe },
+    Command { name: "recipe_apply", description: "Convenience (deprecated in favour of template_define and template_apply): apply a recipe as ONE atomic undoable step: expands to ordinary tool calls and runs them through batch. Layers share one track. dry_run returns the expansion and a revision. Returns created ids by role and anchors in timeline seconds. Each apply is a new independent instance.", mutates: true,
         schema: obj(vec![("name", s("recipe name")), ("params", json!({"type":"object","description":"recipe params, see recipe_describe"})), ("start", n("timeline start, seconds")), ("track_id", s("existing track for every layer")), ("track_name", s("existing track name for every layer")), ("name_prefix", s("prefix of role labels in the result")), ("dry_run", json!({"type":"boolean"})), ("label", s("history label")), ("expect_revision", s("revision from a dry run"))], &["name"]), run: apply },
 ] }

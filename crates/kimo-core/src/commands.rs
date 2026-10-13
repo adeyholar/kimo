@@ -19,7 +19,7 @@ impl<W: std::io::Write> std::io::Write for FnvWriter<W> { fn write(&mut self, b:
 /// Image produced by a tool call: path on disk plus size. Never bytes: only the protocol layer encodes it. Cleared at the start of every dispatch.
 #[derive(Clone, Debug)]
 pub struct Media { pub path: String, pub w: u32, pub h: u32, pub mime: &'static str }
-pub struct Session { pub resource_limits: crate::resource_limits::Limits, pub media: Vec<Media>, pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache, pub fcache: crate::framecache::FrameCache,
+pub struct Session { pub resource_limits: crate::resource_limits::Limits, pub media: Vec<Media>, pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache, pub fcache: crate::framecache::FrameCache, pub stats: crate::ext::session_stats::Stats,
     /// One label per undo / redo entry (tool name, plus clip id when given), parallel to `undo` / `redo`.
     pub undo_labels: Vec<String>, pub redo_labels: Vec<String>,
     /// Named snapshots of the whole project: (name, project, label of the history position when taken).
@@ -28,7 +28,7 @@ pub struct Session { pub resource_limits: crate::resource_limits::Limits, pub me
     pub snap_sz: usize, pub snap_n: u32, pub snap_clips: usize,
     /// Build that first saved the loaded/current project (kept across re-saves); None until a save or a load sets it.
     pub created_with: Option<serde_json::Value> }
-impl Session { pub fn new() -> Self { Session { resource_limits: crate::resource_limits::Limits::startup(), media: vec![], project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), fcache: crate::framecache::FrameCache::new(crate::framecache::default_cap()), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0, created_with: None } } }
+impl Session { pub fn new() -> Self { Session { resource_limits: crate::resource_limits::Limits::startup(), media: vec![], project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), fcache: crate::framecache::FrameCache::new(crate::framecache::default_cap()), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0, created_with: None, stats: Default::default() } } }
 const MAX_CHECKPOINTS: usize = 24;
 
 #[derive(Clone)]
@@ -117,7 +117,13 @@ fn resolve_names(ss: &Session, name: &str, args: &Value) -> Result<Option<Value>
     Ok(out)
 }
 
+/// Top-level call: counted by `session_stats` (calls and bytes returned per tool); nested calls made by batch are not counted separately.
 pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
+    let r = dispatch_core(ss, name, args);
+    let bytes = match &r { Ok(v) => crate::ext::session_stats::json_len(v), Err(e) => e.len() };
+    ss.stats.record(name, bytes, r.is_err()); r
+}
+fn dispatch_core(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
     let _resource_context=crate::resource_limits::install(ss.resource_limits);
     ss.media.clear();
     let unknown = unknown_args(name, args);
@@ -203,7 +209,7 @@ fn run_core(ss: &mut Session, name: &str, args: &Value) -> Result<(Value, Option
     let mut r = match r { Ok(r) => r, Err(e) => { if c.mutates { ss.project = before; } let m = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "internal error".into()); return Err(format!("tool '{name}' failed safely (project rolled back): {m}")); } };
     // a mutating tool whose result carries "no_history": true changed nothing (a dry run); it pushes no undo snapshot and keeps the redo stack
     let no_history = r.as_ref().ok().and_then(|v| v.get("no_history")).and_then(|b| b.as_bool()).unwrap_or(false);
-    if c.mutates && r.is_ok() && !no_history { if !matches!(name, "set_track" | "undo" | "redo" | "restore" | "load_project" | "checkpoint" | "project_set" | "batch" | "recipe_apply") && !name.starts_with("history_") && before.tracks.iter().any(|t| t.locked) {
+    if c.mutates && r.is_ok() && !no_history { if !matches!(name, "set_track" | "undo" | "redo" | "restore" | "load_project" | "checkpoint" | "project_set" | "batch" | "recipe_apply" | "template_apply") && !name.starts_with("history_") && before.tracks.iter().any(|t| t.locked) {
         let hit = before.tracks.iter().filter(|t| t.locked).find(|bt| match ss.project.tracks.iter().find(|t| t.id == bt.id) { None => true, Some(at) => at.clips.len() != bt.clips.len() || bt.clips.iter().zip(at.clips.iter()).any(|(x, y)| !std::sync::Arc::ptr_eq(x, y) && serde_json::to_value(&**x).ok() != serde_json::to_value(&**y).ok()) }).map(|t| t.id.clone());
         if let Some(tid) = hit { ss.project = before; return Err(format!("track '{tid}' is locked: tool '{name}' would modify it; unlock with set_track locked=false")); } } let removed: Vec<String> = if before.tracks.iter().map(|t| t.clips.len()).sum::<usize>() > ss.project.tracks.iter().map(|t| t.clips.len()).sum::<usize>() || matches!(name, "lift_range" | "remove_track") { let now: std::collections::HashSet<&str> = ss.project.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.id.as_str()).collect(); before.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.id.clone()).filter(|i| !now.contains(i.as_str())).collect() } else { vec![] }; let cleared = ss.project.clear_refs_to(&removed); if !cleared.is_empty() { if let Ok(v) = r.as_mut() { if let Some(o) = v.as_object_mut() { o.insert("cleared_refs".into(), serde_json::to_value(&cleared).unwrap_or_default()); } } } if let Err(e) = crate::guard::check_project(&ss.project, l) { ss.project = before; return Err(format!("rejected by sandbox (project rolled back): {e}")); } rec = Some(before); }
     if let (Some(fp), Some(pre)) = (fp, audit_before) { if serde_json::to_vec(&ss.project).ok().as_ref() != Some(&fp) { ss.project = pre; return Err(format!("AUDIT: read-only tool '{name}' modified the project (rolled back); mark it mutating or fix it")); } }

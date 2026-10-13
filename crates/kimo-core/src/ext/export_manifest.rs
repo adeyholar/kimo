@@ -62,7 +62,7 @@ pub fn clip_dep_hash(p: &Project, c: &Clip, ctx: &mut Ctx) -> String { clip_dep_
 /// Canvas, fps and every project-level render setting (lights, camera, colour pipeline, grade scopes, editorial), everything except tracks/assets/markers/name/deps.
 pub fn settings_value(p: &Project) -> Value {
     let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
-    if let Some(o) = v.as_object_mut() { for k in ["tracks", "assets", "markers", "name", "deps", "kimo"] { o.remove(k); } }
+    if let Some(o) = v.as_object_mut() { for k in ["tracks", "assets", "markers", "name", "deps", "kimo", "templates"] { o.remove(k); } }
     v
 }
 

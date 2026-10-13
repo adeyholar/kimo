@@ -81,3 +81,11 @@ fn stale(ss: &mut Session, prev: &Value) -> (Vec<u64>, Value) { let r = c(ss, "e
     let t0 = std::time::Instant::now(); let m = man(&mut ss); let ms = t0.elapsed().as_secs_f64() * 1000.0; assert_eq!(m["chunks"].as_array().unwrap().len(), 30); eprintln!("U3_MANIFEST_MS {ms:.2} (gate profile, 60 clips, 2 min, 24 fps)");
     assert!(ms < 2000.0);
 }
+/// U2.4 interaction: batch templates are authoring data, never pixels. Defining one must not stale a single chunk or move the project hash.
+#[test] fn defining_a_batch_template_changes_no_chunk_key_and_no_project_hash() {
+    let (mut ss, ..) = scene(); let before = c(&mut ss, "export_manifest", json!({"chunk_s": 4}));
+    c(&mut ss, "template_define", json!({"name": "t1", "ops": [{"tool": "find", "args": {}}]}));
+    let after = c(&mut ss, "export_manifest", json!({"chunk_s": 4}));
+    assert_eq!(before["project_hash"], after["project_hash"]); assert_eq!(before["chunks"], after["chunks"]);
+    let ex = c(&mut ss, "explain_invalidation", json!({"previous": before})); assert_eq!(ex["stale"], 0, "{ex}");
+}

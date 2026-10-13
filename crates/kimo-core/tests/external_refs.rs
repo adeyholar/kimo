@@ -168,6 +168,7 @@ fn open_sites_are_classified() {
         ("ext/ocio_view.rs", 2, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/refine_matte.rs", 1, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/subtitle_export.rs", 5, "caller path (tool argument / output / temp file / test), not stored in the project"),
+        ("ext/templates.rs", 1, "caller path (library_path argument of template_define; the library is copied into the project, no path is stored)"),
         ("ext/transcript_tools.rs", 1, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/undistort.rs", 1, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("pixels.rs", 2, "PROJECT-DERIVED, resolved by pixel media/decode callers; caller file reads by tools"),

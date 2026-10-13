@@ -1,5 +1,5 @@
-00 no_such_tool	unknown_tool	param=tool	hint=nearest tools: match_color, resume_job, connect_nodes
-01 set_propertyy	unknown_tool	param=tool	hint=nearest tools: set_property, bake_property, get_project
+00 no_such_tool	unknown_tool	param=tool	hint=nearest tools: <3 registry-dependent names>
+01 set_propertyy	unknown_tool	param=tool	hint=nearest tools: <3 registry-dependent names>
 02 delete_clip	missing_arg	param=clip_id	hint=required arguments: clip_id
 03 delete_clip	bad_arg_type	param=clip_id	hint=
 04 delete_clip	not_found	param=clip_id	hint=valid clip ids (up to 10): clip3

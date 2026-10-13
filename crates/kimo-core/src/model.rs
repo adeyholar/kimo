@@ -157,13 +157,15 @@ pub struct Project {
     pub markers: Vec<Marker>,
     /// Dependency records (size, sha256, ...) written by collect_project; absent in files that never recorded them (old files stay byte-stable).
     #[serde(default, skip_serializing_if = "Option::is_none")] pub deps: Option<crate::deps::DepTable>,
+    /// U2.4: user-authored batch templates (none ship with Kimo); absent when empty so old files stay byte-stable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub templates: Vec<crate::ext::templates::Template>,
     /// Directory of the project file (canonical), set by load_project / save_project / collect. Never serialized. Relative stored paths resolve against it.
     #[serde(skip)] pub base_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Project {
     fn default() -> Self {
-        Project { grade_scopes: Default::default(), lights: BTreeMap::new(), materials: BTreeMap::new(), editorial: Default::default(), ocio_view_delivery: None, occluders: BTreeMap::new(), color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![], deps: None, base_dir: None }
+        Project { grade_scopes: Default::default(), lights: BTreeMap::new(), materials: BTreeMap::new(), editorial: Default::default(), ocio_view_delivery: None, occluders: BTreeMap::new(), color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![], deps: None, templates: vec![], base_dir: None }
     }
 }
 

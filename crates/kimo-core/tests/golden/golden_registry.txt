@@ -134,6 +134,7 @@ join_export 93d05ac7e76da91f
 kimo_info 22a891990956a689
 lift_range 76f97b3850975a47
 light_rig 2d21a8c90d40d65f
+lint_frame 29228d349a28a826
 list_camera_solves 492655c34a9e22aa
 list_captions 524db21fe840e247
 list_dependencies e1d49882f971c00d
@@ -172,9 +173,9 @@ query_safe_margins 5cfccf0378618180
 rate_stretch 16dd93dcc17cb7ed
 read_pixels 75dec9c4fee7b361
 read_samples 58d6a9f3ea9c7b16
-recipe_apply 1ecb748713758319
-recipe_describe 864219e30ed232a5
-recipe_list 01b8d1de74566c24
+recipe_apply 71a94887ee9adc49
+recipe_describe d6500745b10aabda
+recipe_list 260d6e832e090377
 redo 738dbd6488fa90b3
 refine_matte 287d456bc91a84c0
 relink_media 007d3b0771ae5694
@@ -217,6 +218,7 @@ roto_propagate d82172bedca52a94
 sample_linear_neutral f521f85a77fcec69
 sample_property 3994cff551e8910e
 save_project d51a7abb5be457b3
+session_stats 08b78ec5daffb184
 set_animator_keyframe 462777ee7d21e1fe
 set_audio a4b4452073f105be
 set_audio_effect_key 02e5c3c88e7432d6
@@ -288,6 +290,11 @@ stabilize 9e45db97224ae6db
 swap_clips 7e618d3ff4d26a38
 switch_angle 2a55c52c71e95121
 sync_clips 9a610496e2de2b51
+template_apply 3171da1bed90de7c
+template_define c18959a3360d1cb0
+template_delete 6b938f0f0f89fa07
+template_describe 6840c663f33496bf
+template_list 0757d10d640959f3
 track_beats 5e81daa55991da9c
 track_feature_residuals cf04ce2022372886
 track_features 5c13c25653d6f2ca

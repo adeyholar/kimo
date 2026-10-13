@@ -64,7 +64,9 @@ fn calls(t1: &str, c: &str) -> Vec<(&'static str, Value)> {
         let (mut ss, _, _, _) = setup(); let (mut ss2, _, _, _) = setup();
         match dispatch_ex(&mut ss, tool, args) { Ok(_) => lines.push(format!("{i:02} {tool}\tOK")), Err(e) => { n += 1; if e.code == "other" { other += 1; }
             assert_eq!(Some(e.message.clone()), dispatch(&mut ss2, tool, args).err(), "dispatch_ex text must equal dispatch text");
-            lines.push(format!("{i:02} {tool}\t{}\tparam={}\thint={}", e.code, e.param.clone().unwrap_or_default(), e.hint.clone().unwrap_or_default())); } }
+            // the nearest-tools list depends on the whole registry, so every new tool would move this row: pin its shape (prefix and 3 names), not the names
+            let hint = if e.code == "unknown_tool" { let h = e.hint.clone().unwrap_or_default(); let names = h.strip_prefix("nearest tools: ").expect("hint starts with 'nearest tools: '"); assert_eq!(names.split(", ").count(), 3, "{h}"); "nearest tools: <3 registry-dependent names>".to_string() } else { e.hint.clone().unwrap_or_default() };
+            lines.push(format!("{i:02} {tool}\t{}\tparam={}\thint={}", e.code, e.param.clone().unwrap_or_default(), hint)); } }
     }
     eprintln!("classified as other: {other} of {n}");
     let text = lines.join("\n") + "\n"; let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/error_codes.txt");
@@ -77,6 +79,14 @@ fn calls(t1: &str, c: &str) -> Vec<(&'static str, Value)> {
 #[test]fn raw_audio_structured_errors_additive(){let(mut s,_,_,_)=setup();for(tool,a,code)in[("import_samples",json!({"rate":48000,"channels":2,"data":[[null],[0]]}),"invalid_samples"),("audio_filter_response",json!({"coeffs":[]}),"out_of_range"),("read_samples",json!({"rate":44100}),"out_of_range")]{let e=dispatch_ex(&mut s,tool,&a).unwrap_err();assert_eq!(e.code,code,"{}",e.message);}}
 
 /// U2/RV-28/U1 prefix codes are typed (they used to fall through to "other"): the text is unchanged, only the code is new.
+/// name_taken and ambiguous_name need state (two named things), which the stateless baseline rows cannot express: pinned here by exact code and text prefix.
+#[test]fn name_taken_and_ambiguous_name_are_typed_and_text_stable(){let(mut s,t1,t2,c)=setup();
+    dispatch(&mut s,"set_meta",&json!({"target":"track","id":t1,"name":"main"})).unwrap();
+    let e=dispatch_ex(&mut s,"set_meta",&json!({"target":"track","id":t2,"name":"main"})).unwrap_err();assert_eq!(e.code,"name_taken");assert_eq!(e.message,"name_taken: 'main' is already used by another track");
+    let c2=dispatch(&mut s,"add_shape",&json!({"track_id":t2,"shape":"rect","width":10,"height":10,"start":0.0,"duration":1.0})).unwrap()["clip_id"].as_str().unwrap().to_string();
+    for id in [&c,&c2]{for tr in s.project.tracks.iter_mut(){for cl in tr.clips.iter_mut(){if &cl.id==id{std::sync::Arc::make_mut(cl).name=Some("dup".into());}}}}
+    let e=dispatch_ex(&mut s,"set_property",&json!({"clip_id":"@dup","property":"x","value":1.0})).unwrap_err();assert_eq!(e.code,"ambiguous_name");assert!(e.message.starts_with("ambiguous_name: 2 clips are named 'dup' ("),"{}",e.message);}
+
 #[test]fn batch_names_and_layout_prefix_codes_are_typed(){let(mut s,_,_,_)=setup();
     let one=|f:serde_json::Value|json!({"expand_only":true,"ops":[f]});
     for(tool,a,code)in[
