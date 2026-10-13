@@ -223,3 +223,4 @@ rust session_stats fast
 rust templates fast
 rust lint_frame fast
 rust batch_benchmark fast
+rust template_examples fast
