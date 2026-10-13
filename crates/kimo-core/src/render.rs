@@ -540,6 +540,8 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
 
 /// The compositor keeps premultiplied color on a transparent canvas (rgb = sum of src*a over below); alpha deliveries need straight alpha.
 pub(crate) fn unpremultiply(f: &mut Frame) { for px in f.d.chunks_exact_mut(4) { let a = px[3]; if a > 0.0 && a < 1.0 { for j in 0..3 { px[j] = (px[j] / a).min(1.0); } } } }
+/// One export-equivalent RGBA8 frame (opaque canvas): render_frame_opts, the colour pipeline output stage, then to_rgba8, exactly the steps of the export loop.
+pub fn export_frame_rgba8(p: &Project, t: f64, cache: &Cache) -> Result<Vec<u8>, String> { render_frame_opts(p, t, cache, false).and_then(|mut f| { crate::color::pipeline::output(p, &mut f)?; Ok(to_rgba8(&f)) }) }
 pub fn to_rgba8(f: &Frame) -> Vec<u8> { f.d.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect() }
 
 fn image_encoder_command(w:usize,h:usize,path:&str)->Command{let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{w}x{h}"),"-i","-","-frames:v","1",path]);cmd}

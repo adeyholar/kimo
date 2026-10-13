@@ -166,6 +166,7 @@ path_info bd40d934b727ca02
 pick_white_balance cfba9bbe722278b3
 pin_layer 24c4c1077888dead
 preview_material 91a9515ab10a6608
+preview_range 63d94b1e2cb0c89e
 preview_subject_match 8fbee66dc3095cb4
 project_diff 9156e2b0c03e1a9a
 project_set 00170b74c8eb4359
