@@ -20,13 +20,13 @@ fn sha256_hex(path: &str) -> Option<String> {
     String::from_utf8_lossy(&o.stdout).split_whitespace().next().map(String::from)
 }
 fn ffmpeg_scaled(path: &str, w: u32, h: u32, fmt: &str, q: u32) -> Result<Vec<u8>, String> {
-    // `timeout` bounds the child (20 s) without a helper thread
-    let mut c = Command::new("timeout"); c.args(["-s", "KILL", "20", "ffmpeg", "-v", "error", "-i", path, "-vf", &format!("scale={w}:{h}:flags=area")]);
+    // deadline + output cap through the engine's bounded child helper (portable; no coreutils `timeout`, no helper thread here)
+    let exe = std::env::var("KIMO_INLINE_FFMPEG").unwrap_or_else(|_| "ffmpeg".into()); // env: test hook for the missing-ffmpeg path
+    let mut c = Command::new(exe); c.args(["-v", "error", "-i", path, "-vf", &format!("scale={w}:{h}:flags=area")]);
     if fmt == "jpeg" { c.args(["-q:v", &(2 + (100 - q.clamp(1, 100)) * 29 / 100).to_string(), "-f", "mjpeg"]); } else { c.args(["-f", "image2pipe", "-c:v", "png"]); }
-    c.args(["-frames:v", "1", "-"]); c.stdin(Stdio::null()).stderr(Stdio::null());
-    let o = c.output().map_err(|e| format!("ffmpeg: {e}"))?;
-    if !o.status.success() { return Err(if o.status.code() == Some(137) { "ffmpeg timed out".into() } else { "ffmpeg failed".into() }); }
-    if o.stdout.is_empty() { Err("empty output".into()) } else { Ok(o.stdout) }
+    c.args(["-frames:v", "1", "-"]); c.stdin(Stdio::null());
+    let out = kimo_core::ext::kit::capture(&mut c, 3 << 20, std::time::Duration::from_secs(20)).map_err(|e| format!("ffmpeg unavailable or failed ({e})"))?;
+    if out.is_empty() { Err("empty output".into()) } else { Ok(out) }
 }
 
 /// Build (image content blocks, structured media entries) for the media a call produced. Never fails the tool: problems become notes.

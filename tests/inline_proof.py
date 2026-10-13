@@ -45,6 +45,9 @@ s = S({"KIMO_INLINE_IMAGES": "0"}); scene(s, 320, 180); r = s.call("render_frame
 # cap: forced tiny cap via env hook
 s = S({"KIMO_INLINE_CAP_BYTES": "100"}); scene(s, 320, 180); r = s.call("render_frame", {"time": 0.5, "path": f})
 check(not imgs(r) and not r["isError"] and any("inline omitted" in n for n in notes(r)), "forced tiny cap: block omitted + note, result ok"); s.close()
+# ffmpeg missing (downscale needs it): block omitted + note, result still ok
+s = S({"KIMO_INLINE_FFMPEG": "/nonexistent/ffmpeg"}); scene(s, 320, 180); r = s.call("render_frame", {"time": 0.5, "path": f, "max_inline_px": 128})
+check(not r["isError"] and not imgs(r) and any("inline omitted" in n for n in notes(r)) and os.path.getsize(f) > 0, "ffmpeg missing: block omitted + note, result ok, file written"); s.close()
 # CLI has no base64
 if os.path.exists(CLI):
     o = subprocess.run([CLI, "call", "render_frame", "--args", json.dumps({"time": 0.5, "path": f})], capture_output=True, text=True)

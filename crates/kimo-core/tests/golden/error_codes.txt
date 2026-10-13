@@ -47,3 +47,10 @@
 46 collect_project	dest_exists	param=dest_dir	hint=
 47 collect_project	invalid_value	param=copy	hint=valid values for 'copy' (2): copy, link
 48 relink_media	invalid_value	param=match	hint=valid values for 'match' (3): name_size_hash, name, hash
+49 transcript_import	missing_arg	param=path	hint=required arguments: path
+50 transcript_import	io_error	param=	hint=
+51 transcript_get	not_found	param=	hint=
+52 transcript_coverage	not_found	param=	hint=
+53 transcript_to_captions	not_found	param=	hint=
+54 validate_captions	other	param=	hint=
+55 transcript_edit_preview	not_found	param=	hint=

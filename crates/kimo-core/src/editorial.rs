@@ -6,6 +6,12 @@ use std::collections::BTreeMap;
 pub struct Editorial {
     pub captions: BTreeMap<String, CaptionGroup>,
     pub multicams: BTreeMap<String, Multicam>,
+    /// RV-8 transcripts. Absent from saved projects until one is imported, so older files stay byte-identical.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub transcripts: BTreeMap<String, crate::transcript::Transcript>,
+    /// cue clip id -> the transcript words (and line breaks) it was built from. Editing a word re-composes the cue text, never its timing.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cue_words: BTreeMap<String, crate::transcript::CueBinding>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CaptionGroup {
@@ -13,6 +19,9 @@ pub struct CaptionGroup {
     pub clips: Vec<String>,
     pub style: String,
     pub burn_in: bool,
+    /// Transcript this group was generated from (RV-8); absent for hand-made groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_id: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Multicam {

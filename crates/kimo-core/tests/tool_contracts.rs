@@ -463,3 +463,31 @@ fn auto_duck_leaves_clips_outside_the_dialogue_shared_with_the_undo_snapshot() {
     row_err(&s, "relink_media", json!({"search_dirs": ["/nonexistent_kimo_dir"]}), Some("not a directory"));
     row_err(&s, "relink_media", json!({"search_dirs": ["/tmp"], "match": "x"}), Some("match must be"));
 }
+
+// ---- RV-8 transcript tools: row() enforces apply/undo/redo byte-exactness and that the registry `mutates` flag matches whether the project changed.
+fn tr_csv() -> String {
+    let p = std::env::temp_dir().join(format!("kimo_tc_tr_{}.csv", std::process::id())); let mut t = 0.0; let mut s = String::from("word,start,end,confidence\n");
+    for (i, w) in "Cold tyres read lower than warm ones because the air inside contracts. Check them before you drive.".split_whitespace().enumerate() { s.push_str(&format!("{},{:.2},{:.2},{}\n", w, t, t + 0.4, if i == 1 { 0.2 } else { 0.9 })); t += 0.4; }
+    std::fs::write(&p, s).unwrap(); p.to_str().unwrap().to_string()
+}
+#[test] fn transcript_tools_contracts() {
+    let csv = tr_csv(); let t1 = pj(&fresh(&base()))["tracks"][0]["id"].as_str().unwrap().to_string();
+    let imp: Step = ("transcript_import", json!({"path": csv})); let mut with_tr = base(); with_tr.push(imp.clone()); let mut with_caps = with_tr.clone(); with_caps.push(("transcript_to_captions", json!({"track_id": t1})));
+    row(&base(), "transcript_import", imp.1.clone(), |r, b, a| { assert_eq!(r["words_added"], 17); assert!(b["editorial"].get("transcripts").is_none() && a["editorial"]["transcripts"]["tr1"].is_object()); });
+    row(&with_tr, "transcript_get", json!({"include_words": true}), |r, _b, _a| { assert_eq!(r["untrusted"], true); assert_eq!(r["word_count"], 17); });
+    row(&with_tr, "transcript_edit_word", json!({"from_index": 1, "to_index": 1, "display": "tires"}), |r, _b, a| { assert!(r.is_object()); assert_eq!(a["editorial"]["transcripts"]["tr1"]["words"][1]["display"], "tires"); });
+    row(&with_tr, "transcript_set_take", json!({"take_id": "take1", "speed": 2.0}), |r, _b, _a| assert!(r["words_moved"].as_u64().unwrap() >= 16));
+    row(&with_tr, "transcript_coverage", json!({"script_text": "Cold tyres read lower than warm ones"}), |r, _b, _a| { assert!(r["coverage_pct"].as_f64().unwrap() >= 99.0); assert!(r["timeline"]["takes"].is_array()); });
+    row(&with_tr, "transcript_to_captions", json!({"track_id": t1}), |r, _b, a| { assert_eq!(r["overlaps"], 0); assert!(a["editorial"]["captions"].as_object().unwrap().len() == 1); });
+    row(&with_caps, "validate_captions", json!({"all": true}), |r, _b, _a| { assert_eq!(r["groups"].as_array().unwrap().len(), 1); assert_eq!(r["skipped"].as_array().unwrap().len(), 3); });
+    row(&with_caps, "transcript_edit_preview", json!({"edits": [{"op": "delete", "from_index": 2, "to_index": 3}]}), |r, _b, _a| { assert_eq!(r["read_only"], true); assert_eq!(r["audio_cut_ranges"].as_array().unwrap().len(), 1); });
+    row_err(&with_tr, "transcript_import", json!({}), Some("path"));
+    row_err(&base(), "transcript_import", json!({"path": "/nonexistent/x.srt"}), Some("cannot read"));
+    row_err(&with_tr, "transcript_get", json!({"transcript_id": "nope"}), Some("no such transcript"));
+    row_err(&with_tr, "transcript_edit_word", json!({"word_id": "w1"}), Some("display"));
+    row_err(&with_tr, "transcript_set_take", json!({"take_id": "take1", "speed": 0.0}), Some("speed"));
+    row_err(&with_tr, "transcript_coverage", json!({}), Some("script_text"));
+    row_err(&with_tr, "transcript_to_captions", json!({"track_id": "nope"}), Some("track"));
+    row_err(&with_caps, "validate_captions", json!({}), Some("group_id"));
+    row_err(&with_tr, "transcript_edit_preview", json!({"edits": [{"op": "delete", "from_index": 999}]}), Some("outside"));
+}

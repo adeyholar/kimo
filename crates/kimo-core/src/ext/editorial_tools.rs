@@ -141,6 +141,7 @@ fn add_captions_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
             clips: clips.clone(),
             style: name.into(),
             burn_in: true,
+            transcript_id: None,
         },
     );
     Ok(json!({"caption_id":id,"clip_ids":clips,"count":count}))

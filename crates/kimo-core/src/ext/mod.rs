@@ -5,6 +5,8 @@ include!(concat!(env!("OUT_DIR"), "/ext_gen.rs"));
 pub mod kit {
     pub use crate::commands::{Command, Session};
     pub use serde_json::{json, Value};
+    /// Run a child with a deadline and an output cap (reaps the child on timeout); portable, no shell or coreutils needed.
+    pub fn capture(cmd: &mut std::process::Command, max: usize, timeout: std::time::Duration) -> Result<Vec<u8>, String> { crate::color::process::capture(cmd, max, timeout) }
     pub fn s(desc: &str) -> Value { json!({"type":"string","description":desc}) }
     pub fn n(desc: &str) -> Value { json!({"type":"number","description":desc}) }
     pub fn obj(props: Vec<(&str, Value)>, req: &[&str]) -> Value { let mut m = serde_json::Map::new(); for (k, v) in props { m.insert(k.into(), v); } json!({"type":"object","properties":m,"required":req}) }

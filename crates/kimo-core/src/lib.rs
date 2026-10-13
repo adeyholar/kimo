@@ -3,6 +3,11 @@
 //! is generated from the registry, so nothing can exist without a tool.
 pub mod ext;
 pub mod deps;
+pub mod transcript;
+pub mod transcript_parse;
+pub mod caption_validate;
+pub mod transcript_captions;
+pub mod transcript_coverage;
 pub mod errors;
 pub mod toolgroups;
 pub mod trackmath;

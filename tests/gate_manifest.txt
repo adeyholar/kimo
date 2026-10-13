@@ -4,6 +4,7 @@
 rust arc_sharing full
 rust build_identity fast
 rust cache_tools fast
+rust caption_validate fast
 rust cct_grade full
 rust cdl_xml full
 rust color_adaptation full
@@ -91,6 +92,11 @@ rust subject_match full
 rust subject_preview full
 rust thread_hygiene fast
 rust tool_contracts fast
+rust transcript_captions fast
+rust transcript_coverage fast
+rust transcript_model fast
+rust transcript_parse fast
+rust transcript_tools fast
 rust undistort_roundtrip full
 rust video_delivery full
 rust view_video full
