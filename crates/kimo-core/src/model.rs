@@ -113,7 +113,7 @@ pub struct Track { pub id: String, pub clips: Vec<std::sync::Arc<Clip>>, #[serde
 impl Track { pub fn cm(&mut self, i: usize) -> &mut Clip { std::sync::Arc::make_mut(&mut self.clips[i]) } }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Asset { pub id: String, pub path: String, pub width: u32, pub height: u32, pub duration: f64, pub fps: f64 }
+pub struct Asset { #[serde(default,skip_serializing_if="Option::is_none")] pub origin:Option<String>, #[serde(default,skip_serializing_if="Option::is_none")] pub hash:Option<String>, #[serde(default,skip_serializing_if="Option::is_none")] pub kind:Option<String>, pub id: String, pub path: String, pub width: u32, pub height: u32, pub duration: f64, pub fps: f64 }
 
 /// Persisted auto-occluder anchor recipe: lets a reloaded project rebuild the surface reference frame from the source media.
 #[derive(Clone, Debug, Serialize, Deserialize)]

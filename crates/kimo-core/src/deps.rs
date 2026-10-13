@@ -30,7 +30,7 @@ pub struct ExtRef {
     #[serde(skip_serializing_if = "std::ops::Not::not")] pub family: bool,
 }
 
-const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "exr", "tga", "dpx", "heic"];
+const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "kimopx", "exr", "tga", "dpx", "heic"];
 const AUDIO_EXT: &[&str] = &["wav", "mp3", "aac", "m4a", "flac", "ogg", "opus", "aif", "aiff"];
 const FONT_EXT: &[&str] = &["ttf", "otf", "ttc", "woff", "woff2"];
 fn ext(p: &str) -> String { p.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default() }
@@ -41,7 +41,7 @@ pub fn font_is_path(f: &str) -> bool { f.contains('/') || f.contains('\\') || FO
 
 /// Effect string keys that hold files: (key, kind). `path` is a file only on `lut` effects (`cube_text` is inline).
 fn effect_refs(e: &Effect, base: &str, owner: &Owner, out: &mut Vec<ExtRef>) {
-    for (key, kind) in [("path", RefKind::Lut), ("config_path", RefKind::Other)] {
+    for (key, kind) in [("path", RefKind::Lut), ("config_path", RefKind::Other), ("aux_path", RefKind::Image)] {
         if key == "path" && e.kind != "lut" { continue; }
         if let Some(v) = e.strings.get(key) { out.push(ExtRef { kind, owner: owner.clone(), field: format!("{base}.strings.{key}"), path: v.clone(), family: false }); }
     }

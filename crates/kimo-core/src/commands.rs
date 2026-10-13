@@ -19,7 +19,7 @@ impl<W: std::io::Write> std::io::Write for FnvWriter<W> { fn write(&mut self, b:
 /// Image produced by a tool call: path on disk plus size. Never bytes: only the protocol layer encodes it. Cleared at the start of every dispatch.
 #[derive(Clone, Debug)]
 pub struct Media { pub path: String, pub w: u32, pub h: u32, pub mime: &'static str }
-pub struct Session { pub media: Vec<Media>, pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache, pub fcache: crate::framecache::FrameCache,
+pub struct Session { pub resource_limits: crate::resource_limits::Limits, pub media: Vec<Media>, pub project: Project, pub undo: Vec<Project>, pub redo: Vec<Project>, pub cache: render::Cache, pub fcache: crate::framecache::FrameCache,
     /// One label per undo / redo entry (tool name, plus clip id when given), parallel to `undo` / `redo`.
     pub undo_labels: Vec<String>, pub redo_labels: Vec<String>,
     /// Named snapshots of the whole project: (name, project, label of the history position when taken).
@@ -28,7 +28,7 @@ pub struct Session { pub media: Vec<Media>, pub project: Project, pub undo: Vec<
     pub snap_sz: usize, pub snap_n: u32, pub snap_clips: usize,
     /// Build that first saved the loaded/current project (kept across re-saves); None until a save or a load sets it.
     pub created_with: Option<serde_json::Value> }
-impl Session { pub fn new() -> Self { Session { media: vec![], project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), fcache: crate::framecache::FrameCache::new(crate::framecache::default_cap()), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0, created_with: None } } }
+impl Session { pub fn new() -> Self { Session { resource_limits: crate::resource_limits::Limits::startup(), media: vec![], project: Project::default(), undo: vec![], redo: vec![], cache: render::Cache::new(), fcache: crate::framecache::FrameCache::new(crate::framecache::default_cap()), undo_labels: vec![], redo_labels: vec![], checkpoints: vec![], snap_sz: 1 << 20, snap_n: 0, snap_clips: 0, created_with: None } } }
 const MAX_CHECKPOINTS: usize = 24;
 
 #[derive(Clone)]
@@ -98,6 +98,7 @@ const KEYFRAME_TOOLS: [&str; 8] = ["set_keyframe", "set_keyframe_bezier", "set_m
 
 /// Public entry: runs the tool and unifies the wording of not-found and OS errors (unit 5 commit B).
 pub fn dispatch(ss: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
+    let _resource_context=crate::resource_limits::install(ss.resource_limits);
     ss.media.clear();
     let unknown = unknown_args(name, args);
     if !unknown.is_empty() {
@@ -170,7 +171,7 @@ fn record_undo(ss: &mut Session, before: Project, name: &str, args: &Value) {
 /// project size check. Returns the tool result and, when a history entry is due (mutating, ok, not no_history), the `before` snapshot for `record_undo`.
 fn run_core(ss: &mut Session, name: &str, args: &Value) -> Result<(Value, Option<Project>), String> {
     let t = reg_tables(); let c = t.1.get(name).map(|&i| &t.0[i]).ok_or(format!("unknown tool '{name}'"))?;
-    let l = crate::guard::limits(); crate::guard::sanitize(args, l, 0).map_err(|e| format!("rejected by sandbox: {e}"))?;
+    let l = crate::guard::limits(); let limit_args; let sanitize_limits = if name=="set_limits" {limit_args={let mut q=l.clone();q.max_num=u64::MAX as f64;q}; &limit_args} else {l}; crate::guard::sanitize(args, sanitize_limits, 0).map_err(|e| format!("rejected by sandbox: {e}"))?;
     // read-only tools skip the whole-project snapshot (it cost O(project) on every call); mutating tools still snapshot for undo and rollback
     // KIMO_AUDIT_READONLY=1: a tool marked read-only must leave the project unchanged (undo, redo, checkpoint and restore manage history themselves and are allowed).
     static AUDIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); let audit = !c.mutates && *AUDIT.get_or_init(|| std::env::var("KIMO_AUDIT_READONLY").map(|v| v == "1").unwrap_or(false)) && !matches!(name, "undo" | "redo" | "checkpoint" | "checkpoint_delete" | "restore");
@@ -224,7 +225,7 @@ pub fn dispatch_ex(ss: &mut Session, name: &str, args: &Value) -> Result<Value, 
             _ => {}
         }
         // RV-22: when a string argument is outside the schema's own enum, name the allowed values (generated from the same enum the schema advertises, never a hand list), with a did-you-mean. Message text is unchanged.
-        if matches!(e.code, "invalid_value" | "other" | "out_of_range") && e.allowed.is_none() { if let (Some(c), Some(obj)) = (registry_ref().iter().find(|c| c.name == name), args.as_object()) {
+        if matches!(e.code, "invalid_value" | "other" | "out_of_range" | "invalid_method" | "invalid_metric") && e.allowed.is_none() { if let (Some(c), Some(obj)) = (registry_ref().iter().find(|c| c.name == name), args.as_object()) {
             if let Some(props) = c.schema.get("properties").and_then(|p| p.as_object()) { for (pn, p) in props { let (Some(en), Some(v)) = (p.get("enum").and_then(|x| x.as_array()), obj.get(pn).and_then(|v| v.as_str())) else { continue };
                 let vals: Vec<String> = en.iter().filter_map(|x| x.as_str().map(String::from)).collect(); if vals.is_empty() || vals.iter().any(|x| x == v) { continue; }
                 let total = vals.len(); let near = crate::errors::nearest(v, &vals, 1); let mut hint = format!("valid values for '{pn}' ({total}): {}", vals.iter().take(40).cloned().collect::<Vec<_>>().join(", ")); if total > 40 { hint.push_str(", ... (first 40 shown)"); }

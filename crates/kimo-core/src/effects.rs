@@ -19,6 +19,10 @@ pub(crate) fn p(m: &Params, k: &str, def: f64, t: f64) -> f32 { m.get(k).map(|x|
 
 /// (kind, description, [(param, default, description)]) - drives list_effects and tool schemas.
 pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
+    ("displace", "Bilinear UV offset by aux_path pixel asset or strings.expr field; edge clamp|wrap|transparent", &[("amount_x",0.,"UV scale"),("amount_y",0.,"UV scale"),("neutral",0.5,"zero offset field value")]),
+    ("convolution", "Float convolution strings.kernel odd square flat JSON array (default [1] identity); no creative clamps", &[("divisor",1.,"nonzero"),("bias",0.,"RGB bias")]),
+    ("grade", "Raw gain/lift primitive in working (linear) space: RGB_out=RGB*gain+lift; alpha preserved; separate from grade-graph nodes", &[("gain_r",1.,"red gain"),("gain_g",1.,"green gain"),("gain_b",1.,"blue gain"),("lift_r",0.,"red lift"),("lift_g",0.,"green lift"),("lift_b",0.,"blue lift")]),
+    ("pixel_expr", "Pure per-pixel expression in strings.expr (vector) or strings.r/g/b/a; x,y,u,v,w,h,t,src,p0..p7; sample(u,v), aux1(u,v). No I/O or loops. Resource caps via set_limits.", &[("p0",0.,"animatable"),("p1",0.,"animatable"),("p2",0.,"animatable"),("p3",0.,"animatable"),("p4",0.,"animatable"),("p5",0.,"animatable"),("p6",0.,"animatable"),("p7",0.,"animatable")]),
     ("exposure", "Exposure in stops", &[("stops", 0.0, "-5..5")]),
     ("contrast", "Contrast around mid grey", &[("amount", 1.0, "0..3")]),
     ("saturation", "Color saturation", &[("amount", 1.0, "0=mono, 1=unchanged, 2=vivid")]),
@@ -35,7 +39,7 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
     ("glow", "Bloom on highlights", &[("amount", 0.5, "0..2"), ("radius", 12.0, "pixels"), ("threshold", 0.7, "0..1")]),
     ("bloom", "Light-intensity bloom: soft-knee bright-pass, multi-scale blur, energy-conserving by default", &[("amount", 0.6, "0..1 (conserve) or more"), ("threshold", 0.8, "luma where bloom starts"), ("knee", 0.2, "0..1 soft knee"), ("radius", 8.0, "base px, levels double it"), ("levels", 5.0, "1..7 scales"), ("conserve", 1.0, "1 = frame energy preserved, 0 = additive"), ("tint_r", 1.0, "bloom tint R"), ("tint_g", 1.0, "bloom tint G"), ("tint_b", 1.0, "bloom tint B")]),
     ("grain", "Film grain", &[("amount", 0.08, "0..0.5")]),
-    ("rgb_split", "Chromatic aberration / glitch shift", &[("amount", 6.0, "pixels")]),
+    ("rgb_split", "Formula: channel(x,y)=src(x+offset_channel*cos(angle),y+offset_channel*sin(angle)); offset truncated toward zero before adding integer position, clamp edges", &[("amount",6.,"legacy +/- red/blue px"),("r_offset",6.,"red px"),("g_offset",0.,"green px"),("b_offset",-6.,"blue px"),("angle",0.,"degrees")]),
     ("invert", "Invert colors", &[]),
     ("chroma_key", "Remove a key color to alpha", &[("r",0.0,"key R"),("g",1.0,"key G"),("b",0.0,"key B"),("tolerance",0.35,"0..1"),("softness",0.1,"0..1")]),
     ("lut", "3D LUT (.cube) via strings.path", &[("intensity", 1.0, "0..1")]),
@@ -46,7 +50,7 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
     ("sepia", "Sepia tone", &[("amount", 1.0, "0..1")]),
     ("color_isolate", "Black & white except one hue (keep gun/scope color)", &[("hue", 190.0, "degrees 0..360"), ("range", 40.0, "degrees"), ("softness", 25.0, "degrees"), ("bw_amount", 1.0, "0..1")]),
     ("silhouette_fill", "Flat-color silhouette of the clip's alpha (segmentation-mask look): replaces RGB with a solid color, keeps alpha, optional outline ring", &[("r",1.0,"fill R"),("g",0.85,"fill G"),("b",0.1,"fill B"),("amount",1.0,"0..1 mix toward the flat color"),("outline",0.0,"outline px @720p, 0=none"),("or",1.0,"outline R"),("og",1.0,"outline G"),("ob",1.0,"outline B")]),
-    ("shake", "Camera shake / impact (translation jitter)", &[("amount", 8.0, "px"), ("speed", 24.0, "Hz")]),
+    ("shake", "Formula: step=floor(t*speed), n(k)=2*signed_fract(sin(k*noise_frequency)*noise_gain)-1; dx=trunc(n(step)*amount), dy=trunc(n(step+y_seed_offset)*amount_y); absent amount_y follows amount. Sample source at (x-dx,y-dy), clamp edges", &[("amount",8.,"x px"),("amount_y",8.,"y px"),("speed",24.,"Hz"),("noise_frequency",12.9898,"seed multiplier"),("noise_gain",43758.545,"hash gain"),("y_seed_offset",7.,"y seed offset")]),
     ("impact_shake", "Beat/impact camera shake: damped spring kicks at hit times (strings.hits=\"t1,t2,..\" clip-local seconds), x/y/rotation/zoom; measured from the SCUMBLE reference", &[("amount", 29.0, "px @720p, x kick"), ("amount_y", 9.0, "px @720p, y kick"), ("decay", 27.0, "1/s, exp decay (0.34/frame at 25fps)"), ("frequency", 12.5, "Hz, 12.5 flips sign every frame at 25fps"), ("rotation", 0.0, "deg kick"), ("zoom", 0.0, "scale kick, e.g. 0.03")]),
     ("mirror", "Mirror half of frame", &[("axis", 0.0, "0=horizontal(left->right), 1=vertical(top->bottom)")]),
     ("scanlines", "CRT scanlines", &[("amount", 0.3, "0..1"), ("spacing", 3.0, "px")]),
@@ -56,10 +60,10 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
     ("luma_key", "Key out by brightness (keep=0 removes darks, keep=1 removes brights)", &[("threshold", 0.2, "0..1"), ("softness", 0.1, "0..1"), ("keep_bright", 1.0, "1 keeps brights, 0 keeps darks")]),
     ("ripple", "Concentric water ripple displacement", &[("amplitude", 8.0, "px"), ("wavelength", 60.0, "px"), ("speed", 2.0, "cycles/s"), ("cx", 0.5, "0..1"), ("cy", 0.5, "0..1")]),
     ("lens_distortion", "Barrel/pincushion lens distortion", &[("amount", 0.3, "-1..1 (positive = barrel)")]),
-    ("glitch_blocks", "Digital glitch: horizontal slice displacement + color shift", &[("amount", 30.0, "max px shift"), ("slices", 12.0, "count"), ("rate", 12.0, "changes/s")]),
+    ("glitch_blocks", "Formula: sh=max(1,floor(h/max(1,slices))) when slice_height=0, otherwise max(1,floor(slice_height)); sl=floor(y/sh), step=floor(t*rate), rnd(k)=abs(signed_fract(sin(k*noise_frequency)*noise_gain)); off=trunc((2*rnd(sl*slice_seed_scale+step)-1)*amount) if rnd(sl+step*step_seed_scale)>slice_threshold else 0; RGB/A sample x+off modulo w, green adds sign(off)*trunc(green_offset) modulo w", &[("amount",30.,"px"),("slices",12.,"count"),("rate",12.,"Hz"),("noise_frequency",12.9898,"hash multiplier"),("noise_gain",43758.545,"hash gain"),("step_seed_scale",17.,"time seed multiplier"),("slice_threshold",0.55,"activation threshold"),("slice_seed_scale",3.1,"slice seed multiplier"),("green_offset",4.,"green shift px"),("slice_height",0.,"override rows per slice; absent uses h/slices")]),
     ("light_rays", "God rays: radial blur of highlights from a point", &[("amount", 0.8, "0..2"), ("threshold", 0.6, "0..1"), ("cx", 0.5, "0..1"), ("cy", 0.2, "0..1"), ("length", 0.4, "0..1")]),
     ("drop_shadow", "Drop shadow from alpha (use on text/shapes/stickers)", &[("dx", 8.0, "px"), ("dy", 8.0, "px"), ("blur", 8.0, "px"), ("opacity", 0.6, "0..1")]),
-    ("chromatic_aberration", "Radial color fringing", &[("amount", 4.0, "px at edges")]),
+    ("chromatic_aberration", "Formula: src(x+(x/w-cx)*amount*radial_scale*channel_scale,y+(y/h-cy)*amount*radial_scale*channel_scale); clamp float coordinate then truncate toward zero, green/alpha unchanged", &[("amount",4.,"px"),("cx",0.5,"center U"),("cy",0.5,"center V"),("radial_scale",2.,"radial multiplier"),("r_scale",1.,"red scale"),("b_scale",-1.,"blue scale")]),
     ("flicker", "Brightness flicker", &[("amount", 0.15, "0..1"), ("rate", 18.0, "Hz")]),
     ("halftone", "Halftone dots", &[("size", 8.0, "px")]),
     ("edge_glow", "Neon edge detect glow", &[("amount", 1.0, "0..3"), ("r", 0.0, "R"), ("g", 0.9, "G"), ("b", 1.0, "B")]),
@@ -67,6 +71,16 @@ pub const CATALOG: &[(&str, &str, &[(&str, f64, &str)])] = &[
 ];
 
 pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f: &mut Frame, t: f64, seed: u64) -> Result<(), String> {
+    if ["displace","convolution","grade"].contains(&kind){return crate::shader_ops::apply(kind,params,strings,f,t);}
+    if kind == "pixel_expr" {
+        let source=strings.get("expr").cloned().unwrap_or_else(||format!("vec4({},{},{},{})",strings.get("r").map(String::as_str).unwrap_or("r"),strings.get("g").map(String::as_str).unwrap_or("g"),strings.get("b").map(String::as_str).unwrap_or("b"),strings.get("a").map(String::as_str).unwrap_or("a")));
+        let cap=crate::resource_limits::current().expr_max_ops.unwrap_or(u64::MAX).min(usize::MAX as u64) as usize;
+        let program=crate::pixel_expr::compile(&source,cap)?;
+        let mut knobs=[0f32;8];for (i,v) in knobs.iter_mut().enumerate(){*v=p(params,&format!("p{i}"),0.,t);}
+        let aux=strings.get("aux_path").map(|path|crate::pixels::read(&crate::deps::resolve_str(path))).transpose()?;
+        if source.contains("aux1") && aux.is_none(){return Err("aux1 requires strings.aux_path (native pixel asset path)".into())}
+        let out=crate::pixel_expr::apply(&program,f,aux.as_ref(),knobs,t as f32)?;f.d=out.d;return Ok(());
+    }
     if kind == "relight" { return crate::lighting::apply_relight(params, strings, f, t); }
     if kind.starts_with("ls_") { return crate::layerstyles::apply(kind, params, strings, f, t); }
     if kind.starts_with("shape_") { return Ok(()); } // shape modifiers act on the vector source (shapemods.rs), not on pixels
@@ -150,10 +164,8 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
                 let n = ((s >> 40) as f32 / 16777216.0 - 0.5) * a; for j in 0..3 { f.d[i*4+j] += n; } }
         }
         "rgb_split" => {
-            let a = p(params, "amount", 6.0, t) as isize; let src = f.d.clone(); let w = f.w as isize;
-            for y in 0..f.h { for x in 0..f.w { let i = (y*f.w+x)*4;
-                let xr = (x as isize + a).clamp(0, w-1) as usize; let xb = (x as isize - a).clamp(0, w-1) as usize;
-                f.d[i] = src[(y*f.w+xr)*4]; f.d[i+2] = src[(y*f.w+xb)*4+2]; } }
+            let amount=p(params,"amount",6.,t);let offsets=[p(params,"r_offset",amount as f64,t),p(params,"g_offset",0.,t),p(params,"b_offset",-amount as f64,t)];let angle=p(params,"angle",0.,t).to_radians();let src=f.d.clone();let(w,h)=(f.w as isize,f.h as isize);
+            for y in 0..f.h{crate::guard::check();for x in 0..f.w{for j in 0..3{let dx=(offsets[j]*angle.cos()) as isize;let dy=(offsets[j]*angle.sin()) as isize;let sx=(x as isize).saturating_add(dx).clamp(0,w-1) as usize;let sy=(y as isize).saturating_add(dy).clamp(0,h-1) as usize;f.d[(y*f.w+x)*4+j]=src[(sy*f.w+sx)*4+j];}}}
         }
         "invert" => px(f, |c| [1.0-c[0], 1.0-c[1], 1.0-c[2]]),
         "chroma_key" => {
@@ -188,8 +200,8 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
         "color_isolate" => { let (h0, rg, so, bw) = (p(params, "hue", 190.0, t), p(params, "range", 40.0, t), p(params, "softness", 25.0, t).max(1.0), p(params, "bw_amount", 1.0, t));
             px(f, |c| { let (h, s, _) = rgb2hsl(c); let mut d = (h - h0).abs(); if d > 180.0 { d = 360.0 - d; } let keep = (1.0 - ((d - rg) / so).clamp(0.0, 1.0)) * (s * 2.0).min(1.0); let l = lum(c); let k = keep.max(1.0 - bw);
                 [l + (c[0]-l)*k, l + (c[1]-l)*k, l + (c[2]-l)*k] }); }
-        "shake" => { let a = p(params, "amount", 8.0, t); let sp = p(params, "speed", 24.0, t); let n = |k: f32| (((k * 12.9898).sin() * 43758.545).fract()) * 2.0 - 1.0; let step = (t as f32 * sp).floor();
-            let (dx, dy) = ((n(step) * a) as isize, (n(step + 7.0) * a) as isize); let src = f.d.clone(); let (w, h) = (f.w as isize, f.h as isize);
+        "shake" => { let a = p(params, "amount", 8.0, t); let sp = p(params, "speed", 24.0, t); let n = |k: f32| (((k * p(params,"noise_frequency",12.9898,t)).sin() * p(params,"noise_gain",43758.545,t)).fract()) * 2.0 - 1.0; let step = (t as f32 * sp).floor();
+            let (dx, dy) = ((n(step) * a) as isize, (n(step + p(params,"y_seed_offset",7.,t)) * p(params,"amount_y",a as f64,t)) as isize); let src = f.d.clone(); let (w, h) = (f.w as isize, f.h as isize);
             for y in 0..h { for x in 0..w { let (sx, sy) = ((x - dx).clamp(0, w-1), (y - dy).clamp(0, h-1)); for j in 0..4 { f.d[((y*w+x)*4) as usize+j] = src[((sy*w+sx)*4) as usize+j]; } } } }
         "impact_shake" => {
             let hits: Vec<f64> = strings.get("hits").map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
@@ -239,10 +251,10 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
         "lens_distortion" => { let a = p(params, "amount", 0.3, t); let src = f.d.clone(); let (w, h) = (f.w as f32, f.h as f32);
             for y in 0..f.h { for x in 0..f.w { let (nx, ny) = ((x as f32 / w - 0.5) * 2.0, (y as f32 / h - 0.5) * 2.0); let r2 = nx*nx + ny*ny; let k = 1.0 + a * r2; let (sx, sy) = (((nx * k) * 0.5 + 0.5) * w, ((ny * k) * 0.5 + 0.5) * h);
                 let o = (y*f.w+x)*4; if sx < 0.0 || sy < 0.0 || sx >= w || sy >= h { f.d[o..o+4].copy_from_slice(&[0.0, 0.0, 0.0, 1.0]); continue; } let s = (sy as usize * f.w + sx as usize) * 4; for j in 0..4 { f.d[o+j] = src[s+j]; } } } }
-        "glitch_blocks" => { let (a, n, rate) = (p(params, "amount", 30.0, t), p(params, "slices", 12.0, t).max(1.0) as usize, p(params, "rate", 12.0, t)); let step = (t as f32 * rate).floor(); let src = f.d.clone(); let (w, h) = (f.w, f.h); let sh = (h / n).max(1);
-            let rnd = |k: f32| (((k * 12.9898).sin() * 43758.545).fract()).abs();
-            for y in 0..h { let sl = (y / sh) as f32; let r = rnd(sl + step * 17.0); let off = if r > 0.55 { ((rnd(sl * 3.1 + step) * 2.0 - 1.0) * a) as isize } else { 0 };
-                for x in 0..w { let sx = (x as isize + off).rem_euclid(w as isize) as usize; let o = (y*w+x)*4; f.d[o] = src[(y*w+sx)*4]; f.d[o+1] = src[(y*w+((sx as isize + off.signum() * 4).rem_euclid(w as isize) as usize))*4+1]; f.d[o+2] = src[(y*w+sx)*4+2]; f.d[o+3] = src[(y*w+sx)*4+3]; } } }
+        "glitch_blocks" => { let (a, n, rate) = (p(params, "amount", 30.0, t), p(params, "slices", 12.0, t).max(1.0) as usize, p(params, "rate", 12.0, t)); let step = (t as f32 * rate).floor(); let src = f.d.clone(); let (w, h) = (f.w, f.h); let sh=if params.get("slice_height").map(|q|q.at(t)).unwrap_or(0.)==0.{(h/n).max(1)}else{p(params,"slice_height",1.,t).max(1.) as usize};
+            let rnd = |k: f32| (((k * p(params,"noise_frequency",12.9898,t)).sin() * p(params,"noise_gain",43758.545,t)).fract()).abs();
+            for y in 0..h { let sl = (y / sh) as f32; let r = rnd(sl + step * p(params,"step_seed_scale",17.,t)); let off = if r > p(params,"slice_threshold",0.55,t) { ((rnd(sl * p(params,"slice_seed_scale",3.1,t) + step) * 2.0 - 1.0) * a) as isize } else { 0 };
+                for x in 0..w { let sx = (x as isize + off).rem_euclid(w as isize) as usize; let o = (y*w+x)*4; f.d[o] = src[(y*w+sx)*4]; f.d[o+1] = src[(y*w+((sx as isize + off.signum().saturating_mul(p(params,"green_offset",4.,t) as isize)).rem_euclid(w as isize) as usize))*4+1]; f.d[o+2] = src[(y*w+sx)*4+2]; f.d[o+3] = src[(y*w+sx)*4+3]; } } }
         "light_rays" => { let (a, th, cx, cy, len) = (p(params, "amount", 0.8, t), p(params, "threshold", 0.6, t), p(params, "cx", 0.5, t), p(params, "cy", 0.2, t), p(params, "length", 0.4, t)); let (w, h) = (f.w as f32, f.h as f32); let n = 24; let src = f.d.clone();
             for y in 0..f.h { for x in 0..f.w { let mut acc = [0f32; 3]; for k in 0..n { let s = 1.0 - len * k as f32 / n as f32; let sx = ((x as f32 - cx*w) * s + cx*w).clamp(0.0, w - 1.0) as usize; let sy = ((y as f32 - cy*h) * s + cy*h).clamp(0.0, h - 1.0) as usize; let i = (sy*f.w+sx)*4;
                 let l = lum([src[i], src[i+1], src[i+2]]); let m = ((l - th) / (1.0 - th).max(0.01)).clamp(0.0, 1.0) * (1.0 - k as f32 / n as f32); for j in 0..3 { acc[j] += src[i+j] * m; } }
@@ -251,8 +263,8 @@ pub fn apply(kind: &str, params: &Params, strings: &BTreeMap<String, String>, f:
             for y in 0..h { for x in 0..w { let (sx, sy) = (x - dx, y - dy); if sx >= 0 && sy >= 0 && sx < w && sy < h { sh.d[((y*w+x)*4+3) as usize] = f.d[((sy*w+sx)*4+3) as usize]; } } } box_blur3(&mut sh, bl);
             for i in 0..f.w*f.h { let a = sh.d[i*4+3] * op; let o = &mut f.d[i*4..i*4+4]; let na = o[3] + a * (1.0 - o[3]); if na > 0.0 { for j in 0..3 { o[j] = (o[j] * o[3]) / na; } } o[3] = na; } }
         "chromatic_aberration" => { let a = p(params, "amount", 4.0, t); let src = f.d.clone(); let (w, h) = (f.w as f32, f.h as f32);
-            for y in 0..f.h { for x in 0..f.w { let (nx, ny) = (x as f32 / w - 0.5, y as f32 / h - 0.5); let o = (y*f.w+x)*4;
-                for (j, s) in [(0usize, 1.0f32), (2usize, -1.0f32)] { let sx = (x as f32 + nx * a * 2.0 * s).clamp(0.0, w - 1.0) as usize; let sy = (y as f32 + ny * a * 2.0 * s).clamp(0.0, h - 1.0) as usize; f.d[o+j] = src[(sy*f.w+sx)*4+j]; } } } }
+            for y in 0..f.h { for x in 0..f.w { let (nx, ny) = (x as f32 / w - p(params,"cx",0.5,t), y as f32 / h - p(params,"cy",0.5,t)); let o = (y*f.w+x)*4;
+                for (j, s) in [(0usize, p(params,"r_scale",1.,t)), (2usize, p(params,"b_scale",-1.,t))] { let sx = (x as f32 + nx * a * p(params,"radial_scale",2.,t) * s).clamp(0.0, w - 1.0) as usize; let sy = (y as f32 + ny * a * p(params,"radial_scale",2.,t) * s).clamp(0.0, h - 1.0) as usize; f.d[o+j] = src[(sy*f.w+sx)*4+j]; } } } }
         "flicker" => { let (a, r) = (p(params, "amount", 0.15, t), p(params, "rate", 18.0, t)); let k = 1.0 - a * (((t as f32 * r).floor() * 78.233).sin() * 43758.545).fract().abs(); px(f, |c| [c[0]*k, c[1]*k, c[2]*k]); }
         "halftone" => { let s = p(params, "size", 8.0, t).max(2.0); let src = f.d.clone();
             for y in 0..f.h { for x in 0..f.w { let (cx, cy) = (((x as f32 / s).floor() + 0.5) * s, ((y as f32 / s).floor() + 0.5) * s); let (sx, sy) = ((cx as usize).min(f.w-1), (cy as usize).min(f.h-1)); let i = (sy*f.w+sx)*4; let l = lum([src[i], src[i+1], src[i+2]]).clamp(0.0, 1.0);

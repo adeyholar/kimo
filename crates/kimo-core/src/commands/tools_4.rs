@@ -136,7 +136,7 @@ pub(super) fn tools(eff_kinds: &[&str]) -> Vec<Command> {
             Ok(out) } },
     Command { name: "kimo_info", description: "Build identity of this server: semver version, git commit, project schema version, enabled features and backend versions (ffmpeg, ffprobe). The same identity is recorded in saved projects (the \"kimo\" block) and in export reports.", mutates: false,
         schema: obj(vec![], &[]),
-        run: |_ss, _a| Ok(crate::buildinfo::info()) },
+        run: |ss, _a| {let mut v=crate::buildinfo::info();v["limits"]=serde_json::to_value(ss.resource_limits).map_err(|e|e.to_string())?;Ok(v)} },
     Command { name: "cache_stats", description: "Frame cache statistics: entries, bytes, cap, hits, misses, evictions, hit_rate. The cache holds recently rendered frames for scrubbing and repeated render_frame / get_scopes; it is never used by export.", mutates: false,
         schema: obj(vec![], &[]),
         run: |ss, _a| { let f = &ss.fcache; let tot = f.hits + f.misses; Ok(json!({"entries": f.len(), "bytes": f.bytes(), "cap_bytes": f.cap, "hits": f.hits, "misses": f.misses, "evictions": f.evictions, "hit_rate": if tot == 0 { 0.0 } else { f.hits as f64 / tot as f64 }})) } },

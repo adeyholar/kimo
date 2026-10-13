@@ -102,7 +102,7 @@ fn unregistered_path_fields_fail() {
         ("color/bake.rs", "path", "NOT A PROJECT FIELD: bake step input, per call"), ("color/bake.rs", "config_path", "NOT A PROJECT FIELD: bake step input, per call"),
         ("color/mux.rs", "dir", "NOT A PROJECT FIELD: temp transaction dir"), ("audio.rs", "path", "NOT A PROJECT FIELD: temp wav"), ("commands.rs", "path", "OUTPUT: Media.path, an image a tool call produced (cleared every dispatch), not stored in the project"),
     ];
-    let reg_keys: &[(&str, &str)] = &[("path", "REF lut effect"), ("config_path", "REF OCIO config on any effect"), ("dir", "REF matte store on mask layers"), ("cube_text", "inline, not a file"), ("d", "SVG path data, not a file"), ("profile", "inline table"), ("mask_layer", "layer id")];
+    let reg_keys: &[(&str, &str)] = &[("aux_path", "REF pixel_expr/displace map resolved through deps"), ("path", "REF lut effect"), ("config_path", "REF OCIO config on any effect"), ("dir", "REF matte store on mask layers"), ("cube_text", "inline, not a file"), ("d", "SVG path data, not a file"), ("profile", "inline table"), ("mask_layer", "layer id")];
     let looks = |n: &str| { n == "path" || n == "file" || n == "src" || n == "lut" || n == "font" || n == "texture" || n == "occlusion" || n == "font_file" || n.ends_with("_path") || n.ends_with("_file") || n.ends_with("_dir") || n == "dir" };
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     fn files(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) { for e in std::fs::read_dir(d).unwrap().flatten() { let p = e.path(); if p.is_dir() { files(&p, out) } else if p.extension().map_or(false, |x| x == "rs") { out.push(p) } } }
@@ -169,6 +169,10 @@ fn open_sites_are_classified() {
         ("ext/subtitle_export.rs", 5, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/transcript_tools.rs", 1, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("ext/undistort.rs", 1, "caller path (tool argument / output / temp file / test), not stored in the project"),
+        ("pixels.rs", 2, "PROJECT-DERIVED, resolved by pixel media/decode callers; caller file reads by tools"),
+        ("resource_limits.rs", 1, "fixed /proc/meminfo physical RAM source"),
+        ("ext/audio_samples.rs", 3, "caller raw path resolved with project.resolve; engine-owned hash asset verification and output"),
+        ("ext/pixel_tools.rs", 3, "caller input path or private hash-addressed asset verification"),
         ("framecache.rs", 1, "PROJECT-DERIVED, resolved through deps (resolve / resolve_str) at the call site"),
         ("guard.rs", 3, "caller path (tool argument / output / temp file / test), not stored in the project"),
         ("matte.rs", 1, "PROJECT-DERIVED, resolved through deps (resolve / resolve_str) at the call site"),

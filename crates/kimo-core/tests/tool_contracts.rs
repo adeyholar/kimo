@@ -524,3 +524,45 @@ fn tr_csv() -> String {
     row_err(&s, "recipe_apply", json!({"name": "title_card", "start": -1.0, "params": {"title": "x"}}), Some("start"));
     row_err(&s, "recipe_apply", json!({"name": "title_card", "params": {"title": "x"}}), None);
 }
+#[test] fn audio_speech_intervals_silent_contract_and_errors(){
+ let mut s=Session::new();let t=call(&mut s,"add_track",json!({}))["track_id"].clone();call(&mut s,"add_clip",json!({"track_id":t,"source_type":"solid","start":0,"duration":1}));
+let before=pj(&s);let r=call(&mut s,"audio_speech_intervals",json!({"target":"mix"}));assert_eq!(r["speech"],json!([]));assert_eq!(r["count"],0);assert_eq!(r["speech_ratio"],0.);assert_eq!(r["truncated"],false);assert_eq!(r["params"]["pad_ms"],120.);assert_eq!(r["method"],"energy_zcr_spectral_vad_v1");assert_eq!(pj(&s),before);assert_eq!(r,call(&mut s,"audio_speech_intervals",json!({"target":"mix"})));
+ let a=call(&mut s,"audio_probe",json!({"target":{"mix":true}}));let b=call(&mut s,"audio_speech_intervals",json!({"target":"mix","mode":"silence"}));assert_eq!(a["silence"],b["silence"]);
+ let wave=call(&mut s,"audio_speech_intervals",json!({"target":"mix","image":"waveform"}));assert!(std::path::Path::new(wave["waveform"]["path"].as_str().unwrap()).exists());assert_eq!(pj(&s),before);assert!(dispatch(&mut s,"audio_speech_intervals",&json!({"target":{"clip_id":"missing"}})).is_err());assert!(dispatch(&mut s,"audio_speech_intervals",&json!({"aggressiveness":4})).is_err());
+}
+#[test]fn audio_transients_contract_read_only_silence_and_errors(){
+ let(s,_,_,_)=one_clip();row(&s,"audio_transients",json!({"target":"mix"}),|r,b,a|{assert_eq!(r["count"],0);assert_eq!(a,b);});
+ row_err(&s,"audio_transients",json!({"target":"mix","start":100}),Some("range_empty"));row_err(&s,"audio_transients",json!({"mode":"bogus"}),Some("Valid:"));
+}
+#[test] fn set_keyframes_rows_write_atomically_and_reject_bad_keys() {
+    let (s, _t1, _t2, c) = one_clip();
+    row(&s, "set_keyframes", json!({"clip_id": c, "property": "opacity", "keys": [{"t": 2.0, "v": 3.0}, {"t": 0.0, "v": 0.0, "ease": "out"}]}), |r, b, a| { assert_eq!(r["written"], 2); assert_ne!(b, a); });
+    row_err(&s, "set_keyframes", json!({"clip_id": c, "property": "opacity", "keys": [{"t": 0.0, "v": 1.0}, {"t": 1.0}]}), Some("keys[1]"));
+    row_err(&s, "set_keyframes", json!({"clip_id": c, "property": "opacity", "keys": [{"t": 0.0, "v": 1.0, "ease": "wobble"}]}), Some("Valid:"));
+    row_err(&s, "set_keyframes", json!({"clip_id": c, "property": "nope", "keys": [{"t": 0.0, "v": 1.0}]}), Some("Valid:"));
+}
+#[test] fn set_expression_generator_rows() {
+    let (s, _t1, _t2, c) = one_clip();
+    row(&s, "set_expression", json!({"clip_id": c, "property": "opacity", "op": "spring", "from": 0.0, "to": 1.0}), |r, b, a| { assert_ne!(b, a); assert_eq!(r["ops"], 1); });
+    row(&s, "set_expression", json!({"clip_id": c, "property": "x", "op": "noise_impulse", "seed": 3, "combine": "add"}), |r, _, _| { assert_eq!(r["ops"], 1); });
+    row(&s, "set_expression", json!({"clip_id": c, "property": "x", "op": "bezier", "duration": 2.0}), |r, _, _| { assert_eq!(r["ops"], 1); });
+    row_err(&s, "set_expression", json!({"clip_id": c, "property": "x", "op": "spring", "mass": -1.0}), Some("mass"));
+    row_err(&s, "set_expression", json!({"clip_id": c, "property": "x", "op": "bezier", "duration": 0.0}), Some("duration"));
+}
+#[test] fn bake_property_rows_replace_keys_and_drop_expressions() {
+    let (s, _t1, _t2, c) = one_clip();
+    row(&s, "bake_property", json!({"clip_id": c, "property": "opacity", "start": 0.0, "end": 1.0, "n": 5}), |r, b, a| { assert_ne!(b, a); assert_eq!(r["keys"], 5); assert_eq!(r["expressions_dropped"], 0); });
+    row(&s, "bake_property", json!({"clip_id": c, "property": "x", "start": 0.0, "end": 2.0, "fps": 10}), |r, _, _| { assert_eq!(r["keys"], 21); });
+    row_err(&s, "bake_property", json!({"clip_id": c, "property": "nope", "start": 0.0, "end": 1.0, "n": 3}), Some("Properties on this clip"));
+    row_err(&s, "bake_property", json!({"clip_id": c, "property": "x", "start": 0.0, "end": 1.0}), Some("fps"));
+}
+#[test] fn sample_property_rows_read_without_changing_anything() {
+    let (s, _t1, _t2, c) = one_clip();
+    row(&s, "sample_property", json!({"clip_id": c, "property": "opacity", "times": [0.0, 1.5, 2.5]}), |r, b, a| { assert_eq!(b, a); assert_eq!(r["values"].as_array().unwrap().len(), 3); assert_eq!(r["active"].as_array().unwrap().len(), 3); });
+    row(&s, "sample_property", json!({"clip_id": c, "property": "x", "times": {"start": 0.0, "end": 3.0, "n": 4}, "space": "clip"}), |r, _, _| { assert_eq!(r["space"], "clip"); });
+    row_err(&s, "sample_property", json!({"clip_id": c, "property": "nope", "times": [0.0]}), Some("Properties on this clip"));
+    row_err(&s, "sample_property", json!({"clip_id": c, "property": "x", "times": []}), Some("1 to"));
+}
+#[test]fn shader_resource_readonly_rows(){for tool in ["get_limits","set_limits"]{row(&[],tool,json!({}),|_,a,b|assert_eq!(a,b));}row(&[],"effect_describe",json!({"kind":"pixel_expr"}),|r,a,b|{assert_eq!(a,b);assert!(r["formula"].as_str().unwrap().contains("expression"));});row(&[],"read_pixels",json!({"time":0,"region":{"x":0,"y":0,"w":1,"h":1}}),|r,a,b|{assert_eq!(a,b);assert_eq!(r["count"],1);});}
+
+#[test]fn raw_audio_key_mutation_and_response_readonly_contracts(){let(s,_,_,_)=one_clip();row(&s,"audio_filter_response",json!({"coeffs":[1],"freqs":[100,1000]}),|r,b,a|{assert_eq!(a,b);assert_eq!(r["response"][0]["magnitude_db"],0.);});row(&s,"audio_effect_describe",json!({"kind":"biquad"}),|r,b,a|{assert_eq!(a,b);assert!(r["formula"].as_str().unwrap().contains("DF-II"));});row_err(&s,"read_samples",json!({"rate":44100}),Some("fixed 48000"));row_err(&s,"import_samples",json!({"rate":0,"channels":2,"data":[]}),Some("rate"));}

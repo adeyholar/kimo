@@ -121,6 +121,15 @@ fn created(results: &[Value]) -> Value { let mut ids: BTreeMap<&'static str, Vec
 
 /// Hash of the whole project JSON: the revision a dry run rehearsed against and a real run may demand (`expect_revision`).
 pub fn revision(ss: &Session) -> String { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); serde_json::to_vec(&ss.project).unwrap_or_default().hash(&mut h); format!("{:016x}", h.finish()) }
+/// Clips the batch created or retimed that end up shorter than `floor` frames (negative drift corrections must never collapse a cut to 0 frames).
+fn short_clips(before: &crate::model::Project, after: &crate::model::Project, floor: u32) -> Vec<(String, f64)> {
+    let fps = after.fps.max(1.0); let mut v = vec![];
+    for c in after.tracks.iter().flat_map(|t| t.clips.iter()) {
+        let touched = match before.find_clip(&c.id) { None => true, Some(b) => (b.duration - c.duration).abs() > 1e-9 || (b.start - c.start).abs() > 1e-9 };
+        if touched && c.duration * fps < floor as f64 - 1e-6 { v.push((c.id.clone(), c.duration * fps)); }
+    }
+    v
+}
 pub fn batch(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let ops = parse_ops(a)?;
     let rev = revision(ss);
@@ -130,7 +139,12 @@ pub fn batch(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let label = a.get("label").and_then(|v| v.as_str()).map(|s| sanitize(s));
     let (errs, warns) = validate(ss, &ops); if !errs.is_empty() { return Err(validation_error(&errs)); }
     let before = ss.project.clone();
-    let run = run_ops(ss, &ops, &warns, atomic, stop);
+    let floor = match a.get("min_clip_frames") { None | Some(Value::Null) => 2u32, Some(v) => match v.as_u64() { Some(n) if (0..=4).contains(&n) => n as u32, _ => return Err("min_clip_frames must be a whole number from 0 to 4 (0 disables the check)".into()) } };
+    let mut run = run_ops(ss, &ops, &warns, atomic, stop);
+    if run.failed.is_empty() && floor > 0 { let short = short_clips(&before, &ss.project, floor);
+        if !short.is_empty() { let list = short.iter().map(|(id, f)| format!("{id} ({:.2} frames)", f)).collect::<Vec<_>>().join(", "); let m = format!("clip_too_short: {list} would end up under {floor} frame(s); a trim or drift correction collapsed a clip (fix the ops or pass min_clip_frames lower; 0 disables)");
+            if atomic || dry { let i = ops.len().saturating_sub(1); run.failed.push(json!({"index": i, "id": ops[i].id, "tool": ops[i].tool, "error": {"code": "clip_too_short", "message": m, "param": "min_clip_frames"}, "clips": short.iter().map(|x| x.0.clone()).collect::<Vec<_>>()})); }
+            else { run.warnings.push(json!({"index": ops.len().saturating_sub(1), "code": "clip_too_short", "warnings": [m]})); } } }
     if !run.failed.is_empty() && (atomic || dry) {
         ss.project = before; let f = run.failed[0].clone(); let i = f["index"].as_u64().unwrap_or(0);
         return Err(err_text("batch_failed", &format!("ops[{i}] ({}) failed: {} (rolled back, nothing applied)", f["tool"].as_str().unwrap_or(""), f["error"]["message"].as_str().unwrap_or("")), json!({"failed_op": f, "applied": 0, "rolled_back": true})));
@@ -145,8 +159,8 @@ pub fn batch(ss: &mut Session, a: &Value) -> Result<Value, String> {
     Ok(out)
 }
 pub fn commands() -> Vec<Command> { vec![
-    Command { name: "batch", description: "Run many tool calls as ONE atomic, undoable step. ops: [{id?, tool, args}] (max 500). atomic (default true): any failure restores the project exactly (ids included) and returns batch_failed and the failing op index. dry_run: validates and runs on the live project, then discards it; returns the ids a real run would create. stop_on_error (default true); with atomic:false the ops done so far are kept as one history entry. References: a string value \"$<op_id>.<field>\" (e.g. \"$a.clip_id\", \"$sc.clip_ids[0]\") is replaced by that field of an EARLIER op's result, keeping its type; ops without an id are \"$1\", \"$2\" by position; write \"$$\" for a literal $. Validation reports every problem (op index, allowed values) before anything runs. Forbidden inside a batch: batch, undo, redo, restore, load_project, save_project, checkpoint, checkpoint_delete, collect_project, relink_media, recipe_apply, export*, render_job*, history_*; project_set only as the first op. return: summary (default) or full. dry_run returns `revision` (a hash of the project it rehearsed against); pass it back as expect_revision and the real run is rejected as a drift error if anything changed in between. Result: ok, applied, revision, results, created {clip_ids, track_ids, asset_ids, effect_ids}, warnings, elapsed_ms.", mutates: true,
-        schema: obj(vec![("ops", json!({"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"tool":{"type":"string"},"args":{"type":"object"}},"required":["tool"]},"description":"ordered tool calls, max 500"})), ("atomic", json!({"type":"boolean"})), ("dry_run", json!({"type":"boolean"})), ("stop_on_error", json!({"type":"boolean"})), ("label", s("history label")), ("expect_revision", s("revision returned by a dry run; the batch is rejected as a drift error when the live project no longer matches")), ("return", json!({"type":"string","enum":["summary","full"]}))], &["ops"]), run: batch },
+    Command { name: "batch", description: "Run many tool calls as ONE atomic, undoable step. ops: [{id?, tool, args}] (max 500). atomic (default true): any failure restores the project exactly (ids included) and returns batch_failed and the failing op index. dry_run: validates and runs on the live project, then discards it; returns the ids a real run would create. stop_on_error (default true); with atomic:false the ops done so far are kept as one history entry. References: a string value \"$<op_id>.<field>\" (e.g. \"$a.clip_id\", \"$sc.clip_ids[0]\") is replaced by that field of an EARLIER op's result, keeping its type; ops without an id are \"$1\", \"$2\" by position; write \"$$\" for a literal $. Validation reports every problem (op index, allowed values) before anything runs. Forbidden inside a batch: batch, undo, redo, restore, load_project, save_project, checkpoint, checkpoint_delete, collect_project, relink_media, recipe_apply, export*, render_job*, history_*; project_set only as the first op. return: summary (default) or full. dry_run returns `revision` (a hash of the project it rehearsed against); pass it back as expect_revision and the real run is rejected as a drift error if anything changed in between. min_clip_frames (0-4, default 2; 0 disables): any clip the batch creates or retimes that ends under this many frames fails the batch with code clip_too_short (atomic/dry_run roll back; atomic:false only warns). Result: ok, applied, revision, results, created {clip_ids, track_ids, asset_ids, effect_ids}, warnings, elapsed_ms.", mutates: true,
+        schema: obj(vec![("ops", json!({"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"tool":{"type":"string"},"args":{"type":"object"}},"required":["tool"]},"description":"ordered tool calls, max 500"})), ("atomic", json!({"type":"boolean"})), ("min_clip_frames", json!({"type":"integer","minimum":0,"maximum":4,"description":"default 2: guards against accidental collapsed clips (clips the batch creates or retimes must be at least this many frames); 0 disables"})), ("dry_run", json!({"type":"boolean"})), ("stop_on_error", json!({"type":"boolean"})), ("label", s("history label")), ("expect_revision", s("revision returned by a dry run; the batch is rejected as a drift error when the live project no longer matches")), ("return", json!({"type":"string","enum":["summary","full"]}))], &["ops"]), run: batch },
 ] }
 
 /// Strip control chars and cap length for any untrusted text echoed in errors.

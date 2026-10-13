@@ -22,6 +22,7 @@ pub struct StaticCrop { x0: usize, y0: usize, x1: usize, y1: usize, d: Vec<f32> 
 impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new(), size: (0, 0, 0.0), export_mode: false, statics: std::sync::RwLock::new(HashMap::new()) } } pub fn new_export() -> Self { let mut c = Cache::new(); c.export_mode = true; c } pub fn frames_of(&self, id: &str) -> Option<&Frames> { self.frames.get(id).map(|x| x.1.as_ref()) } }
 
 pub fn probe(path: &str) -> Result<(u32, u32, f64, f64), String> {
+    if path.ends_with(".kimopx") { let f=crate::pixels::read(path)?; return Ok((f.w as u32,f.h as u32,0.,25.)); }
     if [".tif",".tiff"].iter().any(|e|path.to_lowercase().ends_with(e)){let(w,h)=crate::color::interchange::tiff_size(path)?;return Ok((w,h,0.,25.))}
     let out = Command::new("ffprobe").args(["-v", "error", "-select_streams", "v:0", "-show_entries",
         "stream=width,height,r_frame_rate,duration:format=duration", "-of", "json", path])
@@ -120,6 +121,11 @@ const WINDOW: usize = 24;
 /// Decode `n` frames starting at global clip frame `a` (windowed: memory stays bounded for any clip length).
 fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frames, String> {
     let (w, h) = (p.width, p.height);
+    if path.ends_with(".kimopx") {
+      let src=crate::pixels::read(path)?;
+      let d=if src.w==w as usize && src.h==h as usize {src.d} else {crate::color::interchange::fit(&src,w as usize,h as usize,c.props.get("fit").map(|q|q.at(0.)).unwrap_or(0.))?};
+      return Ok(Frames{still:true,working_linear:true,quantized:Default::default(),linear_buf:Some(d),buf:vec![],fs:w as usize*h as usize*4,first:0});
+    }
     if p.color_pipeline.enabled&&[".tif",".tiff"].iter().any(|e|path.to_lowercase().ends_with(e)){
       let mut src=crate::color::interchange::tiff_frame(path,decode_cache_limit())?;
       let fit=c.props.get("fit").map(|q|q.at(0.)).unwrap_or(0.);
@@ -273,7 +279,7 @@ fn source_frame_h(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> (Frame, O
         Source::Scene3D(e) => { let t0 = c.start + lt; crate::scene3d::render_blur(e, &mut f, lt, p.fps, &|off| crate::three_d::Camera::from_props(&p.camera, t0 + off)) }
         Source::ShardBurst(e) => { if let Some(tid) = e.plane.as_ref().and_then(|pl| pl.occlusion_target.as_ref()) { if let Some(occ) = target_screen_occ(p, tid, c.start + lt) { crate::shards::EXT_OCC.with(|cell| *cell.borrow_mut() = Some(occ)); } } let ctx = crate::shards::RenderCtx { work_linear: p.color_pipeline.enabled && p.color_pipeline.linear_resample }; crate::shards::render_ctx(&ctx, e, &mut f, lt, &crate::three_d::Camera::from_props(&p.camera, c.start + lt), p.fps, c.duration) }
         Source::Particles { kind, count, color, size, seed } => {
-            let rnd = |i: u64, k: u64| { let mut x = (seed ^ (i * 0x9E3779B97F4A7C15) ^ (k * 0xBF58476D1CE4E5B9)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 29; (x >> 11) as f64 / (1u64 << 53) as f64 };
+            let rnd = |i: u64, k: u64| { let mut x = (seed ^ i.wrapping_mul(0x9E3779B97F4A7C15) ^ k.wrapping_mul(0xBF58476D1CE4E5B9)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 29; (x >> 11) as f64 / (1u64 << 53) as f64 };
             let (wf, hf) = (w as f64, h as f64);
             for i in 0..*count as u64 {
                 let (r0, r1, r2, r3) = (rnd(i, 1), rnd(i, 2), rnd(i, 3), rnd(i, 4));
@@ -312,6 +318,11 @@ fn source_frame_h(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> (Frame, O
      (f, hint)
 }
 
+/// The whole 2D transform of a clip at clip-local time `lt`, the ONE place the renderer reads x, y, scale, rotation and opacity (A5: parenting composes here).
+#[derive(Clone, Copy, Debug, PartialEq)] pub struct Xform { pub x: f64, pub y: f64, pub scale: f64, pub rotation: f64, pub opacity: f64 }
+pub fn resolve_xform(_p: &Project, c: &Clip, lt: f64) -> Xform { Xform { x: prop(c, "x", lt), y: prop(c, "y", lt), scale: prop(c, "scale", lt), rotation: prop(c, "rotation", lt), opacity: prop(c, "opacity", lt) } }
+/// One field of `resolve_xform`, evaluating only that field (same cost as the old direct prop read; every renderer path calls this instead of reading the props).
+fn xprop(_p: &Project, c: &Clip, k: &str, lt: f64) -> f64 { match k { "x" => prop(c, "x", lt), "y" => prop(c, "y", lt), "scale" => prop(c, "scale", lt), "rotation" => prop(c, "rotation", lt), _ => prop(c, "opacity", lt) } }
 fn prop(c: &Clip, k: &str, lt: f64) -> f64 { c.props.get(k).map(|x| x.at(lt)).unwrap_or(0.0) }
 /// like prop, but a missing property is `d` (fill_alpha / stroke_alpha default to 1 so old projects render as before)
 fn prop_or(c: &Clip, k: &str, lt: f64, d: f64) -> f64 { c.props.get(k).map(|x| x.at(lt)).unwrap_or(d) }
@@ -429,7 +440,7 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
             if let Some(g)=&c.grade_graph{g.apply(&mut adj,lt,seed,p.fps)?;}
             p.grade_scopes.apply_clip(p,&c.id,&mut adj,lt,seed)?;
             prof("adjust", tpa);
-            let op = prop(c, "opacity", lt) as f32; let mk: Option<Frame> = c.mask.as_ref().map(|m| { let mut mf = Frame::new(w, h); for i in 0..w*h { mf.d[i*4] = out.d[i*4]; mf.d[i*4+1] = out.d[i*4+1]; mf.d[i*4+2] = out.d[i*4+2]; mf.d[i*4+3] = 1.0; } apply_mask(&mut mf, m, lt); { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut mf, &m.layers, lt, &ctx); } mf });
+            let op = xprop(p, c, "opacity", lt) as f32; let mk: Option<Frame> = c.mask.as_ref().map(|m| { let mut mf = Frame::new(w, h); for i in 0..w*h { mf.d[i*4] = out.d[i*4]; mf.d[i*4+1] = out.d[i*4+1]; mf.d[i*4+2] = out.d[i*4+2]; mf.d[i*4+3] = 1.0; } apply_mask(&mut mf, m, lt); { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut mf, &m.layers, lt, &ctx); } mf });
             for i in 0..w*h { let k = op * mk.as_ref().map(|m| m.d[i*4+3]).unwrap_or(1.0); for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - k) + adj.d[i*4+j] * k; } }
             continue;
         }
@@ -441,12 +452,12 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         if c.effects.iter().any(|e| e.kind == "relight" || e.kind == "fracture_glass") { crate::lighting::set_scene(Some(std::rc::Rc::new(crate::lighting::build_scene(&p.lights, &p.materials, t)))); }
         let tp=std::time::Instant::now(); let r = apply_effects_masked(p, c, &mut f, lt, seed, t, cache); crate::lighting::set_scene(None); BACKDROP.with(|b| *b.borrow_mut() = None); r?; prof("effects", tp); f };
         if let Some(m) = &c.mask { apply_mask(&mut f, m, lt); if !m.layers.is_empty() { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut f, &m.layers, lt, &ctx); } }
-        let mut op = prop(c, "opacity", lt) as f32;
+        let mut op = xprop(p, c, "opacity", lt) as f32;
         let mut c_blend = c.blend.as_str();
         if let (Some(e), true) = (&c.echo, ek > 0) { match e.mode.as_str() { "average" => {} m => { op *= e.decay.clamp(0.0, 1.0).powi(ek as i32) as f32; if m == "add" { c_blend = "add"; } else if m == "screen" { c_blend = "screen"; } } } }
-                let (mut dx, mut dy) = (prop(c, "x", lt), prop(c, "y", lt));
+                let (mut dx, mut dy) = (xprop(p, c, "x", lt), xprop(p, c, "y", lt));
         let mut mask: Option<Box<dyn Fn(usize, usize) -> f32>> = None;
-        let (mut sc, mut rot_extra) = (prop(c, "scale", lt), 0.0);
+        let (mut sc, mut rot_extra) = (xprop(p, c, "scale", lt), 0.0);
         let mp_at = |l2: f64| -> (f64, f64, f64) { match &c.motion_path { Some(mp) => { let (x, y, a) = crate::motion::sample(mp, prop(c, "path", l2), w, h); (x, y, if mp.auto_orient { a + mp.orient_offset } else { 0.0 }) } None => (0.0, 0.0, 0.0) } };
         let (mp0x, mp0y, mp0a) = mp_at(lt); dx += mp0x; dy += mp0y; rot_extra += mp0a; let mut tplan: Option<crate::transitions::Plan> = None;
         if let Some(tr_in) = &c.transition_in { if lt < tr_in.duration {
@@ -458,7 +469,7 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         let f = if let Some(mut pf) = crate::planar::pin_render(c, &f, lt, p.fps) { let adaptive = p.occluders.get(&c.id).map(|s| s.adaptive).unwrap_or(false); if adaptive { if let Some(sp) = p.occluders.get(&c.id) { if let Some(m) = crate::planar::adaptive_matte(c, sp, p.fps, t, w, h) { for i in 0..w * h { pf.d[i * 4 + 3] *= m[i]; } } } } if !adaptive && crate::planar::anchor_src(&c.id).is_none() { if let Some(sp) = p.occluders.get(&c.id) { crate::planar::rebuild_anchor(&c.id, sp, w, h); } } if let Some((sid, sstart)) = crate::planar::anchor_src(&c.id).filter(|_| !adaptive) { if let (Some(fr), Some(q)) = (cache.frames_of(&sid), crate::planar::pin_quad(c, lt)) { if let Some(cur) = fr.get(((t - sstart).max(0.0) * p.fps) as usize) { let g = prop(c, "pin_gain", lt) as f32; if let Some(m) = crate::planar::occluder_matte(&c.id, cur, &q, if g > 0.0 { g } else { 1.0 }) { for i in 0..w * h { pf.d[i * 4 + 3] *= m[i]; } } } } } pf } else if let Some(cs) = &c.corners { corner_pin(&f, cs) } else { f };
         let (rxv, ryv, pzv) = (prop(c, "rot_x", lt), prop(c, "rot_y", lt), prop(c, "pos_z", lt));
         if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 {
-            let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(c, "rotation", lt) + rot_extra], scale: sc };
+            let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, xprop(p, c, "rotation", lt) + rot_extra], scale: sc };
             let mut f3 = crate::three_d::render_layer(&f, &cam, &pose, prop(c, "backface", lt) != 0.0);
             // frosted_glass on a tilted layer: the pane is the projected silhouette, and it frosts what is really under it
             if c.effects.iter().any(|e| crate::effects2::is_post(&e.kind)) { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); crate::frosted::set_post(true); crate::frosted::set_tilt((ryv.to_radians().sin()) as f32, (-rxv.to_radians().sin()) as f32); crate::frosted::set_slab(Some(crate::three_d::Projector::new(w, h, &cam, &pose)));
@@ -466,14 +477,14 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
                 crate::frosted::set_post(false); crate::frosted::set_tilt(0.0, 0.0); crate::frosted::set_slab(None); BACKDROP.with(|b| *b.borrow_mut() = None); r?; }
             blend(&mut out, &f3, op, c_blend, mask.as_deref()); if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } } continue;
         }
-        let moving = c.motion_blur > 0.0 && ek == 0 && { let sh0 = c.motion_blur / 360.0 / p.fps; ["x", "y", "scale", "rotation"].iter().any(|k| (prop(c, k, lt - sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9 || (prop(c, k, lt + sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9) };
+        let moving = c.motion_blur > 0.0 && ek == 0 && { let sh0 = c.motion_blur / 360.0 / p.fps; ["x", "y", "scale", "rotation"].iter().any(|k| (xprop(p, c, k, lt - sh0 * 0.5) - xprop(p, c, k, lt)).abs() > 1e-9 || (xprop(p, c, k, lt + sh0 * 0.5) - xprop(p, c, k, lt)).abs() > 1e-9) };
         let mut from_tb = false; let tp=std::time::Instant::now(); let hint_ok = SHAPE_HINT.load(std::sync::atomic::Ordering::Relaxed) && src_hint.is_some() && c.effects.is_empty() && c.mask.is_none() && tplan.is_none() && !p.color_pipeline.enabled && !c.props.keys().any(|k| k.starts_with("pin_") || k.starts_with("mesh_")); let bbf = if hint_ok { alpha_bbox_in(&f, src_hint.unwrap()) } else { alpha_bbox(&f) }; prof("bbox", tp); let tp=std::time::Instant::now(); let f = if moving { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h]; let mut u: Option<(usize, usize, usize, usize)> = None;
-            for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (prop(c, "x", lt2), prop(c, "y", lt2)); dx2 += dx - prop(c, "x", lt) - mp0x; dy2 += dy - prop(c, "y", lt) - mp0y; let (mp2x, mp2y, mp2a) = mp_at(lt2); dx2 += mp2x; dy2 += mp2y;
-                let mut sc2 = prop(c, "scale", lt2); if sc != prop(c, "scale", lt) { sc2 *= sc / prop(c, "scale", lt).max(1e-9); } LAST_RECT.with(|l| l.set(None)); FAST_NS.with(|l| l.set(true)); let tf = transform_bb(&f, bbf, sc2, prop(c, "rotation", lt2) + rot_extra - mp0a + mp2a, dx2, dy2); FAST_NS.with(|l| l.set(false));
+            for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (xprop(p, c, "x", lt2), xprop(p, c, "y", lt2)); dx2 += dx - xprop(p, c, "x", lt) - mp0x; dy2 += dy - xprop(p, c, "y", lt) - mp0y; let (mp2x, mp2y, mp2a) = mp_at(lt2); dx2 += mp2x; dy2 += mp2y;
+                let mut sc2 = xprop(p, c, "scale", lt2); if sc != xprop(p, c, "scale", lt) { sc2 *= sc / xprop(p, c, "scale", lt).max(1e-9); } LAST_RECT.with(|l| l.set(None)); FAST_NS.with(|l| l.set(true)); let tf = transform_bb(&f, bbf, sc2, xprop(p, c, "rotation", lt2) + rot_extra - mp0a + mp2a, dx2, dy2); FAST_NS.with(|l| l.set(false));
                 if let Some((rx0, ry0, rx1, ry1)) = LAST_RECT.with(|l| l.get()) { u = Some(match u { Some((a, b, c2, d)) => (a.min(rx0), b.min(ry0), c2.max(rx1), d.max(ry1)), None => (rx0, ry0, rx1, ry1) });
                 for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; let a = tf.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += tf.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; wsum[i] += a; } } } } }
             if let Some((rx0, ry0, rx1, ry1)) = u { for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } } } acc }
-            else if (sc - 1.0).abs() < 1e-9 && prop(c, "rotation", lt) + rot_extra == 0.0 && dx == 0.0 && dy == 0.0 { f } else { from_tb = true; transform_bb(&f, bbf, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
+            else if (sc - 1.0).abs() < 1e-9 && xprop(p, c, "rotation", lt) + rot_extra == 0.0 && dx == 0.0 && dy == 0.0 { f } else { from_tb = true; transform_bb(&f, bbf, sc, xprop(p, c, "rotation", lt) + rot_extra, dx, dy) };
         prof("transform", tp);
         let mut f = f; if let Some(mt) = c.mask.as_ref().and_then(|m| m.matte.as_ref()) { if let Some(src) = render_clip_alone(p, &mt.source, t, cache) { let cov = crate::masks::matte_coverage(mt, &src); for i in 0..w * h { f.d[i * 4 + 3] *= cov[i]; } } }
         // frosted_glass runs here, after the layer transform, so it frosts what is really under the pane
@@ -841,12 +852,12 @@ pub fn target_screen_occ(p: &Project, id: &str, t: f64) -> Option<std::sync::Arc
     let (w, h) = (p.width as usize, p.height as usize);
     let lt = if c.posterize_fps > 0.0 { (((t - c.start) * c.posterize_fps + 1e-6).floor() / c.posterize_fps).max(0.0) } else { (t - c.start).max(0.0) };
     let vis = crate::planar::adaptive_matte(&c, sp, p.fps, t, w, h)?;
-    let (mut dx, mut dy, mut sc, mut rot_extra) = (prop(&c, "x", lt), prop(&c, "y", lt), prop(&c, "scale", lt), 0.0);
+    let (mut dx, mut dy, mut sc, mut rot_extra) = (xprop(p, &c, "x", lt), xprop(p, &c, "y", lt), xprop(p, &c, "scale", lt), 0.0);
     if let Some(mp) = &c.motion_path { let (x, y, a) = crate::motion::sample(mp, prop(&c, "path", lt), w, h); dx += x; dy += y; if mp.auto_orient { rot_extra += a + mp.orient_offset; } }
     if let Some(tr_in) = &c.transition_in { if lt < tr_in.duration { let pl = crate::transitions::plan(tr_in, lt, w, h); dx += pl.dx; dy += pl.dy; sc *= pl.scale; rot_extra += pl.rot; } }
     let (rxv, ryv, pzv) = (prop(&c, "rot_x", lt), prop(&c, "rot_y", lt), prop(&c, "pos_z", lt));
     let mut mf = Frame::new(w, h); for i in 0..w * h { mf.d[i * 4] = vis[i]; mf.d[i * 4 + 1] = vis[i]; mf.d[i * 4 + 2] = vis[i]; mf.d[i * 4 + 3] = 1.0; }
-    let tm = if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 { let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(&c, "rotation", lt) + rot_extra], scale: sc }; crate::three_d::render_layer(&mf, &cam, &pose, prop(&c, "backface", lt) != 0.0) } else { transform_bb(&mf, Some((0, 0, w - 1, h - 1)), sc, prop(&c, "rotation", lt) + rot_extra, dx, dy) };
+    let tm = if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 { let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, xprop(p, &c, "rotation", lt) + rot_extra], scale: sc }; crate::three_d::render_layer(&mf, &cam, &pose, prop(&c, "backface", lt) != 0.0) } else { transform_bb(&mf, Some((0, 0, w - 1, h - 1)), sc, xprop(p, &c, "rotation", lt) + rot_extra, dx, dy) };
     let occ: Vec<f32> = (0..w * h).map(|i| { let a = tm.d[i * 4 + 3].clamp(0.0, 1.0); 1.0 - (tm.d[i * 4] * a + (1.0 - a)) }).collect();
     let arc = std::sync::Arc::new(occ); crate::shards::TARGET_MATTE.with(|m| { m.borrow_mut().insert(id.to_string(), (t, arc.clone())); }); Some(arc)
 }
@@ -886,4 +897,26 @@ fn static_layer(p: &Project, c: &Clip, lt: f64, seed: u64, t: f64, cache: &Cache
     let l = args(&legacy_encoder_command_opts(&p, "o.mp4", 23, true).unwrap());
     assert!(l.windows(2).any(|w| w[0] == "-x264-params" && w[1].contains("rc-lookahead=10")) && l.last().unwrap() == "o.mp4");
     let base = args(&d); assert_eq!(l.iter().filter(|a| !base.contains(a)).count(), 2, "only -x264-params and its value are added");
+}
+
+#[cfg(test)]
+mod prng_overflow_tests {
+    use super::*;
+    use crate::commands::{dispatch, Session};
+    use serde_json::json;
+
+    // count=3 visits i=2; k=2 already overflows the historical product.
+    // Keep this runnable in the default debug profile with overflow checks on.
+    #[test]
+    fn particle_path_overflowing_indices_are_deterministic() {
+        let mut ss = Session::new();
+        dispatch(&mut ss, "project_set", &json!({"width":32,"height":24,"fps":25})).unwrap();
+        let track = dispatch(&mut ss, "add_track", &json!({})).unwrap()["track_id"].as_str().unwrap().to_string();
+        dispatch(&mut ss, "add_particles", &json!({"track_id":track,"kind":"sparks","start":0,"duration":1,"count":3,"seed":5})).unwrap();
+        let a = render_frame(&ss.project, 0.5, &Cache::new()).unwrap();
+        let b = render_frame(&ss.project, 0.5, &Cache::new()).unwrap();
+        assert_eq!(a.d, b.d);
+        assert!(a.d.iter().all(|v| v.is_finite()));
+        assert!(a.d.chunks_exact(4).any(|p| p[3] > 0.0));
+    }
 }
