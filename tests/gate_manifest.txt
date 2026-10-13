@@ -197,6 +197,7 @@ py match_events_mutation.py full
 rust curves fast
 rust names fast
 rust layers fast
+rust project_diff fast
 rust pixels fast
 rust pixel_expr fast
 rust distortion_audit fast
@@ -210,3 +211,4 @@ rust transform_nodes fast
 rust xform_lint fast
 rust export_manifest fast
 rust names_hook fast
+rust export_job fast

@@ -91,3 +91,7 @@
 90 find {"kind":"zzz"}	kind is not allowed. Valid: clip, track
 91 find {"time_range":[2.0,1.0]}	time_range must be [start, end] seconds with start <= end
 92 find {"track":"@missing"}	name_not_found: no track named 'missing'. Nearest: (no track has a name yet; set one with set_meta)
+93 project_diff {"a":"undo:0","b":"current"}	undo:<n> needs n >= 1 (undo:1 = the state before the last change)
+94 project_diff {"a":"nope","b":"current"}	revision 'nope' is not allowed. Valid: current, undo:<n>, checkpoint:<name>, file:<path.kimo>
+95 project_diff {"a":"checkpoint:zzz","b":"current"}	no checkpoint 'zzz'. Existing: 
+96 project_diff {"a":"current"}	b must be a revision string: current, undo:<n>, checkpoint:<name> or file:<path.kimo>

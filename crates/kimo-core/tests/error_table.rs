@@ -42,6 +42,7 @@ fn calls(t1: &str, c: &str) -> Vec<(&'static str, Value)> {
         ("get_transform", json!({"clip_id": c, "space": "zzz"})), ("get_transform", json!({"clip_id": "nope"})), ("add_null", json!({"track_id": "nope", "start": 0.0, "duration": 1.0})),
         ("set_meta", json!({"id": c, "name": "has space"})), ("set_meta", json!({"id": "@nope"})), ("set_meta", json!({"target": "zzz", "id": c})), ("set_meta", json!({"id": c, "tags": ["bad tag"]})), ("set_meta", json!({"target": "track", "id": t1, "role": "x"})),
         ("find", json!({"limit": 0})), ("find", json!({"kind": "zzz"})), ("find", json!({"time_range": [2.0, 1.0]})), ("find", json!({"track": "@missing"})),
+        ("project_diff", json!({"a": "undo:0", "b": "current"})), ("project_diff", json!({"a": "nope", "b": "current"})), ("project_diff", json!({"a": "checkpoint:zzz", "b": "current"})), ("project_diff", json!({"a": "current"})),
     ]
 }
 #[test] fn error_texts_are_byte_identical_to_the_baseline() {

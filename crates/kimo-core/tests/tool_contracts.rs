@@ -585,3 +585,9 @@ let before=pj(&s);let r=call(&mut s,"audio_speech_intervals",json!({"target":"mi
     row_err(&s, "set_meta", json!({"id": c, "name": "bad name"}), Some("invalid_name"));
     row_err(&s, "find", json!({"limit": 0}), Some("limit"));
 }
+
+#[test] fn project_diff_rows() {
+    let (s, _t1, _t2, _c) = one_clip();
+    row(&s, "project_diff", json!({"a": "current", "b": "current"}), |r, b, a| { assert_eq!(b, a); assert_eq!(r["identical"], true); });
+    row_err(&s, "project_diff", json!({"a": "undo:0", "b": "current"}), Some("n >= 1"));
+}

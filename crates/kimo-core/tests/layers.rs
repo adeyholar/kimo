@@ -55,3 +55,15 @@ fn png(ss: &mut Session, extra: Value, path: &str) -> Vec<u8> { let mut a = json
     let hid = view_of(&ss.project, None, Some(&[p.clone()])); assert_eq!(hash(&hid, 1.0), hash(&ss.project, 1.0), "a null parent draws nothing, hiding it changes no pixel");
     let hide_child_parent = view_of(&ss.project, None, Some(&[ids[0].clone()])); assert_ne!(hash(&hide_child_parent, 1.0), hash(&ss.project, 1.0));
 }
+
+#[test] fn diff_frames_compares_two_project_revisions_at_the_same_time() {
+    let (mut ss, ids) = scene(); c(&mut ss, "checkpoint", json!({"name": "v1"}));
+    let same = c(&mut ss, "diff_frames", json!({"a": {"time": 1.0, "source": "snapshot:checkpoint:v1"}, "b": {"time": 1.0, "source": "snapshot:current"}})); assert_eq!(same["metrics"]["changed_ratio"].as_f64().unwrap(), 0.0); assert_eq!(same["a"]["source"], "snapshot:checkpoint:v1");
+    c(&mut ss, "set_property", json!({"clip_id": ids[1], "property": "x", "value": 40.0})); let (h, u) = (pj(&ss), ss.undo.len());
+    let d = c(&mut ss, "diff_frames", json!({"a": {"time": 1.0, "source": "snapshot:checkpoint:v1"}, "b": {"time": 1.0, "source": "snapshot:current"}})); assert!(d["metrics"]["changed_ratio"].as_f64().unwrap() > 0.0, "{d}"); assert_eq!(same["delta"]["bit_identical"], true); assert!(d["delta"]["changed_pixels"].as_u64().unwrap() > 0 && d["delta"]["bbox"].is_array(), "{d}");
+    let back = c(&mut ss, "diff_frames", json!({"a": {"time": 1.0, "source": "snapshot:undo:1"}, "b": {"time": 1.0}})); assert!(back["metrics"]["changed_ratio"].as_f64().unwrap() > 0.0, "undo:1 is the state before the edit, composite is current");
+    let path = "/tmp/n1_rev.kimo"; let v1: Value = serde_json::to_value(&ss.undo[ss.undo.len() - 1]).unwrap(); std::fs::write(path, v1.to_string()).unwrap();
+    let f = c(&mut ss, "diff_frames", json!({"a": {"time": 1.0, "source": format!("file:{path}")}, "b": {"time": 1.0, "source": "snapshot:checkpoint:v1"}})); assert_eq!(f["metrics"]["changed_ratio"].as_f64().unwrap(), 0.0, "a saved file of the same revision is identical");
+    assert_eq!(pj(&ss), h); assert_eq!(ss.undo.len(), u, "read-only");
+    assert!(e(&mut ss, "diff_frames", json!({"a": {"time": 1.0, "source": "snapshot:nope"}, "b": {"time": 1.0}})).contains("Valid:"));
+}
