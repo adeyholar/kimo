@@ -5,61 +5,79 @@
 <h1 align="center">kimo</h1>
 
 <p align="center"><b>A video editor an AI can drive.</b><br>
-MCP-first. Every feature is a tool call. Written in Rust, runs on a 2 GB box.<br>
+MCP-first. Every feature is a tool call. Written in Rust, CPU renderer, runs on a 2 GB box.<br>
 <a href="https://getkimo.tech"><b>getkimo.tech</b></a></p>
 
 <p align="center">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-F4F0E8?labelColor=0E0E12">
   <img alt="language" src="https://img.shields.io/badge/rust-core-FF5C28?labelColor=0E0E12">
-  <img alt="tools" src="https://img.shields.io/badge/MCP%20tools-327%20(v3)-F4F0E8?labelColor=0E0E12">
-  <img alt="fuzz" src="https://img.shields.io/badge/tool%20fuzz-9359%20calls%2C%200%20failures-FF5C28?labelColor=0E0E12">
+  <img alt="tools" src="https://img.shields.io/badge/MCP%20tools-327-F4F0E8?labelColor=0E0E12">
+  <img alt="fuzz" src="https://img.shields.io/badge/tool%20fuzz-6497%20calls%2C%200%20failures-FF5C28?labelColor=0E0E12">
 </p>
 
 ---
 
 ## What it is
 
-Development recipe: `lower_third` expands a title, optional subtitle, panel and accent into ordinary primitive operations. Expansion is deterministic and uses clip-local enter/exit keyframes; RV-11 batch supplies validation, dry-run, revision checks and one-step undo. No hidden renderer or export path.
-Development recipes: `narration_section` preserves RV-8 transcript-bound caption timing and derives speech windows from chosen takes. `lower_third` expands a title, optional subtitle, panel and accent into ordinary primitive operations. Expansion is deterministic and uses clip-local enter/exit keyframes; RV-11 batch supplies validation, dry-run, revision checks and one-step undo. No hidden renderer or export path.
-Scene tools (RV-11): `batch` runs many tool calls as one atomic, undoable step (validates all ops first; dry_run returns the real ids and a `revision`, and `expect_revision` rejects a drifted project). `recipe_list` / `recipe_describe` / `recipe_apply` expand named scenes (`lower_third`, `narration_section`, `title_card`, `stat_counter`, `product_reveal`, `explainer_diagram`) into ordinary tool calls run through `batch`. Stated limits: clips have no name field, so `<prefix>/<role>` labels are returned in the result `roles` map, not stored on clips; `stat_counter` pops its value in (scale and opacity) and does not count up, because text content cannot animate.
-
-Export manifests (U3a): `export_manifest` hashes every clip (content minus names, the bytes of every file it reads, its transform-parent chain, the engine version) and every fixed-length chunk of the timeline; `explain_invalidation` compares the current project with an earlier manifest and names, per chunk, why it is stale (`clip_changed` with the changed parts, `asset_changed`, `settings`, `engine`, `clip_added`, `clip_removed`). Markers, track locks and names never invalidate. Both are read-only.
-
-**v1.0.0.** 255 tools, fuzzed (9359 calls, 0 failures). `main` is the stable v1. The `v2` branch carries the v2 work (263 tools, fuzzed: 9549 calls, 0 failures; see patches/MANIFEST.md for the unit-by-unit changelog).
-
-**v3 branch (2.0.0-dev.1, in development).** 327 tools, fuzzed (6497 calls, 0 failures). `kimo_info` reports the build: version, git commit, project schema version, enabled features, ffmpeg/ffprobe versions. Saved projects carry a `kimo` block (schema_version, created_with, last_saved_with; set `KIMO_NO_IDENTITY=1` to omit it) and export reports carry the same identity. `add_shape` alpha semantics changed: the fill alpha no longer folds into layer opacity. Fill alpha (`fill_alpha`), stroke alpha (`stroke_alpha`) and layer opacity are separate animatable properties, so a hollow ring (fill alpha 0) keeps its stroke. Invalid enum values now error (tool input only; saved projects with old values still load and render as before): add_text align, set_mask shape, add_particles kind, add_text_animator unit, add_transition kind/ease and set_blend mode used to be accepted silently; every rejection lists the allowed values. Old saved projects are unchanged (a project without the new properties renders as before).
-
-Chunked export jobs (RV-6): `export_job_start` renders picture-only chunks in the background (poll with `job_status`, stop with `cancel_job`, continue with `resume_job`) and joins them with one continuous audio stream. A chunk is reused only when its dependency key (see `export_manifest`) matches AND the chunk file's sha256 still verifies; the result lists which chunks were reused or rendered and why. `force:true` re-renders everything. Cancel keeps finished chunks and marks the unfinished one `.partial`; `resume_job` refuses with `resume_mismatch` naming the first differing dependency if the project changed. ETA stays null until 3 chunks have been measured.
-
 kimo is a video editor with no GUI. You talk to it over the [Model Context Protocol](https://modelcontextprotocol.io). Cut, keyframe, grade, track, key, relight, simulate, caption, mix and export are all registered commands, and the MCP server's tool list is generated from that same registry. There is no feature a human can reach that an AI cannot.
 
-The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve in one engine: editing, motion graphics, VFX, tracking and pro color. It is an early engine with honest tiers. Read [FEATURES.md](FEATURES.md) for what is solid, what is beta and what is not built.
+The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve in one engine: editing, motion graphics, VFX, tracking and pro color. It is an early engine with honest tiers. [FEATURES.md](FEATURES.md) lists what is solid, what is beta and what is not built.
 
-- **MCP first.** Add a tool in the registry and it is in the MCP server, the fuzz test and the schema automatically.
-- **CPU, small memory.** The renderer is CPU only and tuned for a 2 GB machine. GPU code is off by default with a CPU fallback.
+## Capabilities
+
+327 registered tools in 14 groups (full list [below](#tool-listing-327-tools)):
+
+| Area | Groups | Examples |
+|---|---|---|
+| Editing | `project`, `timeline` | tracks, clips, trims, ripple and roll edits, speed ramps, multicam, markers, atomic `batch` with undo |
+| Motion | `animate`, `effects` | keyframes and Bezier easing, expressions, camera and shake, corner pin, transitions, adjustment layers |
+| Compositing | `masks`, `graphics` | mask layers and roto, shapes, HUD frames, counters, boxes |
+| Text | `text` | titles, captions, SRT import, text animators |
+| VFX | `vfx3d` | particles, emitters, shard bursts, 3D scene, physics, lights and materials |
+| Tracking | `tracking` | point, planar and mesh tracking, stabilize, camera solve |
+| Color | `color_grade`, `color_science`, `scopes` | grade graphs, curves, ASC CDL, LUTs, ACES and OCIO tools, scopes and exposure analysis |
+| Audio | `audio` | clips, effects, beats, loudness, ducking, speech intervals |
+| Output | `output` | frame and video export, chunked export jobs, GIF, EXR, manifests, frame lint, contact sheets |
+
+## Architecture
+
+- `crates/kimo-core` holds the project model, keyframes, the command registry, tool groups, the CPU renderer, effects, text, audio, tracking and color.
+- `crates/kimo-mcp` is the MCP stdio server. Its tool list is generated from the registry.
+- `kimo` is a command line client for the same tools. The fuzz runner and the schema come from the same registry too.
+- Rendering and decoding: the renderer is CPU only. GPU code is off by default with a CPU fallback. Decode, encode and probing go through `ffmpeg` and `ffprobe`.
+
+Add a tool to the registry and it appears in the MCP server, the CLI, the fuzz test and the schema. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/EXTENDING.md](docs/EXTENDING.md).
+
+## Principles
+
+- **MCP first.** Every tool is callable by name. The default `tools/list` is grouped so a client does not read every schema up front.
+- **CPU, small memory.** Tuned for a 2 GB machine. A cold release build of the whole workspace took 17 minutes on a shared 2 CPU / 2 GB machine (`CARGO_BUILD_JOBS=1`).
 - **Measured, not claimed.** Every "better than X" line in FEATURES.md has a stated baseline and a measured number, including the cases where we lost.
-- **Few entry points.** `tools/list` returns 16 grouped tools (15.7 KB) instead of 255 (176 KB), measured 11.2x smaller (compact JSON, v1.0.0). Every individual tool is still callable by its own name.
-- **Fuzzed.** 255 tools (v1.0.0) / 263 tools (v2), 9359 / 9549 calls, 0 failures, before anything is published.
+- **Fuzzed.** The v3 notes record 6497 fuzz calls with 0 failures at 327 tools. These numbers come from the project notes. They were not re-run for this README.
 
-## Run the v3 branch (build from source, no main merge needed)
+## Install
 
-The prebuilt downloads below are v1.0.0. To run the v3 branch (the tool count in the v3 paragraph above), clone it and build it. Everything in this section was run against a build of this branch.
+**Status of prebuilt downloads.** The v3.0.0 Linux (`.deb` and portable `tar.gz`) and Windows x64 assets are listed on the [Releases page](https://github.com/naman-sharma12345/kimo/releases) once they exist there. Windows x64 is built by a GitHub Actions runner and is not verified until the runner output exists. Until you see assets attached to a release, build from source. Older v1.0.0 downloads are a different, 255-tool build.
+
+### Build from source (Linux x86_64 is the tested platform)
+
+Everything in this section was run against a build of the v3 branch.
 
 **Prerequisites**
 
 - Rust stable (install with [rustup](https://rustup.rs)) and a C linker (`build-essential` on Debian/Ubuntu).
 - `ffmpeg` and `ffprobe` on PATH (`sudo apt install ffmpeg`; checked with ffmpeg 4.4.2). Decode, encode and probing go through them.
 - About 2 GB of RAM is enough to run. The release build is the heavy part: use `CARGO_BUILD_JOBS=1` on a small box (measured 17 minutes for a cold release build of the whole workspace on a shared 2 CPU / 2 GB machine).
-- Linux x86_64 is the tested platform. Other platforms: see the Windows and macOS notes below.
+- Linux x86_64 is the tested platform. Other platforms: see Verification status below.
 
 **Build**
 
 ```
-git clone -b v3 https://github.com/naman-sharma12345/kimo.git
+git clone https://github.com/naman-sharma12345/kimo.git
 cd kimo
 CARGO_BUILD_JOBS=1 cargo build --release --workspace --bins
 ls target/release/kimo target/release/kimo-mcp
-target/release/kimo --version          # prints version 2.0.0-dev.1 and the git commit
+target/release/kimo --version          # prints version the version in Cargo.toml and the git commit
 ```
 
 `kimo-mcp` is the MCP server (stdio). `kimo` is the command line client for the same tools.
@@ -70,7 +88,7 @@ target/release/kimo --version          # prints version 2.0.0-dev.1 and the git 
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | target/release/kimo-mcp
 ```
 
-The reply contains `"serverInfo":{"commit":"...","name":"kimo",...,"version":"2.0.0-dev.1"}`.
+The reply contains `"serverInfo":{"commit":"...","name":"kimo",...,"version":"the version in Cargo.toml"}`.
 
 **Client config.** Use the absolute path of the binary you just built, for example `/home/you/kimo/target/release/kimo-mcp`.
 
@@ -114,47 +132,15 @@ $K tools describe add_clip                                             # argumen
 
 Ids (`track1`, `asset2`) are what the previous call returned, so read them from the output. `export` checks free memory first and refuses with a clear message when the frame would not fit; set `KIMO_MEM_MB` to override its budget. Exit codes: 0 ok, 1 tool error, 2 usage, 3 preflight failed. `kimo --help` lists every subcommand.
 
-## Install
-
-**Download a binary (Linux x86_64, static, no dependencies except ffmpeg):**
-
-Windows x64 also ships a per-user setup installer and portable ZIP, with the
-same MCP server and bundled fonts. Download Windows assets from
-[GitHub Releases](https://github.com/naman-sharma12345/kimo/releases), or from
-a manual `release` workflow run's artifacts. See the
-[Windows setup guide](packaging/windows/WINDOWS.md) for FFmpeg installation
-and MCP configuration. To build locally, run
-`powershell -ExecutionPolicy Bypass -File packaging/windows/build.ps1`
-with Rust, Python 3, and Inno Setup 6 installed.
-
-```
-curl -LO https://github.com/naman-sharma12345/kimo/releases/download/v1.0.0/kimo-v1.0.0-linux-x86_64.tar.gz
-tar xzf kimo-v1.0.0-linux-x86_64.tar.gz
-./kimo-v1.0.0-linux-x86_64/kimo-mcp        # speaks MCP over stdin/stdout
-```
-
-The binary is about 10 MB and answers its first MCP request in about 2 ms (measured: `initialize` 2 ms, first `tools/list` 6 ms). It is statically linked (musl), so it runs on any x86_64 Linux. It needs `ffmpeg` and `ffprobe` on PATH for decode and encode.
-
-**Windows x64:** download the installer (`kimo-1.0.0-windows-x86_64-setup.exe`) or the portable ZIP from the [Windows release](https://github.com/naman-sharma12345/kimo/releases/tag/v1.0.0-windows.1). The installer is unsigned, so Windows may show a SmartScreen warning; check the `.sha256` file next to it. See the [Windows setup guide](packaging/windows/WINDOWS.md).
-
-macOS binaries are not shipped yet; build from source there (below).
-
-**Build from source** (Rust stable):
-
-```
-cargo build --release                 # target/release/kimo-mcp
-python3 examples/demo_grade.py        # graded 2-clip sequence with a transition, built only with MCP calls
-python3 examples/effects_gallery.py   # renders every effect
-```
 
 ## Setup: add kimo to your AI client
 
 kimo is a local MCP server that speaks over stdin/stdout (the "stdio" transport). There is nothing to start by hand: your client launches `kimo-mcp` itself. You only need the path to the binary.
 
-**1. Get the binary** (see Install above) and put it somewhere stable, for example:
+**1. Get the binary** (build from source, see Install above) and put it somewhere stable, for example:
 
 ```
-mkdir -p ~/.local/bin && cp kimo-v1.0.0-linux-x86_64/kimo-mcp ~/.local/bin/
+mkdir -p ~/.local/bin && cp /path/to/kimo/target/release/kimo-mcp ~/.local/bin/
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | ~/.local/bin/kimo-mcp
 ```
 
@@ -221,46 +207,26 @@ Windows: use the path to `kimo-mcp.exe` (the installer puts it in `%LOCALAPPDATA
 
 **3. Try it.** Ask your assistant: "Use kimo to import /path/to/clip.mp4, add a title, and render a frame." Or drive it yourself with the Python client in `examples/mcp_client.py`.
 
-### Tool list profiles and recommended client setup
-`KIMO_TOOLS` picks what `tools/list` returns. Every one of the 268 tools can be called by its own name under every profile.
 
-| Profile | `tools/list` size | Use when |
-|---|---|---|
-| `grouped` (default) | 17 entries, about 4.5 KB | small context windows. Call a group with `action` and `args`, find tools with `search_tools`. |
-| `core` | 29 entries, about 19 KB | the 26 most used tools with full schemas, plus `search_tools`, `kimo_describe`, `kimo_enable_group`. |
-| `flat` | 270 entries, about 185 KB | clients with large context or tool search of their own. |
-| `audio,color_grade` (group names) | those groups listed flat, the rest grouped | you work in a few areas. |
+### Tool list profiles
+`KIMO_TOOLS` picks what `tools/list` returns. Every tool can be called by its own name under every profile.
 
-`search_tools(query, limit=8, group?)` returns ranked tools, effects and transitions with the required args and a `call_as` hint, so one search reaches any tool. `kimo_enable_group(name)` lists a group's tools individually from then on and sends `notifications/tools/list_changed` (the server advertises `tools.listChanged`). `tests/discovery_metric.py` measures calls and bytes to the first correct call for 10 tasks under each profile.
+| Profile | Use when |
+|---|---|
+| `grouped` (default) | small context windows. Call a group with `action` and `args`; find tools with `search_tools`. |
+| `core` | the most used tools with full schemas, plus `search_tools`, `kimo_describe`, `kimo_enable_group`. |
+| `flat` | clients with large context or their own tool search. Every tool listed with its schema. |
+| group names, e.g. `audio,color_grade` | those groups listed flat, the rest grouped. |
 
-Recommended: start with the default. If your client re-reads the list on every turn and has the room, use `core`. Set it like this:
+`search_tools(query, limit=8, group?)` returns ranked tools, effects and transitions with the required args and a `call_as` hint. Sizes of each profile were measured on earlier builds (v1.0.0: grouped 15.7 KB vs flat 176 KB) and have not been re-measured on 327 tools.
 
-```
-claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -- /home/you/.local/bin/kimo-mcp
-```
-
-```toml
-[mcp_servers.kimo.env]
-KIMO_TOOLS = "core"
-```
-
-For JSON configs add `"env": { "KIMO_TOOLS": "core" }` to the server entry (OpenCode: `"environment": { "KIMO_TOOLS": "core" }`).
+Set it like this: `claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -- /home/you/.local/bin/kimo-mcp`, or `[mcp_servers.kimo.env] KIMO_TOOLS = "core"` for Codex. For JSON configs add `"env": { "KIMO_TOOLS": "core" }` (OpenCode: `"environment": { ... }`).
 
 ## How an AI sees the tools
 
-The default `tools/list` is grouped, so a client does not have to read 255 tool schemas up front.
+Call a group with `{"action": "<tool name>", "args": {...}}`, for example `{"name": "vfx3d", "action": "add_scene3d", "args": {...}}`. Calling a tool by its own name also works.
 
-| Group | What it covers |
-|---|---|
-| project, timeline, animate, effects | project and media, edits, keyframes and motion, effects and transitions |
-| masks, text, graphics, vfx3d | masks and roto, text and captions, shapes and HUD, 3D, particles and fracture |
-| tracking, color_grade, color_science, scopes | tracking and camera solve, grading, color management, measurement |
-| audio, output | audio, render and export |
-| search_tools, kimo_describe, kimo_enable_group | find a tool by keywords (also searches the effect and transition catalogs; kimo_search is the older, unlisted form), get one action's full arguments, list a group flat (also searches the effect and transition catalogs), get one action's full arguments |
-
-Call a group with `{"action": "<tool name>", "args": {...}}`, for example `{"name": "vfx3d", "action": "add_scene3d", "args": {...}}`. Calling a tool by its own name (`add_scene3d`) still works, and `tools/list` with `{"mode": "flat"}` (or `KIMO_TOOLS=flat`) lists all 255. A new tool is placed in a group by name rules in `crates/kimo-core/src/toolgroups.rs`, and a unit test fails if one is left unassigned. `tests/group_proof.py` checks that every tool is in exactly one group and that grouped and direct calls give the same result.
-
-## v3 tool listing (327 registry tools)
+## Tool listing (327 tools)
 
 This is the list the v3 build registers (read from `tools/list` of the grouped server plus `kimo_describe group=<name>`, 327 tools in 14 groups; the grouped `tools/list` itself shows 14 group tools plus `search_tools`, `kimo_describe`, `kimo_enable_group`). The release tag `v3.0.0` points at commit `b7faad6`; the build still reports version `2.0.0-dev.1` from `kimo --version` and `kimo_info`. Get any tool's arguments with `kimo tools describe <name>` or `kimo_describe`, and find tools by words with `search_tools`.
 
@@ -281,25 +247,16 @@ This is the list the v3 build registers (read from `tools/list` of the grouped s
 | `audio` (17) | `add_audio_clip`, `set_audio`, `set_audio_volume_key`, `detect_beats`, `set_audio_effect_key`, `audio_filter_response`, `audio_effect_describe`, `audio_probe`, `read_samples`, `import_samples`, `audio_transients`, `add_audio_effect`, `remove_audio_effect`, `set_audio_pan`, `normalize_loudness`, `auto_duck`, `audio_speech_intervals` |
 | `output` (40) | `export_audio`, `export_gif`, `render_frame`, `export`, `join_export`, `export_alpha`, `export_aces2_reference_video`, `render_aces2_reference`, `render_float_tiff`, `render_float_exr`, `render_high_bit_still`, `export_high_bit`, `export_grade_lut`, `export_camera_solve`, `export_asc_cdl`, `export_color_pipeline_lut`, `contact_sheet`, `describe_frame`, `detect_cuts`, `diff_frames`, `burn_in`, `export_job_start`, `job_status`, `cancel_job`, `resume_job`, `export_manifest`, `explain_invalidation`, `inspect_export_preset`, `export_preset`, `lint_frame`, `match_events`, `render_ocio_display_view`, `preview_range`, `query_safe_margins`, `session_stats`, `solve_constraints`, `export_with_subtitles`, `compute_text_bounds`, `set_ocio_view_delivery`, `export_ocio_view_video` |
 
-## Layout
+## Verification status
 
-- `crates/` - `kimo-core` (model, keyframes, command registry, tool groups, CPU renderer, effects, text, audio, tracking, color) and `kimo-mcp` (the MCP stdio server)
-- `examples/` - Python client and demos
-- `docs/` - design notes and reviews
-- `tests/` - the tool fuzz runner
-
-Status: early, CPU renderer. See [ROADMAP.md](ROADMAP.md) and [FEATURES.md](FEATURES.md).
+- Registry: 327 tools, the golden registry file `crates/kimo-core/tests/golden/golden_registry.txt` has 327 lines.
+- Fuzz: 6497 calls, 0 failures, as recorded in the v3 notes. Not re-run for this README.
+- Windows x64: unverified until a GitHub Actions runner has produced and smoke-tested the installer and ZIP.
+- macOS: no binaries; build from source.
+- Per-feature limits and change notes: [docs/DEV_NOTES.md](docs/DEV_NOTES.md). Feature tiers: [FEATURES.md](FEATURES.md). Plans: [ROADMAP.md](ROADMAP.md).
 
 ## Contributing and the README rule
 
 The README is updated with every product change. If a change adds, removes or regroups tools, or ships a new proof, the same commit updates this file.
 
 MIT licensed.
-
-### Speech and pause perception
-
-`audio_speech_intervals` gives deterministic speech-like regions and safe pause cut advice from clips, tracks, the mix or files. It is an energy/ZCR/spectral VAD, not neural speech recognition. Default padding is 120 ms; suggestions never edit. Aggressiveness 2-3 rejects steady tones; 0-1 can mistake tone bursts for speech. Silence mode matches audio_probe 100 ms RMS windows. Waveform images are optional. Real-speech precision/recall has not yet been measured.
-
-Guided workflow draft: [A reference film, one step at a time](docs/WORKFLOWS.md). Captured current calls are separated from stages waiting for new APIs.
-
-Frame lint: `lint_frame` is read-only advisory checks, report only, not a design certification: `out_of_bounds`, `text_overflow`, `safe_zone`, `min_text_size`, `text_contrast`, `static_frame`, `invisible_layer`, `low_res_upscale`. Tags `lint:allow_bleed` and `lint:ignore=<code>` silence a check per clip and are counted in the summary; thresholds are echoed in `params_used`; unknown check names return `invalid_check` with the allowed list. `text_contrast` takes the text's source colour and layer opacity as the foreground and samples the rendered background with that text hidden, so gradient text, effects and strokes are not certified. See docs/FRAME_LINT.md.
