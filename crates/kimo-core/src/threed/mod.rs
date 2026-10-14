@@ -6,3 +6,6 @@ pub mod pbr;
 pub mod cpu;
 pub mod backend;
 pub mod import;
+
+pub mod primitives;
+pub mod perspective;
