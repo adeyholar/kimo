@@ -6,7 +6,7 @@ pub fn capabilities()->Capabilities{Capabilities{cpu_reference:true,gpu_feature_
 #[cfg(all(feature="gpu3d",any(target_os="linux",target_os="windows",target_os="macos")))]
 pub async fn probe_software(software_only:bool)->Result<String,String>{
  if wgpu::Instance::enabled_backend_features().is_empty(){return Err("no compiled target backend".into());}
- let instance=wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+ let instance=wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
  let adapter=instance.request_adapter(&wgpu::RequestAdapterOptions{force_fallback_adapter:software_only,compatible_surface:None,..Default::default()}).await.map_err(|e|e.to_string())?;
  Ok(format!("{:?}",adapter.get_info()))
 }
