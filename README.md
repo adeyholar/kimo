@@ -272,3 +272,9 @@ See [the noise plan](docs/noise/PLAN.md) and [verification commands](docs/noise/
 The next WIP field units add explicit Euclidean Worley F1/F2, FBM, domain warp and
 2D potential curl. These are independently selected raw operators, not presets.
 They are also uncompiled and unrendered here. See [field units](docs/noise/FIELD_UNITS.md).
+
+## Camera math primitives (feature-branch WIP)
+
+Explicit-pose projection and camera-space near-plane clipping are drafted as raw
+MCP math tools. Uncompiled, unrendered, not integrated into the legacy renderer.
+They do not yet fix existing Scene3D output. See [camera WIP](docs/camera/WIP.md).
