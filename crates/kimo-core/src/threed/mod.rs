@@ -2,6 +2,8 @@
 pub mod mesh;
 pub mod spatial;
 pub mod flat_sah;
+pub mod sdf_graph;
+pub mod contour_wrapped;
 pub mod sdf;
 pub mod pbr;
 pub mod cpu;
