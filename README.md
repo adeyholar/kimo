@@ -211,14 +211,14 @@ Windows: use the path to `kimo-mcp.exe` (the installer puts it in `%LOCALAPPDATA
 ### Tool list profiles
 `KIMO_TOOLS` picks what `tools/list` returns. Every tool can be called by its own name under every profile.
 
-| Profile | Use when |
-|---|---|
-| `grouped` (default) | small context windows. Call a group with `action` and `args`; find tools with `search_tools`. |
-| `core` | the most used tools with full schemas, plus `search_tools`, `kimo_describe`, `kimo_enable_group`. |
-| `flat` | clients with large context or their own tool search. Every tool listed with its schema. |
-| group names, e.g. `audio,color_grade` | those groups listed flat, the rest grouped. |
+| Profile | `tools/list` entries | Size | Use when |
+|---|---|---|---|
+| `grouped` (default) | 17 | 4,467 bytes | small context windows. Call a group with `action` and `args`; find tools with `search_tools`. |
+| `core` | 29 | 20,369 bytes | the most used tools with full schemas, plus `search_tools`, `kimo_describe`, `kimo_enable_group`. |
+| `flat` | 329 | 254,503 bytes | clients with large context or their own tool search. Every tool listed with its schema. |
+| group names, e.g. `audio,color_grade` | varies | varies | those groups listed flat, the rest grouped. |
 
-`search_tools(query, limit=8, group?)` returns ranked tools, effects and transitions with the required args and a `call_as` hint. Sizes of each profile were measured on earlier builds (v1.0.0: grouped 15.7 KB vs flat 176 KB) and have not been re-measured on 327 tools.
+Entries and sizes were measured on the v3.0.0 static Linux release build (`initialize` then `tools/list`, compact JSON, no client). The 329 in `flat` is the 327 registry tools plus two discovery tools, `search_tools` and `kimo_describe`. `kimo_enable_group` is listed in `grouped` and `core` but not in `flat`. The 327 count in the badge and the tool listing below is the registry (`golden_registry.txt`, 327 lines). `search_tools(query, limit=8, group?)` returns ranked tools, effects and transitions with the required args and a `call_as` hint.
 
 Set it like this: `claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -- /home/you/.local/bin/kimo-mcp`, or `[mcp_servers.kimo.env] KIMO_TOOLS = "core"` for Codex. For JSON configs add `"env": { "KIMO_TOOLS": "core" }` (OpenCode: `"environment": { ... }`).
 
@@ -228,7 +228,7 @@ Call a group with `{"action": "<tool name>", "args": {...}}`, for example `{"nam
 
 ## Tool listing (327 tools)
 
-This is the list the v3 build registers (read from `tools/list` of the grouped server plus `kimo_describe group=<name>`, 327 tools in 14 groups; the grouped `tools/list` itself shows 14 group tools plus `search_tools`, `kimo_describe`, `kimo_enable_group`). The release tag `v3.0.0` points at commit `b7faad6`; the build still reports version `2.0.0-dev.1` from `kimo --version` and `kimo_info`. Get any tool's arguments with `kimo tools describe <name>` or `kimo_describe`, and find tools by words with `search_tools`.
+This is the list the v3 build registers (read from `tools/list` of the grouped server plus `kimo_describe group=<name>`, 327 tools in 14 groups; the grouped `tools/list` itself shows 14 group tools plus `search_tools`, `kimo_describe`, `kimo_enable_group`). `kimo --version` and `kimo_info` report the workspace version, which is 3.0.0 from this release. Get any tool's arguments with `kimo tools describe <name>` or `kimo_describe`, and find tools by words with `search_tools`.
 
 | Group | Tools |
 |---|---|
@@ -249,7 +249,7 @@ This is the list the v3 build registers (read from `tools/list` of the grouped s
 
 ## Verification status
 
-- Registry: 327 tools, the golden registry file `crates/kimo-core/tests/golden/golden_registry.txt` has 327 lines.
+- Registry: 327 tools. The v3.0.0 static build lists 329 entries in `flat` mode: those 327 plus `search_tools` and `kimo_describe`. The golden registry file `crates/kimo-core/tests/golden/golden_registry.txt` has 327 lines.
 - Fuzz: 6497 calls, 0 failures, as recorded in the v3 notes. Not re-run for this README.
 - Windows x64: unverified until a GitHub Actions runner has produced and smoke-tested the installer and ZIP.
 - macOS: no binaries; build from source.
