@@ -1,3 +1,4 @@
+#[cfg(feature="mesh-import")]
 use super::mesh::Mesh;
 /// No material file I/O callback. OBJ triangles only, explicit rejection before
 /// parser triangulation so concave/line/point geometry is never misrepresented.
