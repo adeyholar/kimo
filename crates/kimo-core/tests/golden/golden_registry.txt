@@ -117,6 +117,7 @@ grade_node_tracking 1ffa2a4a07a2951e
 group_clips 39d53498853f9730
 history_list bb1a0f89a5fcc401
 import_media 71b2675a5298c594
+import_mesh_raw 333cadbf73de6f0d
 import_pixels 90496dc0f91defc9
 import_samples 8a66895f38c7ad58
 import_srt 7ae0ccdd578e7529
@@ -131,7 +132,10 @@ inspect_float_media a25c42e425351d98
 inspect_grade_graph 18945dfe59130efd
 inspect_grade_scopes 8b7d146d9123670a
 inspect_high_bit_delivery_contract 60a260a6a2377d8d
+inspect_mesh_buffers a4392c1483aea11f
 inspect_ocio_config 04834eee72a14d76
+inspect_scene_matrices b676789695e0fd2f
+inspect_threed_backend c448f0e8502b0106
 job_status bcf6ed2cefd135f0
 join_export 93d05ac7e76da91f
 kimo_info 22a891990956a689
@@ -176,6 +180,7 @@ project_diff 9156e2b0c03e1a9a
 project_set 00170b74c8eb4359
 query_safe_margins 5cfccf0378618180
 rate_stretch 16dd93dcc17cb7ed
+raycast_mesh_raw d53c8c835ad68be0
 read_pixels 75dec9c4fee7b361
 read_samples 58d6a9f3ea9c7b16
 recipe_apply 2fc7a3ef7390467a
@@ -211,6 +216,7 @@ render_frame b48e89bc076df871
 render_gamut_excursions f6df6ddc9bfdebd2
 render_high_bit_still 87b1c22d2b9d033e
 render_mask a6e52b0441d0b057
+render_mesh_cpu_reference 106df2b961354147
 render_ocio_display_view 413392dc0f5e7a7b
 render_scope 0ba759192f5e77dd
 reorder_mask b182a28a665330c4
@@ -220,10 +226,13 @@ ripple_delete af7455d513b9e3c9
 ripple_trim 67fb9388eed31127
 roll_edit 0e15462a35d306ee
 roto_propagate d82172bedca52a94
+sample_diffuse_sh_raw 7d79d4f10018ecab
 sample_field 00e7b2d0d2c14a73
 sample_linear_neutral f521f85a77fcec69
 sample_noise 0efa7d68b87bccf8
+sample_pbr_raw 86bc792607aa9747
 sample_property 3994cff551e8910e
+sample_sdf_raw b0e579f1cde1279c
 save_project d51a7abb5be457b3
 session_stats 08b78ec5daffb184
 set_animator_keyframe 462777ee7d21e1fe

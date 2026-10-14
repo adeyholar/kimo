@@ -11,7 +11,7 @@ MCP-first. Every feature is a tool call. Written in Rust, CPU renderer, runs on 
 <p align="center">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-F4F0E8?labelColor=0E0E12">
   <img alt="language" src="https://img.shields.io/badge/rust-core-FF5C28?labelColor=0E0E12">
-  <img alt="tools" src="https://img.shields.io/badge/MCP%20tools-334-F4F0E8?labelColor=0E0E12">
+  <img alt="tools" src="https://img.shields.io/badge/MCP%20tools-343-F4F0E8?labelColor=0E0E12">
   <img alt="fuzz" src="https://img.shields.io/badge/tool%20fuzz-6497%20calls%2C%200%20failures-FF5C28?labelColor=0E0E12">
 </p>
 
@@ -25,7 +25,7 @@ The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve
 
 ## Capabilities
 
-334 registered tools in 14 groups (full list [below](#tool-listing-334-tools)):
+343 registered tools in 14 groups (full list [below](#tool-listing-343-tools)):
 
 | Area | Groups | Examples |
 |---|---|---|
@@ -218,7 +218,7 @@ Windows: use the path to `kimo-mcp.exe` (the installer puts it in `%LOCALAPPDATA
 | `flat` | 329 | 254,503 bytes | clients with large context or their own tool search. Every tool listed with its schema. |
 | group names, e.g. `audio,color_grade` | varies | varies | those groups listed flat, the rest grouped. |
 
-Entries and sizes were measured on the v3.0.0 static Linux release build (`initialize` then `tools/list`, compact JSON, no client). The 336 in `flat` is the 334 registry tools plus two discovery tools, `search_tools` and `kimo_describe`. `kimo_enable_group` is listed in `grouped` and `core` but not in `flat`. The 334 count in the badge and the tool listing below is the registry (`golden_registry.txt`, 334 lines). `search_tools(query, limit=8, group?)` returns ranked tools, effects and transitions with the required args and a `call_as` hint.
+Entries and sizes were measured on the v3.0.0 static Linux release build (`initialize` then `tools/list`, compact JSON, no client). The 345 in `flat` is the 343 registry tools plus two discovery tools, `search_tools` and `kimo_describe`. `kimo_enable_group` is listed in `grouped` and `core` but not in `flat`. The 343 count in the badge and the tool listing below is the registry (`golden_registry.txt`, 343 lines). `search_tools(query, limit=8, group?)` returns ranked tools, effects and transitions with the required args and a `call_as` hint.
 
 Set it like this: `claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -- /home/you/.local/bin/kimo-mcp`, or `[mcp_servers.kimo.env] KIMO_TOOLS = "core"` for Codex. For JSON configs add `"env": { "KIMO_TOOLS": "core" }` (OpenCode: `"environment": { ... }`).
 
@@ -226,9 +226,9 @@ Set it like this: `claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -
 
 Call a group with `{"action": "<tool name>", "args": {...}}`, for example `{"name": "vfx3d", "action": "add_scene3d", "args": {...}}`. Calling a tool by its own name also works.
 
-## Tool listing (334 tools)
+## Tool listing (343 tools)
 
-This is the list the v3 build registers (read from `tools/list` of the grouped server plus `kimo_describe group=<name>`, 334 tools in 14 groups; the grouped `tools/list` itself shows 14 group tools plus `search_tools`, `kimo_describe`, `kimo_enable_group`). `kimo --version` and `kimo_info` report the workspace version, which is 3.0.0 from this release. Get any tool's arguments with `kimo tools describe <name>` or `kimo_describe`, and find tools by words with `search_tools`.
+This is the list the v3 build registers (read from `tools/list` of the grouped server plus `kimo_describe group=<name>`, 343 tools in 14 groups; the grouped `tools/list` itself shows 14 group tools plus `search_tools`, `kimo_describe`, `kimo_enable_group`). `kimo --version` and `kimo_info` report the workspace version, which is 3.0.0 from this release. Get any tool's arguments with `kimo tools describe <name>` or `kimo_describe`, and find tools by words with `search_tools`.
 
 | Group | Tools |
 |---|---|
@@ -239,7 +239,7 @@ This is the list the v3 build registers (read from `tools/list` of the grouped s
 | `masks` (16) | `set_mask`, `set_mask_keyframe`, `remove_mask`, `add_mask`, `update_mask`, `remove_mask_layer`, `reorder_mask`, `list_masks`, `set_mask_prop_key`, `set_mask_path_key`, `roto_propagate`, `set_track_matte`, `remove_track_matte`, `render_mask`, `track_matte`, `refine_matte` |
 | `text` (23) | `add_text`, `set_text`, `import_srt`, `transcribe`, `set_text_style`, `add_text_animator`, `set_animator_keyframe`, `add_title`, `list_fonts`, `set_text_weight`, `set_text_path`, `add_captions`, `list_captions`, `set_caption_style`, `edit_caption`, `transcript_import`, `transcript_get`, `transcript_edit_word`, `transcript_set_take`, `transcript_coverage`, `transcript_to_captions`, `validate_captions`, `transcript_edit_preview` |
 | `graphics` (20) | `add_box_expand`, `add_shape`, `add_detection_box`, `add_hud_frame`, `add_counter`, `add_prompt_box`, `add_modifier`, `list_modifiers`, `remove_modifier`, `list_shape_modifiers`, `add_shape_modifier`, `remove_shape_modifier`, `list_layer_styles`, `set_layer_style`, `remove_layer_style`, `add_path_shape`, `set_path`, `path_info`, `add_path_key`, `clear_path_keys` |
-| `vfx3d` (16) | `add_particles`, `add_emitter`, `add_shard_burst`, `add_scene3d`, `simulate_physics`, `shards_project`, `set_light`, `light_rig`, `remove_light`, `list_lights`, `set_material`, `list_materials`, `remove_material`, `set_relight`, `preview_material`, `particle_simulate_raw` |
+| `vfx3d` (25) | `add_particles`, `add_emitter`, `add_shard_burst`, `add_scene3d`, `simulate_physics`, `shards_project`, `set_light`, `light_rig`, `remove_light`, `list_lights`, `set_material`, `list_materials`, `remove_material`, `set_relight`, `preview_material`, `particle_simulate_raw`, `inspect_threed_backend`, `inspect_mesh_buffers`, `inspect_scene_matrices`, `raycast_mesh_raw`, `sample_sdf_raw`, `sample_pbr_raw`, `sample_diffuse_sh_raw`, `render_mesh_cpu_reference`, `import_mesh_raw` |
 | `tracking` (27) | `camera_project_points`, `camera_clip_triangle`, `track_long_gap`, `track_point`, `stabilize`, `track_planar`, `pin_layer`, `track_mesh`, `solve_camera`, `list_camera_solves`, `camera_solve_info`, `apply_camera_solve`, `grade_node_tracking`, `track_planar_anchored`, `track_features`, `track_set_info`, `fit_track_homography`, `fit_info`, `decompose_track_homography`, `track_jitter_metrics`, `corner_disagreement`, `track_feature_residuals`, `lk_residual_audit`, `ecc_refine_track`, `render_error_field`, `validate_planar_track`, `undistort_clip` |
 | `color_grade` (22) | `preview_subject_match`, `match_grade`, `set_color_curve`, `pick_white_balance`, `match_color`, `inspect_asc_cdl`, `apply_asc_cdl`, `generate_lut_node`, `evaluate_grade_graph_samples`, `inspect_grade_graph`, `set_grade_graph`, `add_node`, `connect_nodes`, `disconnect_nodes`, `remove_grade_node`, `set_grade_output`, `set_grade_node`, `set_node_param`, `set_node_mask`, `create_shared_grade_graph`, `bind_shared_grade_graphs`, `remove_shared_grade_graph` |
 | `color_science` (18) | `inspect_color_frame_metadata`, `inspect_color_delivery`, `inspect_color_pipeline`, `compare_aces2_reference`, `sample_linear_neutral`, `audit_color_output`, `inspect_float_media`, `set_hdr_mastering`, `set_color_pipeline`, `set_clip_input_color`, `validate_hdr_transfer_math`, `evaluate_hlg_reference_display`, `add_acescct_primaries`, `inspect_high_bit_delivery_contract`, `inspect_film_response`, `inspect_ocio_config`, `transform_ocio_samples`, `transform_ocio_view_samples` |
