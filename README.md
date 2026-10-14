@@ -278,3 +278,8 @@ They are also uncompiled and unrendered here. See [field units](docs/noise/FIELD
 Explicit-pose projection and camera-space near-plane clipping are drafted as raw
 MCP math tools. Uncompiled, unrendered, not integrated into the legacy renderer.
 They do not yet fix existing Scene3D output. See [camera WIP](docs/camera/WIP.md).
+
+## Raw UV math (feature-branch WIP)
+
+Uncompiled original push/radial coordinate primitives, MCP-callable but not a
+rendered transition. See [UV WIP](docs/uv/WIP.md). No visual sign-off.
