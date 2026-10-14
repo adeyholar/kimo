@@ -262,24 +262,21 @@ The README is updated with every product change. If a change adds, removes or re
 MIT licensed.
 
 ## Coherent fields (feature-branch WIP)
-
 This feature branch adds original raw 2D Perlin/simplex fields, analytic gradients,
 MCP point sampling and an animatable noise effect. It is not part of the finalized
 v3 release. Compilation, numeric tests, warning delta and real 1080p visual
 sign-off are pending. No quality or production-readiness claim is made.
 See [the noise plan](docs/noise/PLAN.md) and [verification commands](docs/noise/VERIFY.md).
-
 The next WIP field units add explicit Euclidean Worley F1/F2, FBM, domain warp and
 2D potential curl. These are independently selected raw operators, not presets.
 They are also uncompiled and unrendered here. See [field units](docs/noise/FIELD_UNITS.md).
-
 ## Camera math primitives (feature-branch WIP)
-
 Explicit-pose projection and camera-space near-plane clipping are drafted as raw
 MCP math tools. Uncompiled, unrendered, not integrated into the legacy renderer.
 They do not yet fix existing Scene3D output. See [camera WIP](docs/camera/WIP.md).
-
 ## Raw UV math (feature-branch WIP)
-
 Uncompiled original push/radial coordinate primitives, MCP-callable but not a
 rendered transition. See [UV WIP](docs/uv/WIP.md). No visual sign-off.
+## Particle simulation primitive (feature-branch WIP)
+Uncompiled raw fixed-step 3D trajectory + force/swept-plane math. No emitter or
+renderer adapter yet, no visual sign-off. See [particle WIP](docs/particles/WIP.md).
