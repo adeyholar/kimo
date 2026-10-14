@@ -1,0 +1,22 @@
+use super::mesh::Mesh;
+use serde::{Serialize,Deserialize};
+#[derive(Clone,Debug,Serialize,Deserialize)]pub struct Ray {pub origin:[f64;3],pub direction:[f64;3],pub t_min:f64,pub t_max:f64}
+#[derive(Clone,Debug,Serialize)]pub struct Hit {pub triangle:usize,pub t:f64,pub barycentric:[f64;3]}
+#[derive(Clone,Debug,Serialize)]pub struct BvhNode {pub bounds:[[f64;3];2],pub children:Option<[usize;2]>,pub triangles:Vec<usize>}
+#[derive(Clone,Debug,Serialize)]pub struct Bvh {pub nodes:Vec<BvhNode>}
+fn sub(a:[f64;3],b:[f64;3])->[f64;3]{std::array::from_fn(|i|a[i]-b[i])}
+fn dot(a:[f64;3],b:[f64;3])->f64{a.iter().zip(b).map(|(a,b)|a*b).sum()}
+fn cross(a:[f64;3],b:[f64;3])->[f64;3]{[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}
+fn triangle(mesh:&Mesh,id:usize,r:&Ray)->Option<Hit>{let idx=mesh.indices[id];let a=mesh.positions[idx[0] as usize];let e1=sub(mesh.positions[idx[1] as usize],a);let e2=sub(mesh.positions[idx[2] as usize],a);let p=cross(r.direction,e2);let det=dot(e1,p);if det.abs()<1e-15{return None;}let q=sub(r.origin,a);let u=dot(q,p)/det;if !(0.0..=1.0).contains(&u){return None;}let v=dot(r.direction,cross(q,e1))/det;if v<0.0||u+v>1.0{return None;}let t=dot(e2,cross(q,e1))/det;if !t.is_finite()||t<r.t_min||t>r.t_max{return None;}Some(Hit{triangle:id,t,barycentric:[1.0-u-v,u,v]})}
+fn slab(bounds:[[f64;3];2],r:&Ray,limit:f64)->bool{let mut near=r.t_min;let mut far=r.t_max.min(limit);for j in 0..3{if r.direction[j]==0.0{if r.origin[j]<bounds[0][j]||r.origin[j]>bounds[1][j]{return false;}continue;}let a=(bounds[0][j]-r.origin[j])/r.direction[j];let b=(bounds[1][j]-r.origin[j])/r.direction[j];near=near.max(a.min(b));far=far.min(a.max(b));if near>far{return false;}}true}
+fn valid_ray(r:&Ray)->Result<(),String>{if r.origin.iter().chain(r.direction.iter()).chain([r.t_min,r.t_max].iter()).any(|v|!v.is_finite()||v.abs()>1e12)||r.direction.iter().all(|v|*v==0.0)||r.t_min<0.0||r.t_max<r.t_min{return Err("finite bounded nonzero ray and0<=t_min<=t_max required".into());}Ok(())}
+impl Bvh {
+ pub fn build(mesh:&Mesh)->Result<Self,String>{mesh.validate()?;let mut out=Self{nodes:Vec::new()};
+  fn build(out:&mut Bvh,m:&Mesh,mut ids:Vec<usize>)->usize{crate::guard::check();let mut b=[[f64::INFINITY;3],[f64::NEG_INFINITY;3]];for id in &ids{for i in m.indices[*id]{let p=m.positions[i as usize];for j in 0..3{b[0][j]=b[0][j].min(p[j]);b[1][j]=b[1][j].max(p[j]);}}}let index=out.nodes.len();out.nodes.push(BvhNode{bounds:b,children:None,triangles:Vec::new()});if ids.len()<=4{out.nodes[index].triangles=ids;return index;}let axis=(0..3).max_by(|a,c|(b[1][*a]-b[0][*a]).total_cmp(&(b[1][*c]-b[0][*c]))).unwrap();let center=|id:usize|m.indices[id].iter().map(|i|m.positions[*i as usize][axis]).sum::<f64>()/3.0;ids.sort_by(|a,b|center(*a).total_cmp(&center(*b)).then(a.cmp(b)));let other=ids.split_off(ids.len()/2);let a=build(out,m,ids);let b=build(out,m,other);out.nodes[index].children=Some([a,b]);index}
+  build(&mut out,mesh,(0..mesh.indices.len()).collect());Ok(out)
+ }
+ pub fn raycast(&self,mesh:&Mesh,r:&Ray)->Result<Option<Hit>,String>{mesh.validate()?;valid_ray(r)?;let mut best:Option<Hit>=None;let mut stack=vec![0usize];while let Some(i)=stack.pop(){crate::guard::check();let n=self.nodes.get(i).ok_or("invalid BVH node")?;if !slab(n.bounds,r,best.as_ref().map(|h|h.t).unwrap_or(r.t_max)){continue;}if let Some(children)=n.children{stack.extend(children);}for id in &n.triangles{if *id>=mesh.indices.len(){return Err("BVH mesh mismatch".into());}if let Some(h)=triangle(mesh,*id,r){if best.as_ref().map(|b|h.t<b.t||h.t==b.t&&h.triangle<b.triangle).unwrap_or(true){best=Some(h);}}}}Ok(best)}
+}
+pub fn brute_force(mesh:&Mesh,r:&Ray)->Result<Option<Hit>,String>{mesh.validate()?;valid_ray(r)?;let mut best:Option<Hit>=None;for i in 0..mesh.indices.len(){if let Some(h)=triangle(mesh,i,r){if best.as_ref().map(|b|h.t<b.t).unwrap_or(true){best=Some(h);}}}Ok(best)}
+/// Plane convention dot(n,p)+d>=0 is inside. Boundary boxes retained.
+pub fn intersects_frustum(bounds:[[f64;3];2],planes:[[f64;4];6])->Result<bool,String>{if bounds.iter().flatten().chain(planes.iter().flatten()).any(|v|!v.is_finite())||(0..3).any(|i|bounds[0][i]>bounds[1][i]){return Err("finite ordered bounds and planes required".into());}for p in planes{if p[..3].iter().all(|v|*v==0.0){return Err("frustum plane normal nonzero required".into());}let far:[f64;3]=std::array::from_fn(|j|if p[j]>=0.0{bounds[1][j]}else{bounds[0][j]});if p[0]*far[0]+p[1]*far[1]+p[2]*far[2]+p[3]<0.0{return Ok(false);}}Ok(true)}

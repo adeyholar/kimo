@@ -13,9 +13,21 @@ tiff = "0.10"
 
 exr = "1.74"
 
+gltf = { version = "=1.4.1", default-features = false, features = ["utils", "names"], optional = true }
+tobj = { version = "=4.0.5", default-features = false, optional = true }
+
 [features]
 default = []
 native-ocio = []
+mesh-import = ["dep:gltf", "dep:tobj"]
+gpu3d = ["dep:wgpu"]
 
 [build-dependencies]
 cc = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl", "vulkan"], optional = true }
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl", "metal"], optional = true }

@@ -1,0 +1,9 @@
+use super::mesh::Mesh;
+use crate::effects::Frame;
+/// Initial orthographic reference raster. Mesh x/y in NDC, z in0..1.
+/// Not a complete perspective camera/material renderer. Triangles outside depth
+/// domain are rejected pending near/far polygon clipping, never silently dropped.
+pub fn render(mesh:&Mesh,w:usize,h:usize,color:[f32;4])->Result<(Frame,Vec<f64>),String>{mesh.validate()?;if w==0||h==0||w>4096||h>4096||color.iter().any(|v|!v.is_finite())||!(0.0..=1.0).contains(&color[3]){return Err("target1..4096 and finite straight RGBA required".into());}if mesh.positions.iter().any(|p|!(0.0..=1.0).contains(&p[2])){return Err("reference raster requires z0..1; depth clipping pending".into());}let mut out=Frame::try_new(w,h)?;let mut depth=vec![f64::INFINITY;w*h];let edge=|a:[f64;3],b:[f64;3],x:f64,y:f64|(b[0]-a[0])*(y-a[1])-(b[1]-a[1])*(x-a[0]);
+ for idx in &mesh.indices{crate::guard::check();let p=idx.map(|i|{let v=mesh.positions[i as usize];[(v[0]+1.0)*0.5*w as f64,(1.0-v[1])*0.5*h as f64,v[2]]});let area=edge(p[0],p[1],p[2][0],p[2][1]);if area==0.0{continue;}let lo_x=p.iter().map(|p|p[0]).fold(f64::INFINITY,f64::min).floor().max(0.0).min(w as f64) as usize;let hi_x=p.iter().map(|p|p[0]).fold(f64::NEG_INFINITY,f64::max).ceil().max(0.0).min(w as f64) as usize;let lo_y=p.iter().map(|p|p[1]).fold(f64::INFINITY,f64::min).floor().max(0.0).min(h as f64) as usize;let hi_y=p.iter().map(|p|p[1]).fold(f64::NEG_INFINITY,f64::max).ceil().max(0.0).min(h as f64) as usize;
+ for y in lo_y..hi_y{crate::guard::check();for x in lo_x..hi_x{let (sx,sy)=(x as f64+0.5,y as f64+0.5);let b=[edge(p[1],p[2],sx,sy)/area,edge(p[2],p[0],sx,sy)/area,edge(p[0],p[1],sx,sy)/area];if b.iter().any(|v|*v<0.0){continue;}let z=(0..3).map(|i|b[i]*p[i][2]).sum::<f64>();let i=y*w+x;if z<depth[i]{depth[i]=z;out.d[i*4..i*4+4].copy_from_slice(&color);}}}
+ }Ok((out,depth))}
