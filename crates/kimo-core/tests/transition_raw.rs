@@ -137,3 +137,66 @@ fn render_1080p_crossfade_slide_sources(){
  let wrongmap=Frame{w:1,h:1,d:vec![0.5,0.0,0.0,1.0]};
  assert!(render(&good,&good,Some(&wrongmap),0.5,&op,Edge::Clamp).is_err());
 }
+
+// == crossfade+slide supplementary rows ==
+// Banding: alpha-ramp crossfade is exactly linear per pixel (no quantization/steps in f32 pipeline).
+#[test]fn crossfade_alpha_ramp_exact_linear(){
+ let n=64usize;let mut a=Frame{w:n,h:1,d:vec![0.0;n*4]};let mut b=Frame{w:n,h:1,d:vec![0.0;n*4]};
+ for x in 0..n{let u=x as f32/(n-1) as f32;a.d[x*4..x*4+4].copy_from_slice(&[0.2,0.4,u,1.0-u]);b.d[x*4..x*4+4].copy_from_slice(&[0.9,u,0.1,u]);}
+ for t in [0.0,0.125,0.5,0.875,1.0].iter(){let f=render(&a,&b,None,*t,&Operator::Crossfade,Edge::Clamp).unwrap();
+  for x in 0..n{let p=&f.d[x*4..x*4+4];
+   let (aa,ba)=(a.d[x*4+3] as f64,b.d[x*4+3] as f64);let aw=(1.0-t)*aa+ t*ba;
+   assert!((p[3] as f64-aw).abs()<1e-6,"alpha not linear at x={x} t={t}");
+   if aw>1e-9{let pc=((1.0-t)*a.d[x*4] as f64*aa+t*b.d[x*4] as f64*ba)/aw;assert!((p[0] as f64-pc).abs()<1e-5,"premult color off at x={x} t={t}: {} vs {pc}",p[0]);}
+ }}
+}
+// Dark halo: opaque red vs alpha-0 B (hidden RGB must stay hidden) -> straight red at reduced alpha, never darkened.
+#[test]fn crossfade_no_dark_halo_on_zero_alpha(){
+ let a=frame([1.0,0.0,0.0,1.0]);let b=frame([0.0,1.0,0.0,0.0]);
+ for t in [0.25,0.5,0.75]{let f=render(&a,&b,None,t,&Operator::Crossfade,Edge::Clamp).unwrap();
+  for p in f.d.chunks_exact(4){assert!((p[0]-1.0).abs()<1e-6&&p[1].abs()<1e-6&&p[2].abs()<1e-6&&(p[3]-(1.0-t)as f32).abs()<1e-6,"halo/darkening at t={t}: {p:?}");}}
+}
+// HDR: signed HDR values pass through crossfade unclipped.
+#[test]fn crossfade_hdr_unclipped(){
+ let a=frame([3.0,-1.5,0.5,1.0]);let b=frame([-1.0,4.0,2.0,1.0]);
+ let f=render(&a,&b,None,0.25,&Operator::Crossfade,Edge::Clamp).unwrap();
+ for p in f.d.chunks_exact(4){assert!((p[0]-2.0).abs()<1e-6&&(p[1]-(-0.125)).abs()<1e-6&&(p[2]-0.875).abs()<1e-6,"hdr clipped: {p:?}");}
+}
+// Slide subpixel: half-pixel shift on a smooth ramp gives exact neighbor averages (no 1px seam/step).
+#[test]fn slide_subpixel_half_offset_exact_bilinear(){
+ let n=8usize;let mut a=Frame{w:n,h:1,d:vec![0.0;n*4]};let mut b=Frame{w:n,h:1,d:vec![0.0;n*4]};
+ for x in 0..n{a.d[x*4..x*4+4].copy_from_slice(&[x as f32/(n-1) as f32,0.0,0.0,1.0]);}
+ // t*from_offset = half texel: t=0.5, from_offset=1/n; B is alpha-0 so straight roundtrip returns A values
+ let f=render(&a,&b,None,0.5,&Operator::Slide{from_offset:[1.0/n as f64,0.0],to_offset:[0.0;2]},Edge::Clamp).unwrap();
+ for x in 1..n-1{let exp=(x as f64+0.5)/(n-1) as f64;assert!((f.d[x*4] as f64-exp).abs()<1e-5,"subpixel seam at x={x}: {} vs {exp}",f.d[x*4]);}
+}
+// No neighbor bleed with Transparent: integer 1px shift, vacated column gets zero A contribution, interior gets exactly the neighbor.
+#[test]fn slide_transparent_no_bleed_at_vacated_edge(){
+ let n=4usize;let mut a=Frame{w:n,h:1,d:vec![0.0;n*4]};let mut b=Frame{w:n,h:1,d:vec![0.0;n*4]};
+ for x in 0..n{a.d[x*4..x*4+4].copy_from_slice(&[(x+1) as f32,0.0,0.0,1.0]);}
+ // t*from_offset = one full texel: t=0.5, from_offset=2/n; B is all-zero so straight output is the A sample
+ let f=render(&a,&b,None,0.5,&Operator::Slide{from_offset:[2.0/n as f64,0.0],to_offset:[0.0;2]},Edge::Transparent).unwrap();
+ // pixel x samples A at x+1: p0<-A1=2, p1<-A2=3, p2<-A3=4, p3<-outside=0
+ for (x,e) in [(0,2.0),(1,3.0),(2,4.0)]{assert!((f.d[x*4] as f64-e).abs()<1e-5,"bleed at x={x}: {}",f.d[x*4]);}
+ assert!(f.d[12..16].iter().all(|v|v.abs()<1e-6),"vacated edge not zero: {:?}",&f.d[12..16]);
+}
+// Repeat with fractional offset: wrap blends across the seam exactly (bilinear of x=w-1 and x=0).
+#[test]fn slide_repeat_wrap_blend_exact(){
+ let n=4usize;let mut a=Frame{w:n,h:1,d:vec![0.0;n*4]};let mut b=Frame{w:n,h:1,d:vec![0.0;n*4]};
+ for x in 0..n{a.d[x*4..x*4+4].copy_from_slice(&[(x+1) as f32,0.0,0.0,1.0]);}
+ // half-texel shift at t=0.5 (from_offset=1/n); texel values [1,2,3,4]; wrap blends texel3 with texel0
+ let f=render(&a,&b,None,0.5,&Operator::Slide{from_offset:[1.0/n as f64,0.0],to_offset:[0.0;2]},Edge::Repeat).unwrap();
+ for (x,e) in [(0,1.5),(1,2.5),(2,3.5),(3,2.5)]{assert!((f.d[x*4]as f64-e).abs()<1e-5,"wrap blend x={x}: {} vs {e}",f.d[x*4]);}
+}
+// Per-policy 1080p slide renders (Repeat and Transparent; Clamp covered by the existing harness).
+#[test]#[ignore="per-policy 1080p slide render gate"]
+fn render_1080p_slide_policies(){
+ use std::{io::Write,path::PathBuf};
+ let dir=PathBuf::from(std::env::var("KIMO_TRANSITION_FRAMES").expect("set output directory"));std::fs::create_dir_all(&dir).unwrap();
+ let (w,h)=(1920usize,1080usize);let mut a=Frame{w,h,d:vec![0.0;w*h*4]};let mut b=Frame{w,h,d:vec![0.0;w*h*4]};
+ for y in 0..h{for x in 0..w{let i=(y*w+x)*4;let check=if (x/32+y/32)%2==0{0.15}else{0.85};a.d[i..i+4].copy_from_slice(&[check,0.2,x as f32/w as f32,if x<w/2{0.3}else{1.0}]);b.d[i..i+4].copy_from_slice(&[0.2,check,y as f32/h as f32,if y<h/2{0.5}else{1.0}]);}}
+ for (name,edge) in [("slide-repeat",Edge::Repeat),("slide-transparent",Edge::Transparent)]{for step in 0..=8{
+  let f=render(&a,&b,None,step as f64/8.0,&Operator::Slide{from_offset:[1.0,0.0],to_offset:[-1.0,0.0]},edge).unwrap();let mut file=std::fs::File::create(dir.join(format!("{name}-{step:02}.ppm"))).unwrap();write!(file,"P6\n{w} {h}\n255\n").unwrap();let mut rgb=Vec::with_capacity(w*h*3);
+  for (i,p) in f.d.chunks_exact(4).enumerate(){let background=if (i%w/16+i/w/16)%2==0{0.2}else{0.7};for v in p.iter().take(3){rgb.push(((v*p[3]+background*(1.0-p[3])).clamp(0.0,1.0)*255.0+0.5) as u8);}}file.write_all(&rgb).unwrap();
+ }}
+}
