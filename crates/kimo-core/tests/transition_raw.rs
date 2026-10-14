@@ -58,3 +58,73 @@ fn render_1080p_crossfade_slide_sources(){
   for (i,p) in f.d.chunks_exact(4).enumerate(){let background=if (i%w/16+i/w/16)%2==0{0.2}else{0.7};for v in p.iter().take(3){rgb.push(((v*p[3]+background*(1.0-p[3])).clamp(0.0,1.0)*255.0+0.5) as u8);}}file.write_all(&rgb).unwrap();
  }}
 }
+// Stability sweep: t in {0,.25,.5,.75,1} (and finer), outputs finite, alpha 0..1,
+// straight RGB within the convex hull of input RGB (premult mixing is convex).
+#[test]fn sweep_all_operators_finite_and_bounded(){
+ let (w,h)=(7usize,5usize);
+ let mk=|f:fn(usize,usize)->[f32;4]|->Frame{let mut d=vec![0.0;w*h*4];for y in 0..h{for x in 0..w{let p=f(x,y);d[(y*w+x)*4..(y*w+x)*4+4].copy_from_slice(&p);}}Frame{w,h,d}};
+ let a=mk(|x,y|[x as f32/6.0*3.0-1.0,y as f32/4.0,if (x+y)%2==0{1.0}else{0.0},if x<3{0.4}else{1.0}]);
+ let b=mk(|x,y|[1.0-x as f32/6.0,(x*y)as f32/24.0*8.0-2.0,0.25,if (x*3+y)%4==0{0.0}else{1.0}]);
+ let m=mk(|x,y|[x as f32/6.0,0.0,0.0,1.0]);
+ let ops=[Operator::Luma{smoothing:0.2},Operator::DirectionalWarp{direction:[3.0,-2.0],smoothing:0.15,distortion:1.7},Operator::CrossZoom{center:[0.5,0.5],strength:0.6,samples:24},Operator::Displacement{strength:[0.35,-0.2],neutral:0.5}];
+ let hull=|f:&Frame,c:usize|->(f64,f64){let mut lo=f64::INFINITY;let mut hi=f64::NEG_INFINITY;for p in f.d.chunks_exact(4){if p[3]>0.0{lo=lo.min(p[c]as f64);hi=hi.max(p[c]as f64);}}(lo,hi)};
+ for op in &ops{for step in 0..=64{let t=step as f64/64.0;
+  let f=render(&a,&b,Some(&m),t,op,Edge::Clamp).unwrap();
+  assert!(f.d.iter().all(|v|v.is_finite()),"nonfinite at t={t} op={op:?}");
+  for p in f.d.chunks_exact(4){assert!((0.0..=1.0).contains(&p[3]),"alpha {} at t={t} op={op:?}",p[3]);
+   if p[3]>0.0{for c in 0..3{let (lo,hi)=(hull(&a,c).0.min(hull(&b,c).0),hull(&a,c).1.max(hull(&b,c).1));
+    assert!((lo-1e-4..=hi+1e-4).contains(&(p[c]as f64)),"rgb ch{c} {} outside [{lo},{hi}] at t={t} op={op:?}",p[c]);}}}
+ }}}
+// Edge policies: wrap identity, clamp border replication, transparent zero-alpha outside.
+#[test]fn edge_policies_wrap_clamp_transparent(){
+ let (w,h)=(4usize,1usize);
+ let mk=|v:&[[f32;4]]|->Frame{Frame{w,h,d:v.concat()}};
+ let a=mk(&[[1.0,0.0,0.0,1.0],[0.0,1.0,0.0,1.0],[0.0,0.0,1.0,1.0],[1.0,1.0,0.0,1.0]]);
+ let b=mk(&[[0.0;4],[0.0;4],[0.0;4],[0.0;4]]);
+ let m=mk(&[[1.0,0.0,0.0,1.0],[1.0,0.0,0.0,1.0],[1.0,0.0,0.0,1.0],[1.0,0.0,0.0,1.0]]);
+ // displacement map red=1, neutral=0, strength=[-1.0,0] shifts u by +t*1.0 for the A sample -> full wrap at any t
+ let op=Operator::Displacement{strength:[-1.0,0.0],neutral:0.0};
+ let wrap=render(&a,&b,Some(&m),0.5,&op,Edge::Repeat).unwrap();
+ let id0=render(&a,&b,Some(&m),0.0,&op,Edge::Repeat).unwrap();
+ // at t=0.5 A-sample wrapped by exactly one width == unshifted A; B sample shifted by -(1-t) wraps too (B is zeros)
+ for (p,q) in wrap.d.chunks_exact(4).zip(id0.d.chunks_exact(4)){assert!((p[3]-q[3]*0.5).abs()<1e-6,"repeat wrap alpha");}
+ // clamp: u = uv + t*d*strength samples A off the RIGHT border -> right texel (yellow) replicated;
+ // premultiplied mix with zero-alpha B unpremultiplies back to straight yellow at alpha 0.5
+ let cl=render(&a,&b,Some(&m),0.5,&Operator::Displacement{strength:[2.0,0.0],neutral:0.0},Edge::Clamp).unwrap();
+ for p in cl.d.chunks_exact(4){assert!((p[0]-1.0).abs()<1e-6&&(p[1]-1.0).abs()<1e-6&&p[2].abs()<1e-6&&(p[3]-0.5).abs()<1e-6,"clamp right-border replicate straight-alpha got {p:?}");}
+ // transparent: same shift pushes the A sample fully outside -> alpha from A is 0, only B (zeros) remains
+ let tr=render(&a,&b,Some(&m),0.5,&Operator::Displacement{strength:[2.0,0.0],neutral:0.0},Edge::Transparent).unwrap();
+ for p in tr.d.chunks_exact(4){assert!(p[3].abs()<1e-6,"transparent outside alpha got {p:?}");}
+}
+// Luma smoothstep shape: symmetric midpoint, full-A below the window, full-B above, monotone.
+#[test]fn luma_smoothstep_shape(){
+ let a=frame([1.0,0.0,0.0,1.0]);let b=frame([0.0,0.0,1.0,1.0]);
+ let w_at=|l:f32,t:f64,s:f64|->f32{let m=frame([l,0.0,0.0,1.0]);render(&a,&b,Some(&m),t,&Operator::Luma{smoothing:s},Edge::Clamp).unwrap().d[2]};
+ let (t,s)=(0.5,0.2);
+ assert!((w_at(0.5,t,s)-0.5).abs()<1e-6,"midpoint symmetric");
+ // port is dark-first, matching upstream gl-transitions luma: w = 1 - smooth(t-s/2, t+s/2, l), w = B weight
+ assert!(w_at(0.39,t,s)>1.0-1e-6,"below window full B (dark-first)");
+ assert!(w_at(0.61,t,s)<1e-6,"above window full A");
+ assert!(w_at(0.55,t,s)<w_at(0.45,t,s),"monotone decreasing in l (dark-first)");
+}
+// Extreme centers/directions stay finite and in-bounds on all three edge policies.
+#[test]fn extreme_centers_and_directions_stay_finite(){
+ let a=frame([0.8,0.1,0.2,1.0]);let b=frame([0.1,0.9,0.3,1.0]);
+ for edge in [Edge::Clamp,Edge::Repeat,Edge::Transparent]{
+  for op in [Operator::CrossZoom{center:[1e6,-1e6],strength:1.0,samples:8},Operator::CrossZoom{center:[0.0,1.0],strength:5.0,samples:128},Operator::DirectionalWarp{direction:[1e300,1.0],smoothing:0.9,distortion:-3.0},Operator::DirectionalWarp{direction:[-1e-300,1e-300],smoothing:0.0,distortion:0.0}]{
+   for step in 0..=8{let t=step as f64/8.0;let f=render(&a,&b,None,t,&op,edge).unwrap();
+    assert!(f.d.iter().all(|v|v.is_finite()),"nonfinite t={t} edge={edge:?} op={op:?}");
+    for p in f.d.chunks_exact(4){assert!((0.0..=1.0).contains(&p[3]));}}}
+ }}
+// Malformed buffers rejected.
+#[test]fn malformed_buffers_rejected(){
+ let good=frame([1.0;4]);
+ let badlen=Frame{w:2,h:2,d:vec![1.0;15]};
+ let badalpha=frame([0.0,0.0,0.0,1.5]);
+ let nanrgb=frame([f32::NAN,0.0,0.0,1.0]);
+ let zero=Frame{w:0,h:2,d:vec![]};
+ let op=Operator::Luma{smoothing:0.1};
+ for bad in [&badlen,&badalpha,&nanrgb,&zero]{assert!(render(bad,&good,Some(&good),0.5,&op,Edge::Clamp).is_err());assert!(render(&good,bad,Some(&good),0.5,&op,Edge::Clamp).is_err());}
+ let wrongmap=Frame{w:1,h:1,d:vec![0.5,0.0,0.0,1.0]};
+ assert!(render(&good,&good,Some(&wrongmap),0.5,&op,Edge::Clamp).is_err());
+}
