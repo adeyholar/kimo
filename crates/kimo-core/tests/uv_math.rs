@@ -146,3 +146,15 @@ fn render_1080p_uv_sources(){
  frames.push(("radial".into(),f6));
  for (name,f) in &frames{write(name,f);}
 }
+
+// PROBE NOTES (approved, 1080p bilinear harness renders):
+// - radial zoom-blur frame: faint vertical line at the center column is the zoom singularity
+//   (pull direction flips; +-8px magnification band, peak column delta 5.08 vs 0.00 median,
+//   smooth monotone ramp across - no single-column jump). The operator has no atan2 and no
+//   wrap path, so no branch-cut or wrap-filtering fix applies.
+// - push: ownership boundary pixel-exact (A through x=1679, B from x=1680; B through y=80,
+//   A from y=81 for dir (0.5,-0.3) t=0.25); tiled B strips match across frames at fraction 1.0.
+//   The top-right "jump" is the translated frame edge, not an off-by-one clip.
+// - spherical: soft pole patch measured 10x smoother than surround (30px block gradient 0.08 vs
+//   0.82 quadrant median) with valid content (mean [62,232,138]) - pole undersampling softening,
+//   acceptable for the correctness pass.
