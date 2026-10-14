@@ -9,7 +9,7 @@ impl Selection {
  let mut d=q.clone();d.output_gamut=self.output_gamut;d.output_transfer=self.output_transfer;d.mastering=None;d.validate()?;super::encode_contract::high(&d,"hevc10")?;Ok(d)
  }
  #[cfg(feature="native-ocio")]
- pub fn processor(&self,p:&crate::model::Project)->Result<super::ocio_config::Processor,String>{self.delivery(p)?;if super::ocio_config::version()!="2.5.1"{return Err("view video requires pinned native OCIO 2.5.1".into())}super::ocio_config::Config::from_file(&self.config_path)?.display_processor(&self.source,&self.display,&self.view)}
+ pub fn processor(&self,p:&crate::model::Project)->Result<super::ocio_config::Processor,String>{self.delivery(p)?;if super::ocio_config::version()!="2.5.1"{return Err("view video requires pinned native OCIO 2.5.1".into())}super::ocio_config::Config::from_file(&crate::deps::resolve_str(&self.config_path))?.display_processor(&self.source,&self.display,&self.view)}
 }
 #[cfg(feature="native-ocio")]
 pub fn export(p:&crate::model::Project,path:&str,format:&str,crf:u32)->Result<serde_json::Value,String>{

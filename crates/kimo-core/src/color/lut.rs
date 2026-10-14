@@ -33,7 +33,7 @@ pub fn apply(pr:&Params,strings:&BTreeMap<String,String>,f:&mut Frame,t:f64)->Re
         if strings.contains_key("path"){return Err("LUT requires path OR cube_text, not both".into())}
         // Generated/persisted data is source evidence, no file dependency or timestamp cache.
         Arc::new(Lut::parse(text)?)
-    }else{let path=strings.get("path").ok_or("lut needs strings.path or cube_text")?;let meta=std::fs::metadata(path).map_err(|e|e.to_string())?;if !meta.is_file()||meta.len()>32*1024*1024{return Err("LUT requires regular file <=32MiB".into())}
+    }else{let path_owned=crate::deps::resolve_str(strings.get("path").ok_or("lut needs strings.path or cube_text")?);let path=&path_owned;let meta=std::fs::metadata(path).map_err(|e|e.to_string())?;if !meta.is_file()||meta.len()>32*1024*1024{return Err("LUT requires regular file <=32MiB".into())}
         let key=format!("{path}:{}:{:?}",meta.len(),meta.modified().ok());let cache=CACHE.get_or_init(Default::default);let mut cache=cache.lock().map_err(|_|"LUT cache poisoned")?;
         if let Some(l)=cache.get(&key){l.clone()}else{let l=Arc::new(Lut::parse(&read_bounded(path)?)?);if cache.len()>=8{cache.clear()}cache.insert(key,l.clone());l}
     };

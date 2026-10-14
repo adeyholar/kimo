@@ -21,5 +21,5 @@ C('set_property', clip_id=c1, property='opacity', value=0.0)
 t3 = C('add_track')['track_id']; s1 = C('add_shape', track_id=t3, shape='rect', start=0, duration=1, width=200, height=200, fill=[1, 0, 0, 0.5])
 C('render_frame', time=0.5, path='/tmp/cf_d.png'); px = np.array(Image.open('/tmp/cf_d.png').convert('RGB'))[180, 320]
 assert 100 < px[0] < 160 and px[1] < 10, f'RGBA fill should give ~half red, got {px}'
-t4 = C('add_track')['track_id']; r = C('add_shape', track_id=t4, shape='rect', start=0, duration=1, width=50, height=50, fill=[1, 1, 1], stroke_width=4, stroke_color=[1, 0, 0, 0.3]); assert 'warning' in r, r
+t4 = C('add_track')['track_id']; r = C('add_shape', track_id=t4, shape='rect', start=0, duration=1, width=50, height=50, fill=[1, 1, 1], stroke_width=4, stroke_color=[1, 0, 0, 0.3]); assert 'warning' not in r and r.get('clip_id'), r   # RV-1: stroke alpha is supported (stroke_opacity), the old 'alpha not supported' warning was removed on purpose
 print('PASS', only0, sh, px)

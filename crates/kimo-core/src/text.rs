@@ -14,11 +14,14 @@ pub fn font_dirs() -> Vec<std::path::PathBuf> { let mut v = vec![]; if let Ok(d)
 fn scan(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: usize) { if depth > 4 { return; } if let Ok(rd) = std::fs::read_dir(dir) { for e in rd.flatten() { let p = e.path(); if p.is_dir() { scan(&p, out, depth + 1); } else if matches!(p.extension().and_then(|x| x.to_str()), Some("ttf") | Some("otf") | Some("TTF") | Some("OTF")) { out.push(p); } } } }
 pub fn all_fonts() -> Vec<(String, std::path::PathBuf)> { let mut files = vec![]; for d in font_dirs() { scan(&d, &mut files, 0); } let mut seen = std::collections::HashSet::new(); let mut v = vec![];
     for p in files { let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string(); let n = norm(&stem); if seen.insert(n.clone()) { v.push((stem, p)); } } v.sort_by(|a, b| a.0.cmp(&b.0)); v }
-pub fn resolve_font(name: &str) -> String { if std::path::Path::new(name).is_file() { return name.into(); } let want = norm(name); let fonts = all_fonts();
-    if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s) == want) { return p.to_string_lossy().into(); }
-    if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s).starts_with(&want)) { return p.to_string_lossy().into(); }
-    if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s) == "montserrat") { return p.to_string_lossy().into(); }
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into() }
+/// (path, substituted): substituted = the requested family was not found and a fallback was used.
+pub fn resolve_font_info(name: &str) -> (String, bool) { if std::path::Path::new(name).is_file() { return (name.into(), false); } if crate::deps::font_is_path(name) { let r = crate::deps::resolve_str(name); if std::path::Path::new(&r).is_file() { return (r, false); } } let want = norm(name); let fonts = all_fonts();
+    if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s) == want) { return (p.to_string_lossy().into(), false); }
+    if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s).starts_with(&want)) { return (p.to_string_lossy().into(), false); }
+    if let Some((_, p)) = fonts.iter().find(|(s, _)| norm(s) == "montserrat") { return (p.to_string_lossy().into(), true); }
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into(), true) }
+pub fn resolve_font(name: &str) -> String { resolve_font_info(name).0 }
+
 fn font(name: &str, weight: f64) -> Result<std::sync::Arc<FontVec>, String> {
     let key = format!("{name}@{weight}"); let m = FONTS.get_or_init(|| Mutex::new(HashMap::new())); let mut g = m.lock().unwrap();
     if let Some(f) = g.get(&key) { return Ok(f.clone()); }
@@ -70,11 +73,32 @@ fn animate(an: &[TextAnimator], t: f64, g: &G, nchar: usize, nword: usize, nline
 
 /// Rasterize all glyphs (with animator transforms) into a coverage mask; also returns the block bounds in canvas px.
 /// Laid-out size (width, height) in canvas pixels of `text` for a font name or path; same layout the renderer uses.
-pub fn measure(text: &str, font_name: &str, size: f64, spacing: f64, weight: f64, align: &str, cw: f64) -> Result<(f64, f64), String> { let f = font(font_name, weight)?; let (_, bw, bh, ..) = layout(text, &f, size as f32, spacing as f32, align, cw as f32, None); Ok((bw as f64, bh as f64)) }
+pub fn measure(text: &str, font_name: &str, size: f64, spacing: f64, weight: f64, align: &str, cw: f64) -> Result<(f64, f64), String> { let m = measure_text(text, font_name, size, spacing, weight, align, cw, 0.0, None)?; Ok((m.width, m.height)) }
+/// Where the laid-out block's top-left sits on a canvas: the renderer centres the block (RV-28 shares this with the measuring tool).
+fn block_origin(cw: f32, ch: f32, bw: f32, bh: f32) -> (f32, f32) { ((cw - bw) / 2.0, (ch - bh) / 2.0) }
+/// Everything a layout query needs, from the same `layout` and block origin the renderer uses (no animators; static pose).
+pub struct LineMetrics { pub text: String, pub x: f64, pub y: f64, pub w: f64, pub h: f64, pub baseline: f64 }
+pub struct TextMetrics { pub width: f64, pub height: f64, pub lines: Vec<LineMetrics>, pub origin: (f64, f64), pub ink: Option<[f64; 4]>, pub font_file: String, pub substituted: bool }
+/// `ch` = canvas height used to centre the block vertically (0 = height of the block, i.e. origin y 0).
+pub fn measure_text(text: &str, font_name: &str, size: f64, spacing: f64, weight: f64, align: &str, cw: f64, ch: f64, fx: Option<&TextFx>) -> Result<TextMetrics, String> {
+    let f = font(font_name, weight)?; let upper; let text = if fx.map(|x| x.uppercase).unwrap_or(false) { upper = text.to_uppercase(); upper.as_str() } else { text };
+    let (glyphs, bw, bh, nl, _, _) = layout(text, &f, size as f32, spacing as f32, align, cw as f32, fx); let sf = f.as_scaled(PxScale::from(size as f32));
+    let (bx, by) = block_origin(cw as f32, if ch > 0.0 { ch as f32 } else { bh }, bw, bh);
+    let lh = bh / nl.max(1) as f32; let mut wpl: Vec<Vec<String>> = vec![vec![]; nl]; let mut ext: Vec<Option<(f32, f32)>> = vec![None; nl]; let mut last = (usize::MAX, usize::MAX);
+    let mut ink: Option<[f32; 4]> = None;
+    for g in &glyphs {
+        if (g.line, g.word) != last { wpl[g.line].push(String::new()); last = (g.line, g.word); } wpl[g.line].last_mut().unwrap().push(g.c);
+        let (x0, x1) = (bx + g.x, bx + g.x + g.adv); ext[g.line] = Some(match ext[g.line] { None => (x0, x1), Some((a, b)) => (a.min(x0), b.max(x1)) });
+        if let Some(o) = f.outline_glyph(f.glyph_id(g.c).with_scale_and_position(PxScale::from(size as f32), ab_glyph::point(bx + g.x, by + g.y))) { let b = o.px_bounds(); let r = [b.min.x, b.min.y, b.max.x, b.max.y]; ink = Some(match ink { None => r, Some(i) => [i[0].min(r[0]), i[1].min(r[1]), i[2].max(r[2]), i[3].max(r[3])] }); }
+    }
+    let lines = (0..nl).map(|li| { let (x0, x1) = ext[li].unwrap_or((bx + bw / 2.0, bx + bw / 2.0)); LineMetrics { text: wpl[li].join(" "), x: x0 as f64, y: (by + li as f32 * lh) as f64, w: (x1 - x0) as f64, h: lh as f64, baseline: (by + sf.ascent() + li as f32 * lh) as f64 } }).collect();
+    let (font_file, substituted) = resolve_font_info(font_name);
+    Ok(TextMetrics { width: bw as f64, height: bh as f64, lines, origin: (bx as f64, by as f64), ink: ink.map(|i| [i[0] as f64, i[1] as f64, i[2] as f64, i[3] as f64]), font_file, substituted })
+}
 fn coverage(cw: usize, ch: usize, text: &str, f: &FontVec, size: f32, spacing: f32, align: &str, reveal: f64, fx: Option<&TextFx>, t: f64) -> (Vec<f32>, [f32; 4]) {
     let (glyphs, bw, bh, nl, nwords, _) = layout(text, f, size, spacing, align, cw as f32, fx); let sf = f.as_scaled(PxScale::from(size));
     let nchar = glyphs.len(); let shown = (reveal.clamp(0.0, 1.0) * nchar as f64).ceil() as usize;
-    let (bx, by) = ((cw as f32 - bw) / 2.0, (ch as f32 - bh) / 2.0); let mut cov = vec![0f32; cw * ch];
+    let (bx, by) = block_origin(cw as f32, ch as f32, bw, bh); let mut cov = vec![0f32; cw * ch];
     let empty: Vec<TextAnimator> = vec![]; let an = fx.map(|x| &x.animators).unwrap_or(&empty);
     let plen = fx.and_then(|x| x.path.as_ref()).map(|pp| { let mut l = 0f64; let mut pv = crate::motion::sample(pp, 0.0, cw, ch); for k in 1..=200 { let c = crate::motion::sample(pp, k as f64 / 200.0, cw, ch); l += (c.0 - pv.0).hypot(c.1 - pv.1); pv = c; } l as f32 }).unwrap_or(1.0);
     let mut track_acc = vec![0f32; nl + 1]; let mut last_line = usize::MAX;

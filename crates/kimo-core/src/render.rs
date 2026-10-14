@@ -22,6 +22,7 @@ pub struct StaticCrop { x0: usize, y0: usize, x1: usize, y1: usize, d: Vec<f32> 
 impl Cache { pub fn new() -> Self { Cache { frames: HashMap::new(), size: (0, 0, 0.0), export_mode: false, statics: std::sync::RwLock::new(HashMap::new()) } } pub fn new_export() -> Self { let mut c = Cache::new(); c.export_mode = true; c } pub fn frames_of(&self, id: &str) -> Option<&Frames> { self.frames.get(id).map(|x| x.1.as_ref()) } }
 
 pub fn probe(path: &str) -> Result<(u32, u32, f64, f64), String> {
+    if path.ends_with(".kimopx") { let f=crate::pixels::read(path)?; return Ok((f.w as u32,f.h as u32,0.,25.)); }
     if [".tif",".tiff"].iter().any(|e|path.to_lowercase().ends_with(e)){let(w,h)=crate::color::interchange::tiff_size(path)?;return Ok((w,h,0.,25.))}
     let out = Command::new("ffprobe").args(["-v", "error", "-select_streams", "v:0", "-show_entries",
         "stream=width,height,r_frame_rate,duration:format=duration", "-of", "json", path])
@@ -120,6 +121,11 @@ const WINDOW: usize = 24;
 /// Decode `n` frames starting at global clip frame `a` (windowed: memory stays bounded for any clip length).
 fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frames, String> {
     let (w, h) = (p.width, p.height);
+    if path.ends_with(".kimopx") {
+      let src=crate::pixels::read(path)?;
+      let d=if src.w==w as usize && src.h==h as usize {src.d} else {crate::color::interchange::fit(&src,w as usize,h as usize,c.props.get("fit").map(|q|q.at(0.)).unwrap_or(0.))?};
+      return Ok(Frames{still:true,working_linear:true,quantized:Default::default(),linear_buf:Some(d),buf:vec![],fs:w as usize*h as usize*4,first:0});
+    }
     if p.color_pipeline.enabled&&[".tif",".tiff"].iter().any(|e|path.to_lowercase().ends_with(e)){
       let mut src=crate::color::interchange::tiff_frame(path,decode_cache_limit())?;
       let fit=c.props.get("fit").map(|q|q.at(0.)).unwrap_or(0.);
@@ -155,7 +161,7 @@ fn decode(p: &Project, c: &Clip, path: &str, a: usize, n: usize) -> Result<Frame
         let peak=bytes_per_frame.checked_mul(2).and_then(|v|v.checked_add(raw_fs.checked_mul(4)?)).and_then(|v|v.checked_add(fs.checked_mul(4)?.checked_mul(n.max(1).checked_add(1)?)?)).ok_or("native streaming allocation overflow")?;
         crate::guard::reserve(peak);
         let mut stream=crate::color::process::DecodeStream::new(&mut command,bytes_per_frame,n.max(1),crate::color::process::decode_deadline(n.max(1)))?;
-        let mut values=Vec::with_capacity(fs*n.max(1));
+        let mut values:Vec<f32>=Vec::new();values.try_reserve_exact(fs.checked_mul(n.max(1)).ok_or("decode buffer size overflow")?).map_err(|e|format!("cannot allocate the decode buffer for {n} frames ({} MB): {e}",fs.saturating_mul(n.max(1)).saturating_mul(4)>>20))?;
         while let Some(frame)=stream.next()?{
          let d=if float_source{crate::color::interchange::unpack(&frame,dw,dh)}else{converter.as_ref().ok_or("missing integer input converter")?.decode(&frame)};
          let fitted=d.and_then(|d|{let mut source=Frame{w:dw,h:dh,d};if float_source{crate::color::pipeline::input(p,c,&mut source)?;}crate::color::interchange::fit(&source,w as usize,h as usize,fit)});values.extend(fitted?);
@@ -204,7 +210,7 @@ fn prepare_window(p: &Project, cache: &mut Cache, t0: f64, t1: f64, window:usize
         // Instant normal playback samples floor(index), except flow needs the next frame.
         if !all&&matches!(c.time_mode,TimeMode::Normal)&&t0==t1{let flow=c.props.get("flow_blur").map(|v|v.at((t0-c.start).max(0.))>0.).unwrap_or(false);ib=if flow{(ia+1).min(total-1)}else{ia};}
         let a = p.assets.get(asset).ok_or(format!("asset {asset} missing"))?;
-        let stat=std::fs::metadata(&a.path).map_err(|e|format!("media stat: {e}"))?;
+        let apath=p.resolve(&a.path);let stat=std::fs::metadata(&apath).map_err(|e|format!("media stat: {e}"))?;
         let sig = format!("{asset}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}", c.in_point, c.duration, c.speed, c.speed_curve.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()), p.color_pipeline,c.props.get("input_gamut"),c.props.get("input_transfer"),c.props.get("fit"),a.path,stat.len(),stat.modified().ok());
         if let Some((s, fr)) = cache.frames.get(&c.id) { if *s == sig && fr.covers(ia, ib) { continue; } }
         let shared=cache.frames.values().find(|(s,fr)|*s==sig&&fr.covers(ia,ib)).map(|(_,fr)|fr.clone());
@@ -213,9 +219,9 @@ fn prepare_window(p: &Project, cache: &mut Cache, t0: f64, t1: f64, window:usize
         // Ramps cache source-frame windows; constant-speed clips cache output-frame windows.
         let (start, count) = if all { (0, total) } else { (ia, (ib - ia + 1).max(window).min(total - ia)) };
         let mut count=count;
-        if !all{let native=p.color_pipeline.enabled&&p.color_pipeline.linear_resample;let pixels=if native{let(dw,dh,_,_)=probe(&a.path)?;(dw as usize*dh as usize).max(p.width as usize*p.height as usize)}else{p.width as usize*p.height as usize};let per=pixels*4*if p.color_pipeline.enabled{8}else{1};count=count.min((decode_cache_limit()/media_count/per.max(1)).max(1));if count<ib-ia+1{return Err("active decode range exceeds cache budget".into())}}
+        if !all{let native=p.color_pipeline.enabled&&p.color_pipeline.linear_resample;let pixels=if native{let(dw,dh,_,_)=probe(&apath)?;(dw as usize*dh as usize).max(p.width as usize*p.height as usize)}else{p.width as usize*p.height as usize};let per=pixels*4*if p.color_pipeline.enabled{8}else{1};count=count.min((decode_cache_limit()/media_count/per.max(1)).max(1));if count<ib-ia+1{return Err("active decode range exceeds cache budget".into())}}
         cache.frames.remove(&c.id);
-        let fr = decode(p, c, &a.path, start, count)?;
+        let fr = decode(p, c, &apath, start, count)?;
         if c.speed_curve.is_some()&&!fr.covers(ia,ib){return Err(format!("speed ramp overrun for clip '{}': requested source frames {ia}..={ib}, decoded {} frame(s) starting at {}; shorten the ramp/clip or choose media with enough source duration",c.id,fr.len(),fr.first))}
         let bytes=|fr:&Frames|fr.buf.len()+fr.linear_buf.as_ref().map(|b|b.len()*5).unwrap_or(0);
         let mut seen=std::collections::HashSet::new();
@@ -226,10 +232,12 @@ fn prepare_window(p: &Project, cache: &mut Cache, t0: f64, t1: f64, window:usize
 }
 
 /// All clips including those inside precomps, with starts shifted onto the project clock (precomps nest recursively).
-pub fn flat_clips(tracks: &[Track], off: f64) -> Vec<Clip> { let mut v = vec![]; for tr in tracks { for c in &tr.clips { let mut cc = c.clone(); cc.start += off; if let Source::Precomp { tracks: inner } = &c.source { let sub = flat_clips(inner, cc.start); cc.source = Source::Adjustment; v.push(cc); v.extend(sub); } else { v.push(cc); } } } v }
+pub fn flat_clips(tracks: &[Track], off: f64) -> Vec<Clip> { let mut v = vec![]; for tr in tracks { for c in &tr.clips { let mut cc = Clip::clone(c); cc.start += off; if let Source::Precomp { tracks: inner } = &c.source { let sub = flat_clips(inner, cc.start); cc.source = Source::Adjustment; v.push(cc); v.extend(sub); } else { v.push(cc); } } } v }
 
-fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
-    let lt = c.display_time(lt_in);
+fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame { source_frame_h(p, c, lt_in, cache).0 }
+/// also returns the pixel region (x0,y0,x1,y1 exclusive) outside which the frame is exactly zero, when the source knows it (bounded plain rect)
+fn source_frame_h(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> (Frame, Option<(usize, usize, usize, usize)>) {
+    let lt = c.display_time(lt_in); let mut hint: Option<(usize, usize, usize, usize)> = None;
     let (w, h) = (p.width as usize, p.height as usize);
     let mut f = Frame::new(w, h);
     let mut source_linear=false;
@@ -237,7 +245,7 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         Source::Solid { color } => for i in 0..w*h { f.d[i*4]=color[0] as f32; f.d[i*4+1]=color[1] as f32; f.d[i*4+2]=color[2] as f32; f.d[i*4+3]=1.0; },
         Source::Gradient { c1, c2 } => for y in 0..h { let k = y as f64 / h as f64; for x in 0..w { let i=(y*w+x)*4; for j in 0..3 { f.d[i+j] = (c1[j]*(1.0-k)+c2[j]*k) as f32; } f.d[i+3]=1.0; } },
         Source::Adjustment => {}
-        Source::Precomp { tracks } => { let mut sub = Project { grade_scopes: p.grade_scopes.subset(tracks), lights: p.lights.clone(), materials: p.materials.clone(), editorial: p.editorial.clone(), ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: tracks.clone(), assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 }; sub.name = c.id.clone(); match render_frame_opts(&sub, lt, cache, true) {Ok(fr)=>f=fr,Err(_)=>f.d.fill(f32::NAN)} }
+        Source::Precomp { tracks } => { let mut sub = Project { grade_scopes: p.grade_scopes.subset(tracks), lights: p.lights.clone(), materials: p.materials.clone(), editorial: p.editorial.clone(), ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: tracks.clone(), assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0, deps: None, templates: vec![], base_dir: p.base_dir.clone() }; sub.name = c.id.clone(); match render_frame_opts(&sub, lt, cache, true) {Ok(fr)=>f=fr,Err(_)=>f.d.fill(f32::NAN)} }
         Source::Shape { shape, width, height, fill, stroke_width, stroke_color, sides, corner_radius } => {
             let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0); let (hw, hh) = (width / 2.0, height / 2.0);
             // signed distance (negative inside), then shape modifiers (offset/repeater/merge) from shapemods.rs
@@ -247,8 +255,13 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
                 "ellipse" | "polygon" | "line" => crate::shapemods::sd(shape, *sides, hw, hh, *corner_radius, px, py),
                 _ => { let (qx, qy) = (px.abs() - hw + corner_radius, py.abs() - hh + corner_radius); (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - corner_radius } } };
             let stack = crate::shapemods::build(&c.effects, base, cx, cy, lt); let sd = |x: f64, y: f64| (stack.dist)(x, y);
-            for y in 0..h { for x in 0..w { let d = sd(x as f64 + 0.5, y as f64 + 0.5); let inside = (0.5 - d).clamp(0.0, 1.0); if inside <= 0.0 && *stroke_width <= 0.0 { continue; }
+            // plain rect (exact SDF; the ellipse SDF is approximate and leaks past its box at extreme aspect ratios, found by shape_bound_equiv; no shape modifiers): every pixel farther than margin from the shape's bounding box has d >= 0.5 + stroke/2 and writes nothing, so skip it (bit-identical)
+            let (mut bx0, mut bx1, mut by0, mut by1) = (0usize, w, 0usize, h);
+            if SHAPE_BOUND.load(std::sync::atomic::Ordering::Relaxed) && !c.effects.iter().any(|e| e.kind.starts_with("shape_")) && shape.as_str() == "rect" { let m = 0.5 + stroke_width.max(0.0) / 2.0 + 4.0; bx0 = ((cx - hw - m).floor().max(0.0)) as usize; bx1 = (((cx + hw + m).ceil()).max(0.0) as usize).min(w); by0 = ((cy - hh - m).floor().max(0.0)) as usize; by1 = (((cy + hh + m).ceil()).max(0.0) as usize).min(h); hint = Some((bx0, by0, bx1, by1)); }
+            let (fa, sa) = (prop_or(c, "fill_alpha", lt, 1.0).clamp(0.0, 1.0), prop_or(c, "stroke_alpha", lt, 1.0).clamp(0.0, 1.0)); // fill alpha, stroke alpha and layer opacity are three separate properties
+            for y in by0..by1 { for x in bx0..bx1 { let d = sd(x as f64 + 0.5, y as f64 + 0.5); let inside = (0.5 - d).clamp(0.0, 1.0); if inside <= 0.0 && *stroke_width <= 0.0 { continue; }
                 let sk = if *stroke_width > 0.0 { (0.5 - (d.abs() - stroke_width / 2.0)).clamp(0.0, 1.0) * stack.trim_gate(x as f64 + 0.5 - cx, y as f64 + 0.5 - cy) } else { 0.0 }; let stroke_color = &stack.stroke_color(x as f64 + 0.5 - cx, y as f64 + 0.5 - cy, *width, *height, *stroke_color); let fl = if fill[0] < 0.0 { 0.0 } else if *stroke_width > 0.0 { (0.5 - (d + stroke_width / 2.0)).clamp(0.0, 1.0) } else { inside };
+                let (fl, sk) = (fl * fa, sk * sa);
                 let i = (y * w + x) * 4; let a = (fl + sk * (1.0 - fl)).clamp(0.0, 1.0); if a <= 0.0 { continue; }
                 for j in 0..3 { f.d[i + j] = ((fill[j] * fl + stroke_color[j] * sk * (1.0 - fl)) / a) as f32; } f.d[i + 3] = a as f32; } }
         }
@@ -264,9 +277,9 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
         Source::SpeedLines(s) => crate::speedlines::render(s, &mut f, lt),
         Source::GlitchConfetti(s) => crate::confetti::render(s, &mut f, lt),
         Source::Scene3D(e) => { let t0 = c.start + lt; crate::scene3d::render_blur(e, &mut f, lt, p.fps, &|off| crate::three_d::Camera::from_props(&p.camera, t0 + off)) }
-        Source::ShardBurst(e) => { if let Some(tid) = e.plane.as_ref().and_then(|pl| pl.occlusion_target.as_ref()) { if let Some(occ) = target_screen_occ(p, tid, c.start + lt) { crate::shards::EXT_OCC.with(|cell| *cell.borrow_mut() = Some(occ)); } } crate::shards::WORK_LINEAR.store(p.color_pipeline.enabled && p.color_pipeline.linear_resample, std::sync::atomic::Ordering::Relaxed); crate::shards::render(e, &mut f, lt, &crate::three_d::Camera::from_props(&p.camera, c.start + lt), p.fps, c.duration) }
+        Source::ShardBurst(e) => { if let Some(tid) = e.plane.as_ref().and_then(|pl| pl.occlusion_target.as_ref()) { if let Some(occ) = target_screen_occ(p, tid, c.start + lt) { crate::shards::EXT_OCC.with(|cell| *cell.borrow_mut() = Some(occ)); } } let ctx = crate::shards::RenderCtx { work_linear: p.color_pipeline.enabled && p.color_pipeline.linear_resample }; crate::shards::render_ctx(&ctx, e, &mut f, lt, &crate::three_d::Camera::from_props(&p.camera, c.start + lt), p.fps, c.duration) }
         Source::Particles { kind, count, color, size, seed } => {
-            let rnd = |i: u64, k: u64| { let mut x = (seed ^ (i * 0x9E3779B97F4A7C15) ^ (k * 0xBF58476D1CE4E5B9)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 29; (x >> 11) as f64 / (1u64 << 53) as f64 };
+            let rnd = |i: u64, k: u64| { let mut x = (seed ^ i.wrapping_mul(0x9E3779B97F4A7C15) ^ k.wrapping_mul(0xBF58476D1CE4E5B9)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 29; (x >> 11) as f64 / (1u64 << 53) as f64 };
             let (wf, hf) = (w as f64, h as f64);
             for i in 0..*count as u64 {
                 let (r0, r1, r2, r3) = (rnd(i, 1), rnd(i, 2), rnd(i, 3), rnd(i, 4));
@@ -302,14 +315,61 @@ fn source_frame(p: &Project, c: &Clip, lt_in: f64, cache: &Cache) -> Frame {
     if p.color_pipeline.enabled && !source_linear && !matches!(c.source, Source::Precomp{..}|Source::Adjustment) {
         if crate::color::pipeline::input(p,c,&mut f).is_err(){f.d.fill(f32::NAN);}
     }
-    f
+     (f, hint)
 }
 
+/// The whole 2D transform of a clip at clip-local time `lt`, the ONE place the renderer reads x, y, scale, rotation and opacity (A5: parenting composes here).
+#[derive(Clone, Copy, Debug, PartialEq)] pub struct Xform { pub x: f64, pub y: f64, pub scale: f64, pub rotation: f64, pub opacity: f64 }
+/// Clip-local time at timeline time `t`, exactly as the renderer derives it (posterize-aware, never negative).
+pub fn clip_local_time(c: &Clip, t: f64) -> f64 { if c.posterize_fps > 0.0 { (((t - c.start) * c.posterize_fps + 1e-6).floor() / c.posterize_fps).max(0.0) } else { (t - c.start).max(0.0) } }
+/// The clip's own (local) transform at clip-local time `lt`, ignoring any parent.
+pub fn local_xform(c: &Clip, lt: f64) -> Xform { /* xform-lint: ok */ Xform { x: prop(c, "x", lt), y: prop(c, "y", lt), scale: prop(c, "scale", lt), rotation: prop(c, "rotation", lt), opacity: prop(c, "opacity", lt) } }
+/// parent o child, in the renderer's convention (transform_bb: f = c + d + R(rot) S (q - c), y down): d_w = d_P + R_P S_P d_c, scales multiply, rotations add, opacities multiply. `inh` switches each part off.
+pub fn compose_xform(pw: &Xform, c: &Xform, inh: &crate::model::Inherit) -> Xform {
+    let (mut ox, mut oy) = (c.x, c.y); if inh.scale { ox *= pw.scale; oy *= pw.scale; } if inh.rotation { let r = pw.rotation.to_radians(); let (sn, co) = (r.sin(), r.cos()); let (rx, ry) = (ox * co - oy * sn, ox * sn + oy * co); ox = rx; oy = ry; }
+    Xform { x: if inh.position { pw.x + ox } else { c.x }, y: if inh.position { pw.y + oy } else { c.y }, scale: if inh.scale { pw.scale * c.scale } else { c.scale }, rotation: if inh.rotation { pw.rotation + c.rotation } else { c.rotation }, opacity: if inh.opacity { pw.opacity * c.opacity } else { c.opacity } }
+}
+pub fn resolve_xform(p: &Project, c: &Clip, lt: f64) -> Xform {
+    let me = local_xform(c, lt); if c.parent.is_none() { return me; }
+    let t = c.start + lt; let mut chain: Vec<&Clip> = vec![]; let mut cur = c;
+    for _ in 0..64 { match cur.parent.as_deref().and_then(|id| p.find_clip(id)) { Some(pc) if pc.id != c.id && !chain.iter().any(|x| x.id == pc.id) => { chain.push(pc); cur = pc; } _ => break } }
+    if chain.is_empty() { return me; }
+    let root = chain[chain.len() - 1]; let mut w = local_xform(root, clip_local_time(root, t));
+    for node in chain[..chain.len() - 1].iter().rev() { w = compose_xform(&w, &local_xform(node, clip_local_time(node, t)), &node.inherit); }
+    compose_xform(&w, &me, &c.inherit)
+}
+// thread-local-ok: frame-scoped parented-pose memo; MemoScope clears it at frame entry and restores the previous value on drop (also on error/panic), so nothing survives a render
+thread_local! { static XMEMO: std::cell::RefCell<Option<std::collections::HashMap<(usize, u64, u64), (String, Xform)>>> = const { std::cell::RefCell::new(None) }; }
+/// Frame-scoped memo for parented clips: the project cannot change inside one render_frame call, so (project, clip id, lt) fixes the resolved transform. Active only between `MemoScope::enter` and drop on this thread; outside a frame every call resolves afresh.
+pub struct MemoScope(Option<std::collections::HashMap<(usize, u64, u64), (String, Xform)>>);
+impl MemoScope { pub fn enter() -> MemoScope { MemoScope(XMEMO.with(|m| m.borrow_mut().replace(Default::default()))) } }
+impl Drop for MemoScope { fn drop(&mut self) { let prev = self.0.take(); XMEMO.with(|m| *m.borrow_mut() = prev); } }
+fn id_hash(s: &str) -> u64 { let mut h: u64 = 0xcbf29ce484222325; for b in s.bytes() { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); } h }
+fn resolve_memo(p: &Project, c: &Clip, lt: f64) -> Xform {
+    let key = (p as *const Project as usize, id_hash(&c.id), lt.to_bits());
+    if let Some(x) = XMEMO.with(|m| m.borrow().as_ref().and_then(|h| h.get(&key).filter(|(id, _)| *id == c.id).map(|(_, x)| *x))) { return x; }
+    let x = resolve_xform(p, c, lt); XMEMO.with(|m| if let Some(h) = m.borrow_mut().as_mut() { h.insert(key, (c.id.clone(), x)); }); x
+}
+/// One field of `resolve_xform`. Without a parent it evaluates only the requested field (same cost and values as the old direct prop read).
+fn xprop(p: &Project, c: &Clip, k: &str, lt: f64) -> f64 {
+    if c.parent.is_some() { let t = resolve_memo(p, c, lt); return match k { "x" => t.x, "y" => t.y, "scale" => t.scale, "rotation" => t.rotation, _ => t.opacity }; }
+    /* xform-lint: ok */ match k { "x" => prop(c, "x", lt), "y" => prop(c, "y", lt), "scale" => prop(c, "scale", lt), "rotation" => prop(c, "rotation", lt), _ => prop(c, "opacity", lt) } }
 fn prop(c: &Clip, k: &str, lt: f64) -> f64 { c.props.get(k).map(|x| x.at(lt)).unwrap_or(0.0) }
+/// like prop, but a missing property is `d` (fill_alpha / stroke_alpha default to 1 so old projects render as before)
+fn prop_or(c: &Clip, k: &str, lt: f64, d: f64) -> f64 { c.props.get(k).map(|x| x.at(lt)).unwrap_or(d) }
 
 /// Inverse-mapped transform (scale/rotate/translate around centre) with alpha-correct bilinear sampling and
 /// supersampling (2x2 for any resample, up to 4x4 when minifying) so downscaled and rotated layers are antialiased.
 /// Alpha bounding box (x0,y0,x1,y1) of a frame, None if fully transparent.
+/// Kill switch for the bounded shape raster (default on); tests prove on/off output is bit-identical.
+static SHAPE_BOUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+pub fn set_shape_bound(on: bool) { SHAPE_BOUND.store(on, std::sync::atomic::Ordering::Relaxed); }
+static SHAPE_HINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+pub fn set_shape_hint(on: bool) { SHAPE_HINT.store(on, std::sync::atomic::Ordering::Relaxed); }
+/// tight alpha bbox when every pixel outside region (x0,y0,x1,y1 exclusive) is known to be zero: same result as alpha_bbox, scans only the region
+fn alpha_bbox_in(src: &Frame, r: (usize, usize, usize, usize)) -> Option<(usize, usize, usize, usize)> { let w = src.w; let (rx0, ry0, rx1, ry1) = (r.0.min(src.w), r.1.min(src.h), r.2.min(src.w), r.3.min(src.h)); let (mut x0, mut y0, mut x1, mut y1) = (w, src.h, 0usize, 0usize); let mut any = false;
+    for y in ry0..ry1 { let row = &src.d[y * w * 4..(y + 1) * w * 4]; let mut first = None; let mut last = 0; for x in rx0..rx1 { if row[x * 4 + 3] > 0.0 { if first.is_none() { first = Some(x); } last = x; } } if let Some(f0) = first { any = true; x0 = x0.min(f0); x1 = x1.max(last); y0 = y0.min(y); y1 = y1.max(y); } }
+    if any { Some((x0, y0, x1, y1)) } else { None } }
 fn alpha_bbox(src: &Frame) -> Option<(usize, usize, usize, usize)> { let (w, h) = (src.w, src.h); let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize); let mut any = false;
     for y in 0..h { let row = &src.d[y * w * 4..(y + 1) * w * 4]; let mut first = None; let mut last = 0; for x in 0..w { if row[x * 4 + 3] > 0.0 { if first.is_none() { first = Some(x); } last = x; } } if let Some(f0) = first { any = true; x0 = x0.min(f0); x1 = x1.max(last); y0 = y0.min(y); y1 = y1.max(y); } }
     if any { Some((x0, y0, x1, y1)) } else { None } }
@@ -389,6 +449,7 @@ pub fn render_frame(p: &Project, t: f64, cache: &Cache) -> Result<Frame, String>
 /// `transparent`: start from a clear canvas (used for precomps) instead of opaque black.
 pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) -> Result<Frame, String> {
     if !t.is_finite(){return Err("render time must be finite".into())}
+    let _memo = MemoScope::enter();
     p.color_pipeline.validate()?;p.grade_scopes.validate(p)?;
     for c in flat_clips(&p.tracks,0.) {if let Some(g)=&c.grade_graph{g.validate_project(p)?;}for e in c.effects {if let Some(w)=e.strings.get("bound_linear_gamut"){let g=w.parse::<usize>().map_err(|_|"bad bound linear gamut")?;if !p.color_pipeline.enabled||g!=p.color_pipeline.working_gamut||e.params.get("gamut").map(|v|(v.base,v.keys.is_empty(),v.expr.is_empty()))!=Some((g as f64,true,true)){return Err("managed linear effect no longer matches working gamut; re-add it".into())}}if let Some(white)=e.strings.get("wrapper_reference_white"){if white.parse::<f64>().ok()!=Some(p.color_pipeline.reference_white){return Err("effect wrapper reference white changed; reconfigure wrapper".into())}}if let Some(w)=e.strings.get("wrapper_working_gamut"){if !p.color_pipeline.enabled||w.parse::<usize>().ok()!=Some(p.color_pipeline.working_gamut){return Err("effect encoding wrapper no longer matches project working gamut; reconfigure or clear it".into())}}}}
     let (w, h) = (p.width as usize, p.height as usize);
@@ -411,23 +472,24 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
             if let Some(g)=&c.grade_graph{g.apply(&mut adj,lt,seed,p.fps)?;}
             p.grade_scopes.apply_clip(p,&c.id,&mut adj,lt,seed)?;
             prof("adjust", tpa);
-            let op = prop(c, "opacity", lt) as f32; let mk: Option<Frame> = c.mask.as_ref().map(|m| { let mut mf = Frame::new(w, h); for i in 0..w*h { mf.d[i*4] = out.d[i*4]; mf.d[i*4+1] = out.d[i*4+1]; mf.d[i*4+2] = out.d[i*4+2]; mf.d[i*4+3] = 1.0; } apply_mask(&mut mf, m, lt); { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut mf, &m.layers, lt, &ctx); } mf });
+            let op = xprop(p, c, "opacity", lt) as f32; let mk: Option<Frame> = c.mask.as_ref().map(|m| { let mut mf = Frame::new(w, h); for i in 0..w*h { mf.d[i*4] = out.d[i*4]; mf.d[i*4+1] = out.d[i*4+1]; mf.d[i*4+2] = out.d[i*4+2]; mf.d[i*4+3] = 1.0; } apply_mask(&mut mf, m, lt); { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut mf, &m.layers, lt, &ctx); } mf });
             for i in 0..w*h { let k = op * mk.as_ref().map(|m| m.d[i*4+3]).unwrap_or(1.0); for j in 0..3 { out.d[i*4+j] = out.d[i*4+j] * (1.0 - k) + adj.d[i*4+j] * k; } }
             continue;
         }
+        let mut src_hint: Option<(usize, usize, usize, usize)> = None;
         let mut f = if let Some(fr) = static_layer(p, c, lt, seed, t, cache)? { fr } else {
-        let tp=std::time::Instant::now(); let mut f = source_frame(p, c, lt, cache); prof("source", tp);
+        let tp=std::time::Instant::now(); let (mut f, sh_) = source_frame_h(p, c, lt, cache); src_hint = sh_; prof("source", tp);
         // set only now: nested precomp children render inside source_frame and would otherwise clear it
         if c.effects.iter().any(|e| crate::effects2::needs_backdrop(&e.kind)) { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); }
         if c.effects.iter().any(|e| e.kind == "relight" || e.kind == "fracture_glass") { crate::lighting::set_scene(Some(std::rc::Rc::new(crate::lighting::build_scene(&p.lights, &p.materials, t)))); }
         let tp=std::time::Instant::now(); let r = apply_effects_masked(p, c, &mut f, lt, seed, t, cache); crate::lighting::set_scene(None); BACKDROP.with(|b| *b.borrow_mut() = None); r?; prof("effects", tp); f };
         if let Some(m) = &c.mask { apply_mask(&mut f, m, lt); if !m.layers.is_empty() { let refs = |id: &str| render_clip_alone(p, id, t, cache); let ctx = crate::masks::Ctx { refs: &refs, fps: p.fps }; crate::masks::apply_stack(&mut f, &m.layers, lt, &ctx); } }
-        let mut op = prop(c, "opacity", lt) as f32;
+        let mut op = xprop(p, c, "opacity", lt) as f32;
         let mut c_blend = c.blend.as_str();
         if let (Some(e), true) = (&c.echo, ek > 0) { match e.mode.as_str() { "average" => {} m => { op *= e.decay.clamp(0.0, 1.0).powi(ek as i32) as f32; if m == "add" { c_blend = "add"; } else if m == "screen" { c_blend = "screen"; } } } }
-                let (mut dx, mut dy) = (prop(c, "x", lt), prop(c, "y", lt));
+                let (mut dx, mut dy) = (xprop(p, c, "x", lt), xprop(p, c, "y", lt));
         let mut mask: Option<Box<dyn Fn(usize, usize) -> f32>> = None;
-        let (mut sc, mut rot_extra) = (prop(c, "scale", lt), 0.0);
+        let (mut sc, mut rot_extra) = (xprop(p, c, "scale", lt), 0.0);
         let mp_at = |l2: f64| -> (f64, f64, f64) { match &c.motion_path { Some(mp) => { let (x, y, a) = crate::motion::sample(mp, prop(c, "path", l2), w, h); (x, y, if mp.auto_orient { a + mp.orient_offset } else { 0.0 }) } None => (0.0, 0.0, 0.0) } };
         let (mp0x, mp0y, mp0a) = mp_at(lt); dx += mp0x; dy += mp0y; rot_extra += mp0a; let mut tplan: Option<crate::transitions::Plan> = None;
         if let Some(tr_in) = &c.transition_in { if lt < tr_in.duration {
@@ -439,26 +501,30 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
         let f = if let Some(mut pf) = crate::planar::pin_render(c, &f, lt, p.fps) { let adaptive = p.occluders.get(&c.id).map(|s| s.adaptive).unwrap_or(false); if adaptive { if let Some(sp) = p.occluders.get(&c.id) { if let Some(m) = crate::planar::adaptive_matte(c, sp, p.fps, t, w, h) { for i in 0..w * h { pf.d[i * 4 + 3] *= m[i]; } } } } if !adaptive && crate::planar::anchor_src(&c.id).is_none() { if let Some(sp) = p.occluders.get(&c.id) { crate::planar::rebuild_anchor(&c.id, sp, w, h); } } if let Some((sid, sstart)) = crate::planar::anchor_src(&c.id).filter(|_| !adaptive) { if let (Some(fr), Some(q)) = (cache.frames_of(&sid), crate::planar::pin_quad(c, lt)) { if let Some(cur) = fr.get(((t - sstart).max(0.0) * p.fps) as usize) { let g = prop(c, "pin_gain", lt) as f32; if let Some(m) = crate::planar::occluder_matte(&c.id, cur, &q, if g > 0.0 { g } else { 1.0 }) { for i in 0..w * h { pf.d[i * 4 + 3] *= m[i]; } } } } } pf } else if let Some(cs) = &c.corners { corner_pin(&f, cs) } else { f };
         let (rxv, ryv, pzv) = (prop(c, "rot_x", lt), prop(c, "rot_y", lt), prop(c, "pos_z", lt));
         if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 {
-            let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(c, "rotation", lt) + rot_extra], scale: sc };
-            let f3 = crate::three_d::render_layer(&f, &cam, &pose, prop(c, "backface", lt) != 0.0);
+            let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, xprop(p, c, "rotation", lt) + rot_extra], scale: sc };
+            let mut f3 = crate::three_d::render_layer(&f, &cam, &pose, prop(c, "backface", lt) != 0.0);
+            // frosted_glass on a tilted layer: the pane is the projected silhouette, and it frosts what is really under it
+            if c.effects.iter().any(|e| crate::effects2::is_post(&e.kind)) { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); crate::frosted::set_post(true); crate::frosted::set_tilt((ryv.to_radians().sin()) as f32, (-rxv.to_radians().sin()) as f32); crate::frosted::set_slab(Some(crate::three_d::Projector::new(w, h, &cam, &pose)));
+                let r: Result<(), String> = (|| { for e in c.effects.iter().filter(|e| crate::effects2::is_post(&e.kind)) { effects::apply(&e.kind, &e.params, &e.strings, &mut f3, lt, seed)?; } Ok(()) })();
+                crate::frosted::set_post(false); crate::frosted::set_tilt(0.0, 0.0); crate::frosted::set_slab(None); BACKDROP.with(|b| *b.borrow_mut() = None); r?; }
             blend(&mut out, &f3, op, c_blend, mask.as_deref()); if let Some(pl) = &tplan { if let Some(ov) = &pl.overlay { ov(&mut out); } } continue;
         }
-        let moving = c.motion_blur > 0.0 && ek == 0 && { let sh0 = c.motion_blur / 360.0 / p.fps; ["x", "y", "scale", "rotation"].iter().any(|k| (prop(c, k, lt - sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9 || (prop(c, k, lt + sh0 * 0.5) - prop(c, k, lt)).abs() > 1e-9) };
-        let mut from_tb = false; let tp=std::time::Instant::now(); let bbf = alpha_bbox(&f); prof("bbox", tp); let tp=std::time::Instant::now(); let f = if moving { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h]; let mut u: Option<(usize, usize, usize, usize)> = None;
-            for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (prop(c, "x", lt2), prop(c, "y", lt2)); dx2 += dx - prop(c, "x", lt) - mp0x; dy2 += dy - prop(c, "y", lt) - mp0y; let (mp2x, mp2y, mp2a) = mp_at(lt2); dx2 += mp2x; dy2 += mp2y;
-                let mut sc2 = prop(c, "scale", lt2); if sc != prop(c, "scale", lt) { sc2 *= sc / prop(c, "scale", lt).max(1e-9); } LAST_RECT.with(|l| l.set(None)); FAST_NS.with(|l| l.set(true)); let tf = transform_bb(&f, bbf, sc2, prop(c, "rotation", lt2) + rot_extra - mp0a + mp2a, dx2, dy2); FAST_NS.with(|l| l.set(false));
+        let moving = c.motion_blur > 0.0 && ek == 0 && { let sh0 = c.motion_blur / 360.0 / p.fps; ["x", "y", "scale", "rotation"].iter().any(|k| (xprop(p, c, k, lt - sh0 * 0.5) - xprop(p, c, k, lt)).abs() > 1e-9 || (xprop(p, c, k, lt + sh0 * 0.5) - xprop(p, c, k, lt)).abs() > 1e-9) };
+        let mut from_tb = false; let tp=std::time::Instant::now(); let hint_ok = SHAPE_HINT.load(std::sync::atomic::Ordering::Relaxed) && src_hint.is_some() && c.effects.is_empty() && c.mask.is_none() && tplan.is_none() && !p.color_pipeline.enabled && !c.props.keys().any(|k| k.starts_with("pin_") || k.starts_with("mesh_")); let bbf = if hint_ok { alpha_bbox_in(&f, src_hint.unwrap()) } else { alpha_bbox(&f) }; prof("bbox", tp); let tp=std::time::Instant::now(); let f = if moving { let n = ((c.motion_blur / 22.5).ceil() as usize).clamp(4, 16); let sh = c.motion_blur / 360.0 / p.fps; let mut acc = Frame::new(w, h); let mut wsum = vec![0f32; w * h]; let mut u: Option<(usize, usize, usize, usize)> = None;
+            for k in 0..n { let o = (k as f64 + 0.5) / n as f64 - 0.5; let lt2 = lt + o * sh; let (mut dx2, mut dy2) = (xprop(p, c, "x", lt2), xprop(p, c, "y", lt2)); dx2 += dx - xprop(p, c, "x", lt) - mp0x; dy2 += dy - xprop(p, c, "y", lt) - mp0y; let (mp2x, mp2y, mp2a) = mp_at(lt2); dx2 += mp2x; dy2 += mp2y;
+                let mut sc2 = xprop(p, c, "scale", lt2); if sc != xprop(p, c, "scale", lt) { sc2 *= sc / xprop(p, c, "scale", lt).max(1e-9); } LAST_RECT.with(|l| l.set(None)); FAST_NS.with(|l| l.set(true)); let tf = transform_bb(&f, bbf, sc2, xprop(p, c, "rotation", lt2) + rot_extra - mp0a + mp2a, dx2, dy2); FAST_NS.with(|l| l.set(false));
                 if let Some((rx0, ry0, rx1, ry1)) = LAST_RECT.with(|l| l.get()) { u = Some(match u { Some((a, b, c2, d)) => (a.min(rx0), b.min(ry0), c2.max(rx1), d.max(ry1)), None => (rx0, ry0, rx1, ry1) });
                 for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; let a = tf.d[i * 4 + 3]; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += tf.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; wsum[i] += a; } } } } }
             if let Some((rx0, ry0, rx1, ry1)) = u { for y in ry0..=ry1 { for x in rx0..=rx1 { let i = y * w + x; if wsum[i] > 0.0 { for j in 0..3 { acc.d[i * 4 + j] /= wsum[i]; } } acc.d[i * 4 + 3] /= n as f32; } } } acc }
-            else if (sc - 1.0).abs() < 1e-9 && prop(c, "rotation", lt) + rot_extra == 0.0 && dx == 0.0 && dy == 0.0 { f } else { from_tb = true; transform_bb(&f, bbf, sc, prop(c, "rotation", lt) + rot_extra, dx, dy) };
+            else if (sc - 1.0).abs() < 1e-9 && xprop(p, c, "rotation", lt) + rot_extra == 0.0 && dx == 0.0 && dy == 0.0 { f } else { from_tb = true; transform_bb(&f, bbf, sc, xprop(p, c, "rotation", lt) + rot_extra, dx, dy) };
         prof("transform", tp);
         let mut f = f; if let Some(mt) = c.mask.as_ref().and_then(|m| m.matte.as_ref()) { if let Some(src) = render_clip_alone(p, &mt.source, t, cache) { let cov = crate::masks::matte_coverage(mt, &src); for i in 0..w * h { f.d[i * 4 + 3] *= cov[i]; } } }
         // frosted_glass runs here, after the layer transform, so it frosts what is really under the pane
-        if c.effects.iter().any(|e| e.kind == "frosted_glass") { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); crate::frosted::set_post(true);
-            let r: Result<(), String> = (|| { for e in c.effects.iter().filter(|e| e.kind == "frosted_glass") { effects::apply(&e.kind, &e.params, &e.strings, &mut f, lt, seed)?; } Ok(()) })();
+        if c.effects.iter().any(|e| crate::effects2::is_post(&e.kind)) { BACKDROP.with(|b| *b.borrow_mut() = Some(std::rc::Rc::new(Frame { w, h, d: out.d.clone() }))); crate::frosted::set_post(true);
+            let r: Result<(), String> = (|| { for e in c.effects.iter().filter(|e| crate::effects2::is_post(&e.kind)) { effects::apply(&e.kind, &e.params, &e.strings, &mut f, lt, seed)?; } Ok(()) })();
             crate::frosted::set_post(false); BACKDROP.with(|b| *b.borrow_mut() = None); r?; }
         if let Some(cf) = tplan.as_ref().and_then(|pl| pl.compose.as_ref()) { out = cf(&out, &f); continue; }
-        if let Source::ShardBurst(_) = &c.source { if let Some(d) = crate::shards::take_disp() { crate::shards::refract_canvas(&mut out, &d, &f); } }
+        if let Source::ShardBurst(sb) = &c.source { if let Some(d) = crate::shards::take_disp() { crate::shards::refract_canvas(&mut out, &d, &f, sb.refract_dispersion.clamp(0.0, 1.0)); } }
         if let Some(acc) = eacc.as_mut() { let wgt = op / (ne + 1) as f32; for i in 0..w * h { let a = f.d[i * 4 + 3] * wgt; if a > 0.0 { for j in 0..3 { acc.d[i * 4 + j] += f.d[i * 4 + j] * a; } acc.d[i * 4 + 3] += a; } } continue; }
         let tp=std::time::Instant::now(); let rect = if from_tb { LAST_RECT.with(|l| l.get()) } else { None }; blend_region(&mut out, &f, op, c_blend, mask.as_deref(), rect); prof("blend", tp);
         if let Some(r) = rect { pool_give(f, r); }
@@ -474,26 +540,31 @@ pub fn render_frame_opts(p: &Project, t: f64, cache: &Cache, transparent: bool) 
 
 /// The compositor keeps premultiplied color on a transparent canvas (rgb = sum of src*a over below); alpha deliveries need straight alpha.
 pub(crate) fn unpremultiply(f: &mut Frame) { for px in f.d.chunks_exact_mut(4) { let a = px[3]; if a > 0.0 && a < 1.0 { for j in 0..3 { px[j] = (px[j] / a).min(1.0); } } } }
+/// One export-equivalent RGBA8 frame (opaque canvas): render_frame_opts, the colour pipeline output stage, then to_rgba8, exactly the steps of the export loop.
+pub fn export_frame_rgba8(p: &Project, t: f64, cache: &Cache) -> Result<Vec<u8>, String> { render_frame_opts(p, t, cache, false).and_then(|mut f| { crate::color::pipeline::output(p, &mut f)?; Ok(to_rgba8(&f)) }) }
 pub fn to_rgba8(f: &Frame) -> Vec<u8> { f.d.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect() }
 
 fn image_encoder_command(w:usize,h:usize,path:&str)->Command{let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{w}x{h}"),"-i","-","-frames:v","1",path]);cmd}
 fn write_image_command(f:&Frame,cmd:&mut Command,deadline:std::time::Duration)->Result<(),String>{let size=f.w.checked_mul(f.h).and_then(|n|n.checked_mul(4)).filter(|n|*n>0&&*n==f.d.len()).ok_or("invalid image frame shape")?;crate::guard::reserve(size);let mut encoder=crate::color::process::EncodeStream::new(cmd,size,deadline)?;encoder.write(to_rgba8(f))?;encoder.finish()}
 pub(crate) fn write_image(f:&Frame,path:&str)->Result<(),String>{write_image_command(f,&mut image_encoder_command(f.w,f.h,path),crate::color::process::encode_deadline(1))}
 
-pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<(), String> {
+pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<(), String> { render_png_with(p, t, path, cache, None) }
+pub fn render_png_with(p: &Project, t: f64, path: &str, cache: &mut Cache, fc: Option<&mut crate::framecache::FrameCache>) -> Result<(), String> {
     if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) {return Err("HDR output cannot be shown as an SDR PNG; select an SDR preview output or render_high_bit_still".into())}
     prepare_at(p, cache, Some(t))?;
-    let mut f = render_frame(p, t, cache)?;
+    let mut f = match fc { Some(fc) => crate::framecache::render_cached(fc, p, t, cache)?, None => render_frame(p, t, cache)? };
     crate::color::pipeline::output(p,&mut f)?;
     write_image(&f,path)
 }
 
 /// Ordinary video delivery is explicit Rec709 RGB -> limited BT709 YUV.
 /// Disabled projects keep their display-sRGB render samples; only delivery changes.
-pub(crate) fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Result<Command,String>{
+pub(crate) fn legacy_encoder_command(p:&Project,path:&str,crf:u32)->Result<Command,String>{legacy_encoder_command_opts(p,path,crf,false)}
+/// `low_memory` adds x264 settings that cut the encoder's RSS (shorter lookahead, fewer refs and b-frames) at a small size/quality cost. Default output bytes are unchanged.
+pub(crate) fn legacy_encoder_command_opts(p:&Project,path:&str,crf:u32,low_memory:bool)->Result<Command,String>{
     let q=&p.color_pipeline;
     let transfer=if q.enabled{q.validate()?;if q.output_gamut!=0{return Err("ordinary video export requires Rec709 output gamut=0; select a supported delivery output or export_high_bit".into())}match q.output_transfer{0=>"linear",1=>"iec61966-2-1",8=>"bt709",_=>return Err("ordinary video export requires exactly taggable linear/sRGB/BT709 output transfer; select a supported delivery output or export_high_bit".into())}}else{"iec61966-2-1"};
-    let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v","libx264","-vf","scale=out_color_matrix=bt709:out_range=tv","-pix_fmt","yuv420p","-color_range","tv","-color_primaries","bt709","-color_trc",transfer,"-colorspace","bt709","-crf",&crf.to_string(),path]);Ok(cmd)
+    let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{}x{}",p.width,p.height),"-r",&p.fps.to_string(),"-i","-","-c:v","libx264","-vf","scale=out_color_matrix=bt709:out_range=tv","-pix_fmt","yuv420p","-color_range","tv","-color_primaries","bt709","-color_trc",transfer,"-colorspace","bt709","-crf",&crf.to_string()]);if low_memory{cmd.args(["-x264-params","rc-lookahead=10:ref=2:bframes=2:sync-lookahead=0"]);}cmd.arg(path);Ok(cmd)
 }
 
 
@@ -513,12 +584,12 @@ pub fn export_alpha(p: &Project, path: &str, format: &str, t_in: f64, t_out: f64
     }
     let frame_bytes = (p.width as usize).checked_mul(p.height as usize).and_then(|v| v.checked_mul(4)).ok_or("frame overflow")?;
     let mut encoder = crate::color::process::EncodeStream::new(&mut cmd, frame_bytes, crate::color::process::encode_deadline(n))?;
-    let mut cache = Cache::new_export(); let nt = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1); let mut i = 0;
+    let mut cache = Cache::new_export(); let nt = crate::guard::export_threads_n(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1), frame_buffers(p)); let mut i = 0;
     while i < n {
         crate::guard::check(); let mut end = (i + nt * 4).min(n);
         loop { let last = (f0 + end - 1) as f64 / p.fps; match prepare_export_range(p, &mut cache, (f0 + i) as f64 / p.fps, last) { Ok(()) => break, Err(e) if end - i > 1 && (e.contains("cache budget") || e.contains("memory cap") || e.contains("bounded cache")) => { end = i + (end - i).div_ceil(2); cache = Cache::new_export(); }, Err(e) => return Err(e) } }
         let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
-        std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
+        std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); crate::guard::scope_spawn(sc, move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
             let res = render_frame_opts(p, (f0 + k) as f64 / p.fps, cache, true).map(|mut f| { unpremultiply(&mut f); to_rgba8(&f) }); *slots[k - i].lock().unwrap() = Some(res); }); } });
         for m in slots { encoder.write(m.into_inner().unwrap().unwrap()?)?; }
         i = end;
@@ -526,15 +597,57 @@ pub fn export_alpha(p: &Project, path: &str, format: &str, t_in: f64, t_out: f64
     encoder.finish()?; Ok(n as f64 / p.fps)
 }
 
+/// Join picture-only range exports (`export` with `audio:false`) in order with a stream copy, then mux ONE continuous audio stream for the same
+/// timeline span, so no AAC priming gap appears at the seams. `start` is the timeline time of the first part's first frame.
+pub fn join_export(p: &Project, parts: &[String], path: &str, start: f64) -> Result<f64, String> {
+    if parts.is_empty() { return Err("parts must list at least one picture-only export".into()); }
+    if !start.is_finite() || start < 0.0 { return Err("start must be >= 0".into()); }
+    let mut total = 0.0; let mut fps0 = 0.0;
+    for (i, f) in parts.iter().enumerate() { let (_, _, dur, fps) = probe(f)?; if i == 0 { fps0 = fps; } else if (fps - fps0).abs() > 1e-6 { return Err(format!("part {i} runs at {fps} fps but part 0 runs at {fps0}")); } total += dur; }
+    let frames = (total * fps0).round() as usize; if frames == 0 { return Err("parts contain no frames".into()); }
+    let list = std::env::temp_dir().join({ static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0); format!("kimo-join-{}-{}-{}.txt", std::process::id(), frames, N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) });
+    std::fs::write(&list, parts.iter().map(|f| format!("file '{}'\n", f.replace('\'', "'\\''"))).collect::<String>()).map_err(|e| e.to_string())?;
+    let out = Command::new("ffmpeg").args(["-v", "error", "-y", "-f", "concat", "-safe", "0", "-i"]).arg(&list).args(["-c", "copy", "-an", path]).output().map_err(|e| format!("ffmpeg: {e}"))?;
+    let _ = std::fs::remove_file(&list);
+    if !out.status.success() { return Err(format!("join failed: {}", String::from_utf8_lossy(&out.stderr).trim())); }
+    let sr = crate::audio::SR as f64; let (s0, s1) = ((start * sr) as usize * 2, ((start + frames as f64 / fps0) * sr) as usize * 2);
+    crate::guard::reserve(s1.saturating_sub(s0) * 4);
+    let pcm_full = crate::audio::mix(p); let a = s0.min(pcm_full.len()); let b = s1.min(pcm_full.len()); let mut pcm = pcm_full[a..b].to_vec(); pcm.resize(s1 - s0, 0.0);
+    if pcm.iter().any(|v| v.abs() > 1e-6) { crate::color::mux::legacy_audio(path, &pcm, frames)?; }
+    Ok(frames as f64 / fps0)
+}
+
+/// Full-frame f32 buffers one in-flight frame needs, for sizing export workers. Measured on 1080p (tests/frame_live_peak.rs): plain generators 2.0,
+/// glass shards + glow/blur/bloom adjustment stacks up to 5.5, precomp depth 3 = 8, motion blur 4.25, 3D 3.0. Only scenes fully inside the measured
+/// set get a lower figure (ceil(1.5 x measured), floor 4): 4 for bare generators, 9 for the measured effect/mask/shard/adjustment set.
+/// Anything else (media, precomps, motion blur, 3D, other effects, grade graphs, echo, transitions) keeps the safe 12.
+pub fn frame_buffers(p: &Project) -> usize {
+    use crate::model::Source;
+    const SAFE: usize = crate::guard::FRAME_BUFFERS_SAFE;
+    if !p.camera.is_empty() { return SAFE; }
+    let mut rich = false;
+    for t in &p.tracks { for c in &t.clips {
+        match &c.source { Source::Solid { .. } | Source::Gradient { .. } | Source::Shape { .. } => {}, Source::Adjustment | Source::ShardBurst(_) => rich = true, _ => return SAFE }
+        if c.motion_blur != 0.0 || c.corners.is_some() || c.grade_graph.is_some() || c.echo.is_some() || c.motion_path.is_some() || c.transition_in.is_some() || c.text_fx.is_some() { return SAFE; }
+        if c.props.keys().any(|k| ["rot_x", "rot_y", "pos_z", "flow_blur"].contains(&k.as_str())) { return SAFE; }
+        if c.mask.is_some() { rich = true; }
+        for e in &c.effects { if !["glow", "blur", "bloom", "exposure"].contains(&e.kind.as_str()) { return SAFE; } rich = true; }
+    } }
+    if rich { 9 } else { 4 }
+}
+
 pub fn export(p: &Project, path: &str, crf: u32) -> Result<f64, String> { export_range(p, path, crf, 0.0, p.duration()) }
+pub fn export_opts(p: &Project, path: &str, crf: u32, low_memory: bool) -> Result<f64, String> { export_range_opts(p, path, crf, 0.0, p.duration(), low_memory, true) }
 /// Export [t_in, t_out) seconds. Frame k renders at t_in + k/fps (absolute time, so frames equal the same frames of a full export).
-pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) -> Result<f64, String> {
+pub fn export_range(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64) -> Result<f64, String> { export_range_opts(p, path, crf, t_in, t_out, false, true) }
+pub fn export_range_opts(p: &Project, path: &str, crf: u32, t_in: f64, t_out: f64, low_memory: bool, with_audio: bool) -> Result<f64, String> {
     if !t_in.is_finite() || !t_out.is_finite() || t_in < 0.0 || t_out <= t_in { return Err("range must satisfy 0 <= start < end".into()); }
     let t_out = t_out.min(p.duration()); if t_in >= t_out { return Err("range starts after the end of the timeline".into()); }
     let f0 = (t_in * p.fps).round() as usize; let f1 = ((t_out * p.fps).round() as usize).max(f0 + 1);
     if p.color_pipeline.enabled && [6,7].contains(&p.color_pipeline.output_transfer) { return Err("HDR delivery requires export_high_bit; legacy export is 8-bit SDR".into()); }
-    let command=legacy_encoder_command(p,path,crf)?;
-    export_range_cmd(p, path, f0, f1, command, false, true)
+    let (_workers, low_memory) = crate::guard::export_plan_n(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2), low_memory, frame_buffers(p))?;
+    let command=legacy_encoder_command_opts(p,path,crf,low_memory)?;
+    export_range_cmd(p, path, f0, f1, command, false, with_audio)
 }
 
 /// Shared export loop: render frames f0..f1 into `command`'s stdin (RGBA8), then mux audio when `audio`.
@@ -544,7 +657,7 @@ pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mu
     let n = f1 - f0;
     let frame_bytes=(p.width as usize).checked_mul(p.height as usize).and_then(|v|v.checked_mul(4)).ok_or("legacy encoder frame overflow")?;
     let mut encoder=crate::color::process::EncodeStream::new(&mut command,frame_bytes,crate::color::process::encode_deadline(n))?;
-    let nt = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1);
+    let nt = crate::guard::export_threads_n(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1), frame_buffers(p));
     let mut i = 0;
     while i < n {
         crate::guard::check();
@@ -552,7 +665,7 @@ pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mu
         loop{let last=(f0+end-1) as f64/p.fps;match prepare_export_range(p,&mut cache,(f0+i) as f64/p.fps,last){Ok(())=>break,Err(e)if end-i>1&&(e.contains("cache budget")||e.contains("memory cap")||e.contains("bounded cache"))=>{end=i+(end-i).div_ceil(2);cache=Cache::new_export();},Err(e)=>return Err(e)}}
         // work queue: nt workers pull frame indices, so one slow frame (shards) no longer idles the other cores
         let next = std::sync::atomic::AtomicUsize::new(i); let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>, String>>>> = (i..end).map(|_| std::sync::Mutex::new(None)).collect();
-        std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); sc.spawn(move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
+        std::thread::scope(|sc| { for _ in 0..nt.min(end - i) { let (cache, next, slots) = (&cache, &next, &slots); crate::guard::scope_spawn(sc, move || loop { let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if k >= end { break; }
             let tf0 = std::time::Instant::now(); let res = render_frame_opts(p, (f0 + k) as f64 / p.fps, cache, transparent).and_then(|mut f| {if transparent { unpremultiply(&mut f); } prof("frame_total", tf0); let tq = std::time::Instant::now(); crate::color::pipeline::output(p,&mut f)?; prof("pipe_out", tq); let tq = std::time::Instant::now(); let r = to_rgba8(&f); prof("to_rgba8", tq); Ok(r)}); *slots[k - i].lock().unwrap() = Some(res); }); } });
         let frames: Vec<Result<Vec<u8>, String>> = slots.into_iter().map(|m| m.into_inner().unwrap().unwrap()).collect();
         for f in frames { encoder.write(f?)?; }
@@ -569,22 +682,23 @@ pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mu
 thread_local! { static MATTE_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0); }
 /// Render one clip alone (full transforms/effects) on a transparent canvas: matte sources and difference references.
 
-thread_local! { static SIL_CACHE: std::cell::RefCell<std::collections::VecDeque<((u64, u64, usize, usize), std::rc::Rc<Vec<f32>>)>> = Default::default(); }
+/// Clip-alone alpha planes shared across tool calls (each call runs on its own thread), so a lone render_frame can reuse them.
+static SIL_CACHE: std::sync::Mutex<std::collections::VecDeque<((u64, u64, usize, usize), std::sync::Arc<Vec<f32>>)>> = std::sync::Mutex::new(std::collections::VecDeque::new());
 /// Alpha plane of `id` rendered alone at timeline time `tt`, cached across frames. The key hashes the clip's full JSON, the time and the canvas size, so any edit to the clip changes the key (no stale silhouettes); at most 96 planes are kept.
-fn silhouette_alpha(p: &Project, id: &str, tt: f64, cache: &Cache) -> Option<(usize, usize, std::rc::Rc<Vec<f32>>)> {
+fn silhouette_alpha(p: &Project, id: &str, tt: f64, cache: &Cache) -> Option<(usize, usize, std::sync::Arc<Vec<f32>>)> {
     use std::hash::{Hash, Hasher};
-    let clip = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?; let mut hs = std::collections::hash_map::DefaultHasher::new(); serde_json::to_string(clip).ok()?.hash(&mut hs);
+    let clip = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?; let mut hs = std::collections::hash_map::DefaultHasher::new(); serde_json::to_string(clip).ok()?.hash(&mut hs); serde_json::to_string(&(&p.grade_scopes, &p.editorial, &p.lights, &p.materials, &p.occluders, &p.color_pipeline, &p.camera, &p.assets, p.fps.to_bits())).ok()?.hash(&mut hs);
     let key = (hs.finish(), tt.to_bits(), p.width as usize, p.height as usize);
-    if let Some(hit) = SIL_CACHE.with(|c| c.borrow().iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())) { return Some((key.2, key.3, hit)); }
-    let fr = render_clip_alone(p, id, tt, cache)?; let a: Vec<f32> = (0..fr.w * fr.h).map(|i| fr.d[i * 4 + 3]).collect(); let rc = std::rc::Rc::new(a);
-    SIL_CACHE.with(|c| { let mut c = c.borrow_mut(); if c.len() >= 96 { c.pop_front(); } c.push_back((key, rc.clone())); }); Some((fr.w, fr.h, rc))
+    if let Some(hit) = SIL_CACHE.lock().ok().and_then(|c| c.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())) { return Some((key.2, key.3, hit)); }
+    let fr = render_clip_alone(p, id, tt, cache)?; let a: Vec<f32> = (0..fr.w * fr.h).map(|i| fr.d[i * 4 + 3]).collect(); let rc = std::sync::Arc::new(a);
+    if let Ok(mut c) = SIL_CACHE.lock() { if c.len() >= 96 { c.pop_front(); } c.push_back((key, rc.clone())); } Some((fr.w, fr.h, rc))
 }
 pub fn render_clip_alone(p: &Project, id: &str, t: f64, cache: &Cache) -> Option<Frame> {
     if MATTE_DEPTH.with(|d| d.get()) >= 3 { return None; }
-    let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id)?.clone();
+    let c = p.tracks.iter().flat_map(|tr| tr.clips.iter()).find(|c| c.id == id).map(|c| (**c).clone())?;
     if t < c.start - 1e-9 || t >= c.start + c.duration - 1e-9 { return Some(Frame::new(p.width as usize, p.height as usize)); }
     let mut c = c; if let Some(m) = c.mask.as_mut() { m.matte = None; }
-    let sub = Project { grade_scopes: p.grade_scopes.subset(&[crate::model::Track{id:"matte".into(),clips:vec![c.clone()],locked:false,muted:false,name:String::new()}]), lights: p.lights.clone(), materials: p.materials.clone(), editorial: p.editorial.clone(), ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![c], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0 };
+    let sub = Project { grade_scopes: p.grade_scopes.subset(&[crate::model::Track{id:"matte".into(),clips:vec![std::sync::Arc::new(c.clone())],locked:false,muted:false,name:String::new()}]), lights: p.lights.clone(), materials: p.materials.clone(), editorial: p.editorial.clone(), ocio_view_delivery: None, occluders: p.occluders.clone(), color_pipeline: p.color_pipeline.clone(), tracks: vec![crate::model::Track { id: "matte".into(), clips: vec![std::sync::Arc::new(c)], locked: false, muted: false, name: String::new() }], assets: p.assets.clone(), camera: p.camera.clone(), markers: vec![], name: String::new(), width: p.width, height: p.height, fps: p.fps, next_id: 0, deps: None, templates: vec![], base_dir: p.base_dir.clone() };
     MATTE_DEPTH.with(|d| d.set(d.get() + 1)); let r = render_frame_opts(&sub, t, cache, true).ok(); MATTE_DEPTH.with(|d| d.set(d.get() - 1)); r
 }
 
@@ -772,18 +886,18 @@ pub fn target_screen_occ(p: &Project, id: &str, t: f64) -> Option<std::sync::Arc
     let (w, h) = (p.width as usize, p.height as usize);
     let lt = if c.posterize_fps > 0.0 { (((t - c.start) * c.posterize_fps + 1e-6).floor() / c.posterize_fps).max(0.0) } else { (t - c.start).max(0.0) };
     let vis = crate::planar::adaptive_matte(&c, sp, p.fps, t, w, h)?;
-    let (mut dx, mut dy, mut sc, mut rot_extra) = (prop(&c, "x", lt), prop(&c, "y", lt), prop(&c, "scale", lt), 0.0);
+    let (mut dx, mut dy, mut sc, mut rot_extra) = (xprop(p, &c, "x", lt), xprop(p, &c, "y", lt), xprop(p, &c, "scale", lt), 0.0);
     if let Some(mp) = &c.motion_path { let (x, y, a) = crate::motion::sample(mp, prop(&c, "path", lt), w, h); dx += x; dy += y; if mp.auto_orient { rot_extra += a + mp.orient_offset; } }
     if let Some(tr_in) = &c.transition_in { if lt < tr_in.duration { let pl = crate::transitions::plan(tr_in, lt, w, h); dx += pl.dx; dy += pl.dy; sc *= pl.scale; rot_extra += pl.rot; } }
     let (rxv, ryv, pzv) = (prop(&c, "rot_x", lt), prop(&c, "rot_y", lt), prop(&c, "pos_z", lt));
     let mut mf = Frame::new(w, h); for i in 0..w * h { mf.d[i * 4] = vis[i]; mf.d[i * 4 + 1] = vis[i]; mf.d[i * 4 + 2] = vis[i]; mf.d[i * 4 + 3] = 1.0; }
-    let tm = if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 { let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, prop(&c, "rotation", lt) + rot_extra], scale: sc }; crate::three_d::render_layer(&mf, &cam, &pose, prop(&c, "backface", lt) != 0.0) } else { transform_bb(&mf, Some((0, 0, w - 1, h - 1)), sc, prop(&c, "rotation", lt) + rot_extra, dx, dy) };
+    let tm = if rxv != 0.0 || ryv != 0.0 || pzv != 0.0 { let cam = crate::three_d::Camera::from_props(&p.camera, t); let pose = crate::three_d::Pose { pos: [dx, dy, pzv], rot: [rxv, ryv, xprop(p, &c, "rotation", lt) + rot_extra], scale: sc }; crate::three_d::render_layer(&mf, &cam, &pose, prop(&c, "backface", lt) != 0.0) } else { transform_bb(&mf, Some((0, 0, w - 1, h - 1)), sc, xprop(p, &c, "rotation", lt) + rot_extra, dx, dy) };
     let occ: Vec<f32> = (0..w * h).map(|i| { let a = tm.d[i * 4 + 3].clamp(0.0, 1.0); 1.0 - (tm.d[i * 4] * a + (1.0 - a)) }).collect();
     let arc = std::sync::Arc::new(occ); crate::shards::TARGET_MATTE.with(|m| { m.borrow_mut().insert(id.to_string(), (t, arc.clone())); }); Some(arc)
 }
 
 /// Effects that depend only on their (constant) parameters and the pixels: no time, seed or randomness.
-const STATIC_EFFECTS: &[&str] = &["exposure", "contrast", "saturation", "temperature", "tint", "color_wheels", "curves", "teal_orange", "vignette", "blur", "glow", "invert", "sharpen", "posterize", "sepia", "outline", "outer_glow", "long_shadow", "choker", "feather_alpha", "silhouette_fill"];
+const STATIC_EFFECTS: &[&str] = &["exposure", "contrast", "saturation", "temperature", "tint", "color_wheels", "curves", "teal_orange", "vignette", "blur", "glow", "bloom", "invert", "sharpen", "posterize", "sepia", "outline", "outer_glow", "long_shadow", "choker", "feather_alpha", "silhouette_fill"];
 fn is_static_text(c: &Clip) -> bool {
     let plain = match &c.source { Source::Text { text, .. } => !text.contains('{'), Source::Shape { .. } => true, _ => false }; if !plain { return false; }
     let constant = |pr: &crate::keyframe::Prop| pr.keys.is_empty() && pr.expr.is_empty();
@@ -808,4 +922,35 @@ fn static_layer(p: &Project, c: &Clip, lt: f64, seed: u64, t: f64, cache: &Cache
     if x1 <= x0 { x0 = 0; y0 = 0; x1 = 0; y1 = 0; }
     if (x1 - x0) * (y1 - y0) * 16 <= 64 * 1024 * 1024 { let cw = x1 - x0; let mut d = Vec::with_capacity(cw * (y1 - y0) * 4); for y in y0..y1 { d.extend_from_slice(&f.d[(y * w + x0) * 4..(y * w + x1) * 4]); } cache.statics.write().unwrap().insert(c.id.clone(), std::sync::Arc::new(StaticCrop { x0, y0, x1, y1, d })); }
     Ok(Some(f))
+}
+#[test] fn low_memory_changes_only_the_x264_params() {
+    let mut p = Project::default(); p.width = 1280; p.height = 720; p.fps = 25.;
+    let args = |c: &Command| -> Vec<String> { c.get_args().map(|v| v.to_string_lossy().to_string()).collect() };
+    let (d, d2) = (legacy_encoder_command(&p, "o.mp4", 23).unwrap(), legacy_encoder_command_opts(&p, "o.mp4", 23, false).unwrap());
+    assert_eq!(args(&d), args(&d2), "default argv must be unchanged");
+    let l = args(&legacy_encoder_command_opts(&p, "o.mp4", 23, true).unwrap());
+    assert!(l.windows(2).any(|w| w[0] == "-x264-params" && w[1].contains("rc-lookahead=10")) && l.last().unwrap() == "o.mp4");
+    let base = args(&d); assert_eq!(l.iter().filter(|a| !base.contains(a)).count(), 2, "only -x264-params and its value are added");
+}
+
+#[cfg(test)]
+mod prng_overflow_tests {
+    use super::*;
+    use crate::commands::{dispatch, Session};
+    use serde_json::json;
+
+    // count=3 visits i=2; k=2 already overflows the historical product.
+    // Keep this runnable in the default debug profile with overflow checks on.
+    #[test]
+    fn particle_path_overflowing_indices_are_deterministic() {
+        let mut ss = Session::new();
+        dispatch(&mut ss, "project_set", &json!({"width":32,"height":24,"fps":25})).unwrap();
+        let track = dispatch(&mut ss, "add_track", &json!({})).unwrap()["track_id"].as_str().unwrap().to_string();
+        dispatch(&mut ss, "add_particles", &json!({"track_id":track,"kind":"sparks","start":0,"duration":1,"count":3,"seed":5})).unwrap();
+        let a = render_frame(&ss.project, 0.5, &Cache::new()).unwrap();
+        let b = render_frame(&ss.project, 0.5, &Cache::new()).unwrap();
+        assert_eq!(a.d, b.d);
+        assert!(a.d.iter().all(|v| v.is_finite()));
+        assert!(a.d.chunks_exact(4).any(|p| p[3] > 0.0));
+    }
 }

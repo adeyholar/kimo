@@ -3,6 +3,8 @@ use std::collections::{BTreeMap,BTreeSet};use serde::{Serialize,Deserialize};use
 #[derive(Clone,Debug,Default,Serialize,Deserialize)]#[serde(deny_unknown_fields)]pub struct Scopes{#[serde(default)]pub graphs:BTreeMap<String,Graph>,#[serde(default)]pub clip_bindings:BTreeMap<String,Vec<String>>,#[serde(default)]pub groups:Vec<Group>,#[serde(default)]pub timeline:Vec<String>}
 #[derive(Clone,Debug,Serialize,Deserialize)]#[serde(deny_unknown_fields)]pub struct Group{pub id:String,pub clips:Vec<String>,pub graphs:Vec<String>,#[serde(default)]pub bypass:bool}
 impl Scopes{
+ /// Drop bindings and group membership of removed clips; returns (field, removed id) for each.
+ pub fn remove_clips(&mut self,ids:&[String])->Vec<(String,String)>{let mut out=vec![];for id in ids{if self.clip_bindings.remove(id).is_some(){out.push(("grade_scopes.clip_bindings".to_string(),id.clone()));}}for(i,g)in self.groups.iter_mut().enumerate(){for id in ids{if g.clips.contains(id){g.clips.retain(|c|c!=id);out.push((format!("grade_scopes.groups[{i}].clips"),id.clone()));}}}out}
  pub fn copy_binding(&mut self,old:&str,new:&str){if let Some(refs)=self.clip_bindings.get(old).cloned(){self.clip_bindings.insert(new.into(),refs);}for g in &mut self.groups{if g.clips.iter().any(|c|c==old)&&!g.clips.iter().any(|c|c==new){g.clips.push(new.into());}}}
  pub fn subset(&self,tracks:&[crate::model::Track])->Self{let ids:BTreeSet<_>=crate::render::flat_clips(tracks,0.).iter().map(|c|c.id.clone()).collect();let mut s=self.clone();s.timeline.clear();s.clip_bindings.retain(|c,_|ids.contains(c));for g in &mut s.groups{g.clips.retain(|c|ids.contains(c));}s}
 

@@ -4,9 +4,16 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum Ease { Linear, In, Out, InOut, Hold, OutQuart, OutExpo, OutBack, InOutQuint, InExpo }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Key { pub t: f64, pub v: f64, #[serde(default = "d_ease")] pub ease: Ease, /// Optional cubic-bezier timing curve [x1,y1,x2,y2] for the segment leaving this key (overrides `ease`; y may overshoot).
-    #[serde(default)] pub bez: Option<[f64; 4]> }
+    #[serde(default)] pub bez: Option<[f64; 4]>,
+    /// Optional tangent handle for the segment LEAVING this key: control point (t+dt, v+dv). Wins over `bez`.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub out: Option<Handle>,
+    /// Optional tangent handle for the segment ARRIVING at this key: control point (t-dt, v-dv), so a mirrored pair has equal in/out values.
+    #[serde(default, rename = "in", skip_serializing_if = "Option::is_none")] pub inn: Option<Handle> }
+/// A tangent handle as an offset from its key: `dt` seconds along the time axis (clamped to the segment, so time stays monotone), `dv` in property units (any sign, unclamped: overshoot is allowed).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Handle { pub dt: f64, pub dv: f64 }
 fn d_ease() -> Ease { Ease::Linear }
 
 /// A property that is either constant or keyframed over clip-local time (seconds).
@@ -36,13 +43,30 @@ pub enum Op {
     Bounce { amp: f64, freq: f64, decay: f64 },
     /// Spring overshoot past EVERY key (proper damped spring on the segment delta): amp as a fraction of the delta.
     Overshoot { amp: f64, freq: f64, decay: f64 },
+    /// Closed-form damped spring from `from` to `to` starting at t0 (see `spring_response`). combine: set (default, replaces the value) | add | mul.
+    Spring { stiffness: f64, damping: f64, mass: f64, from: f64, to: f64, #[serde(default)] t0: f64, #[serde(default)] combine: String },
+    /// amp * exp(-decay * (t - t0)) * fractal noise(freq * (t - t0)); deterministic in (seed, t). Zero before t0. combine: add (default) | set | mul.
+    NoiseImpulse { seed: u64, freq: f64, amp: f64, decay: f64, #[serde(default = "d_oct")] octaves: u32, #[serde(default)] t0: f64, #[serde(default)] combine: String },
+    /// from + (to - from) * cubic_bezier(x1,y1,x2,y2)((t - t0) / duration), x clamped to [0,1] like CSS. combine: set (default) | add | mul.
+    Bezier { x1: f64, y1: f64, x2: f64, y2: f64, from: f64, to: f64, #[serde(default)] t0: f64, duration: f64, #[serde(default)] combine: String },
 }
+/// Normalised spring response e(tau) for m x'' + c x' + k x = 0 with x(0)=1, x'(0)=0: x(t) = to + (from - to) * e(t - t0). Underdamped, critically damped and overdamped closed forms.
+pub fn spring_response(stiffness: f64, damping: f64, mass: f64, tau: f64) -> f64 {
+    if tau <= 0.0 { return 1.0; } let (k, c, m) = (stiffness, damping, mass.max(1e-12)); let w0 = (k.max(0.0) / m).sqrt(); if w0 < 1e-12 { return 1.0; }
+    let z = c / (2.0 * (k.max(1e-300) * m).sqrt());
+    if (z - 1.0).abs() < 1e-9 { (-w0 * tau).exp() * (1.0 + w0 * tau) }
+    else if z < 1.0 { let (sg, wd) = (z * w0, w0 * (1.0 - z * z).sqrt()); (-sg * tau).exp() * ((wd * tau).cos() + sg / wd * (wd * tau).sin()) }
+    else { let r = w0 * (z * z - 1.0).sqrt(); let (r1, r2) = (-z * w0 + r, -z * w0 - r); (r2 * (r1 * tau).exp() - r1 * (r2 * tau).exp()) / (r2 - r1) }
+}
+fn combine(v: f64, g: f64, mode: &str, default_set: bool) -> f64 { match (mode, default_set) { ("add", _) | ("", false) => v + g, ("mul", _) => v * g, _ => g } }
 fn d_oct() -> u32 { 1 }
 fn hash(mut x: u64) -> f64 { x = x.wrapping_add(0x9E3779B97F4A7C15); x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9); x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB); x ^= x >> 31; (x >> 11) as f64 / (1u64 << 53) as f64 }
 /// 1D smooth value noise in [-1, 1].
 pub fn noise(seed: u64, x: f64) -> f64 { let i = x.floor(); let f = x - i; let u = f * f * (3.0 - 2.0 * f); let a = hash(seed.wrapping_mul(0x9E37).wrapping_add(i as i64 as u64)) * 2.0 - 1.0; let b = hash(seed.wrapping_mul(0x9E37).wrapping_add((i + 1.0) as i64 as u64)) * 2.0 - 1.0; a + (b - a) * u }
 /// CSS-style cubic-bezier timing function y(x).
-pub fn bezier_ease(b: [f64; 4], x: f64) -> f64 { let (x1, y1, x2, y2) = (b[0].clamp(0.0, 1.0), b[1], b[2].clamp(0.0, 1.0), b[3]); let cx = |t: f64| 3.0 * x1 * t * (1.0 - t).powi(2) + 3.0 * x2 * t * t * (1.0 - t) + t.powi(3); let cy = |t: f64| 3.0 * y1 * t * (1.0 - t).powi(2) + 3.0 * y2 * t * t * (1.0 - t) + t.powi(3);
+pub fn bezier_ease(b: [f64; 4], x: f64) -> f64 { bez_solve(b[0], b[1], b[2], b[3], 1.0, x) }
+/// The one cubic solver behind `bez` and handles: x control points are clamped to [0,1] (monotone time), y control points are free.
+fn bez_solve(x1: f64, y1: f64, x2: f64, y2: f64, ye: f64, x: f64) -> f64 { let (x1, x2) = (x1.clamp(0.0, 1.0), x2.clamp(0.0, 1.0)); let cx = |t: f64| 3.0 * x1 * t * (1.0 - t).powi(2) + 3.0 * x2 * t * t * (1.0 - t) + t.powi(3); let cy = |t: f64| 3.0 * y1 * t * (1.0 - t).powi(2) + 3.0 * y2 * t * t * (1.0 - t) + ye * t.powi(3);
     let (mut lo, mut hi) = (0.0, 1.0); for _ in 0..40 { let m = 0.5 * (lo + hi); if cx(m) < x { lo = m; } else { hi = m; } } cy(0.5 * (lo + hi)) }
 
 impl Prop {
@@ -60,13 +84,16 @@ impl Prop {
             _ => {} } }
         let mut v = self.raw(tt) + add;
         for op in &self.expr { match op {
-            Op::Wiggle { freq, amp, octaves, seed } => { let mut s = 0.0; for o in 0..(*octaves).clamp(1, 8) { let f = freq * 2f64.powi(o as i32); s += amp * 0.5f64.powi(o as i32) * noise(seed.wrapping_add(o as u64 * 7919), tt * f); } v += s; }
+            Op::Wiggle { freq, amp, octaves, seed } => { let mut s = 0.0; for o in 0..(*octaves).clamp(1, 8) { let f = freq * 2f64.powi(o as i32); s += amp * 0.5f64.powi(o as i32) * noise(seed.wrapping_add((o as u64).wrapping_mul(7919)), tt * f); } v += s; }
             Op::Sin { freq, amp, phase } => v += amp * (std::f64::consts::TAU * (freq * tt + phase)).sin(),
             Op::Inertia { amp, freq, decay } => { for w in self.keys.windows(2).map(|w| (w[0].t, w[0].v, w[1].t, w[1].v)).chain(std::iter::empty()) { let (_, _, tb, vb) = w; if tt > tb { let _ = vb; } }
                 // spring after each key based on the velocity of the segment arriving at it
                 for i in 1..self.keys.len() { let (ta, va, tb, vb) = (self.keys[i - 1].t, self.keys[i - 1].v, self.keys[i].t, self.keys[i].v); if tt > tb { let vel = (vb - va) / (tb - ta).max(1e-6); let dt = tt - tb; v += amp * vel * 0.1 * (-decay * dt).exp() * (std::f64::consts::TAU * freq * dt).sin() / (std::f64::consts::TAU * freq).max(1e-6) * 10.0; } } }
             Op::Bounce { amp, freq, decay } => { let n = self.keys.len(); if n >= 2 { let (ta, va, tb, vb) = (self.keys[n - 2].t, self.keys[n - 2].v, self.keys[n - 1].t, self.keys[n - 1].v); let _ = ta; if tt > tb { let dt = tt - tb; v -= (vb - va) * amp * (-decay * dt).exp() * (std::f64::consts::TAU * freq * dt).sin().abs(); } } }
             Op::Overshoot { amp, freq, decay } => { for i in 1..self.keys.len() { let (va, tb, vb) = (self.keys[i - 1].v, self.keys[i].t, self.keys[i].v); if tt > tb { let dt = tt - tb; v += (vb - va) * amp * (-decay * dt).exp() * (std::f64::consts::TAU * freq * dt).sin(); } } }
+            Op::Spring { stiffness, damping, mass, from, to, t0, combine: cm } => { let g = to + (from - to) * spring_response(*stiffness, *damping, *mass, tt - t0); v = combine(v, g, cm, true); }
+            Op::NoiseImpulse { seed, freq, amp, decay, octaves, t0, combine: cm } => { let tau = tt - t0; let g = if tau < 0.0 { 0.0 } else { let mut sm = 0.0; for o in 0..(*octaves).clamp(1, 8) { let f = freq * 2f64.powi(o as i32); sm += 0.5f64.powi(o as i32) * noise(seed.wrapping_add(o as u64 * 7919), tau * f); } amp * (-decay * tau).exp() * sm }; v = combine(v, g, cm, false); }
+            Op::Bezier { x1, y1, x2, y2, from, to, t0, duration, combine: cm } => { let u = if *duration > 0.0 { ((tt - t0) / duration).clamp(0.0, 1.0) } else { 1.0 }; let g = if u <= 0.0 { *from } else if u >= 1.0 { *to } else { from + (to - from) * bezier_ease([*x1, *y1, *x2, *y2], u) }; v = combine(v, g, cm, true); }
             Op::Clamp { min, max } => v = v.clamp(*min, *max),
             Op::Round { step } => if *step > 0.0 { v = (v / step).round() * step },
             _ => {} } }
@@ -81,6 +108,7 @@ impl Prop {
             if t >= w[0].t && t <= w[1].t {
                 if w[0].ease == Ease::Hold { return w[0].v; }
                 let u = (t - w[0].t) / (w[1].t - w[0].t).max(1e-9);
+                if w[0].out.is_some() || w[1].inn.is_some() { return handle_segment(&w[0], &w[1], u); }
                 if let Some(b) = w[0].bez { let y = bezier_ease(b, u); return w[0].v + (w[1].v - w[0].v) * y; }
                 let u = match w[0].ease {
                     Ease::Linear | Ease::Hold => u,
@@ -100,7 +128,17 @@ impl Prop {
     }
     pub fn set_key(&mut self, t: f64, v: f64, ease: Ease) {
         self.keys.retain(|k| (k.t - t).abs() > 1e-6);
-        self.keys.push(Key { t, v, ease, bez: None });
+        self.keys.push(Key { t, v, ease, bez: None, out: None, inn: None });
         self.keys.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
     }
 }
+
+/// Value of the segment between keys `a` and `b` at normalized time `u` when either carries a handle. A missing handle defaults to
+/// a third of the segment (dt) and a third of the value change (dv), i.e. a straight line. Same solver as `bez`, with y in value units so a flat segment can still overshoot.
+pub fn handle_segment(a: &Key, b: &Key, u: f64) -> f64 {
+    let (dt, dv) = ((b.t - a.t).max(1e-9), b.v - a.v);
+    let o = a.out.unwrap_or(Handle { dt: dt / 3.0, dv: dv / 3.0 }); let i = b.inn.unwrap_or(Handle { dt: dt / 3.0, dv: dv / 3.0 });
+    a.v + bez_solve(o.dt / dt, o.dv, 1.0 - i.dt / dt, dv - i.dv, dv, u)
+}
+/// The `bez` quad equivalent to a handle pair when the segment value change is not zero (round-trip helper; flat segments have no `bez` form).
+pub fn handles_to_bez(a: &Key, b: &Key) -> Option<[f64; 4]> { let (dt, dv) = (b.t - a.t, b.v - a.v); if dt <= 0.0 || dv == 0.0 { return None; } let o = a.out?; let i = b.inn?; Some([o.dt / dt, o.dv / dv, 1.0 - i.dt / dt, 1.0 - i.dv / dv]) }

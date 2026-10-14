@@ -7,11 +7,7 @@ use crate::{
 };
 use std::collections::BTreeSet;
 fn existing(ss: &mut Session, name: &str, a: &Value) -> Result<Value, String> {
-    let reg = crate::commands::registry();
-    let c = reg
-        .iter()
-        .find(|c| c.name == name)
-        .ok_or("missing existing tool")?;
+    let c = crate::commands::find_command(name).ok_or("missing existing tool")?;
     (c.run)(ss, a)
 }
 fn finite(a: &Value, k: &str, d: f64, lo: f64, hi: f64) -> Result<f64, String> {
@@ -145,6 +141,7 @@ fn add_captions_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
             clips: clips.clone(),
             style: name.into(),
             burn_in: true,
+            transcript_id: None,
         },
     );
     Ok(json!({"caption_id":id,"clip_ids":clips,"count":count}))
@@ -222,6 +219,7 @@ fn list_captions(ss: &mut Session, _: &Value) -> Result<Value, String> {
 fn add_audio_effect_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let p = a.get("params").cloned().unwrap_or(json!({}));
     let kind = str_arg(a, "kind")?;
+    if ["biquad","fir","mix_matrix"].contains(&kind){let e=crate::ext::audio_filters::parse_effect(kind,&p)?;let c=get(ss,a)?;if !matches!(c.source,Source::Media{..}){return Err("audio effects require media clip".into());}c.audio.effects.push(e);return Ok(json!({"effect_index":c.audio.effects.len()-1}));}
     let allowed: &[&str] = match kind {
         "eq" => &["frequency", "width", "gain_db"],
         "compressor" => &[
@@ -298,7 +296,7 @@ fn clip_pcm(ss: &Session, id: &str) -> Result<Vec<f32>, String> {
     let Source::Media { asset } = &c.source else {
         return Err("media clip required".into());
     };
-    let path = &ss.project.assets.get(asset).ok_or("no asset")?.path;
+    let path = &ss.project.resolve(&ss.project.assets.get(asset).ok_or("no asset")?.path);
     crate::audio::strict_decode(path, c).map_err(|e| e.to_string())
 }
 fn measure_loudness(ss: &mut Session, a: &Value) -> Result<Value, String> {
@@ -344,14 +342,50 @@ fn normalize_loudness_inner(ss: &mut Session, a: &Value) -> Result<Value, String
 }
 fn auto_duck_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
     let track = str_arg(a, "track")?;
-    let under = str_arg(a, "under")?;
+    let under = if a.get("speech_windows").is_some() { "" } else { str_arg(a, "under")? };
     if track == under {
         return Err("tracks must differ".into());
     }
     let amount = finite(a, "amount_db", -12., -60., 0.)?;
-    let threshold = finite(a, "threshold_db", -35., -70., 0.)?;
+    let threshold = if a.get("speech_windows").is_some(){-35.0}else{finite(a, "threshold_db", -35., -70., 0.)?};
     let attack = finite(a, "attack", 0.1, 0.01, 2.)?;
     let release = finite(a, "release", 0.3, 0.01, 5.)?;
+    if let Some(w) = a.get("speech_windows") {
+        let arr = w.as_array().filter(|v| v.len() <= 1000).ok_or("speech_windows must hold 0..1000 [start,end] pairs")?;
+        let mut windows = vec![];
+        for (i,v) in arr.iter().enumerate() {
+            let pair = v.as_array().filter(|v| v.len()==2).ok_or_else(||format!("speech_windows[{i}] must be [start,end]"))?;
+            let x = pair[0].as_f64().ok_or_else(||format!("speech_windows[{i}].start must be numeric"))?;
+            let y = pair[1].as_f64().ok_or_else(||format!("speech_windows[{i}].end must be numeric"))?;
+            if !x.is_finite() || !y.is_finite() || x < 0.0 || y <= x { return Err(format!("speech_windows[{i}] needs finite 0 <= start < end")); }
+            windows.push((x,y));
+        }
+        windows.sort_by(|a,b|a.0.total_cmp(&b.0));
+        let supplied=windows.len();let mut merged:Vec<(f64,f64)>=vec![];
+        for (x,y) in windows {match merged.last_mut(){Some(l) if x<=l.1=>l.1=l.1.max(y),_=>merged.push((x,y))}}
+        let merged_count=supplied-merged.len();
+        let rt=ss.project.tracks.iter().find(|t|t.id==track).ok_or("missing target track")?;
+        let mut spans:Vec<(f64,f64)>=rt.clips.iter().map(|c|(c.start,c.start+c.duration)).filter(|(x,y)|x<y).collect();spans.sort_by(|a,b|a.0.total_cmp(&b.0));
+        let mut extents:Vec<(f64,f64)>=vec![];for (x,y) in spans{match extents.last_mut(){Some(l)if x<=l.1=>l.1=l.1.max(y),_=>extents.push((x,y))}}
+        let mut windows_clamped=0usize;let mut windows=vec![];
+        for (x,y) in merged {let mut unchanged=false;for &(lo,hi) in &extents{let (a,b)=(x.max(lo),y.min(hi));if a<b {windows.push((a,b));if a==x&&b==y{unchanged=true;}}}if !unchanged{windows_clamped+=1;}}
+        let mut keyframes_created=0usize;
+        let tr = ss.project.tracks.iter_mut().find(|t|t.id==track && !t.locked).ok_or("missing/locked target track")?;
+        let gain=10f64.powf(amount/20.0);
+        for clip in tr.clips.iter_mut() {
+            let c=&**clip;let mut times=vec![0.0,c.duration];
+            for &(x,y) in &windows { for time in [x-attack,x,y,y+release] { let local=time-c.start;if local>0.0 && local<c.duration {times.push(local);} } }
+            times.sort_by(f64::total_cmp);times.dedup();
+            let mut prop=Prop::new(1.0);
+            for local in times { let t=c.start+local;let v=windows.iter().map(|&(x,y)| {
+                if t<x-attack || t>y+release {1.0} else if t<x {1.0+(gain-1.0)*(t-(x-attack))/attack} else if t<=y {gain} else {gain+(1.0-gain)*(t-y)/release}
+            }).fold(1.0,f64::min);prop.set_key(local,v,Ease::Linear); }
+            if prop.keys.iter().all(|k|(k.v-1.0).abs()<1e-12) {prop=Prop::new(1.0);}
+            keyframes_created+=prop.keys.len();
+            if serde_json::to_value(&c.audio.duck_gain).ok()!=serde_json::to_value(&prop).ok(){std::sync::Arc::make_mut(clip).audio.duck_gain=prop;}
+        }
+        return Ok(json!({"clips":tr.clips.len(),"speech_windows":windows.len(),"windows_used":windows.iter().map(|(x,y)|json!([x,y])).collect::<Vec<_>>(),"merged_count":merged_count,"windows_clamped":windows_clamped,"under_ignored":a.get("under").is_some(),"threshold_ignored":true,"envelope_cleared":windows.is_empty(),"keyframes_created":keyframes_created,"amount_db":amount,"separate_from_volume":true,"mode":"explicit_windows","attack":"linear pre-roll","release":"linear post-roll"}));
+    }
     let mut p = ss.project.clone();
     p.tracks.retain(|t| t.id == under);
     if p.tracks.is_empty() {
@@ -374,7 +408,8 @@ fn auto_duck_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
         .iter_mut()
         .find(|t| t.id == track && !t.locked)
         .ok_or("missing/locked target track")?;
-    for c in &mut tr.clips {
+    for ca in tr.clips.iter_mut() {
+        let c = &**ca;
         let mut gain = 1.;
         let mut prop = Prop::new(1.);
         for (i, target) in env.iter().enumerate() {
@@ -389,7 +424,9 @@ fn auto_duck_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
             gain = *target + (gain - *target) * (-0.05 / tau).exp();
             prop.set_key(t, gain, Ease::Linear);
         }
-        c.audio.duck_gain = prop;
+        if prop.keys.iter().all(|k| (k.v - 1.0).abs() < 1e-12) { prop = Prop::new(1.0); } // unity everywhere: keep the default (keyless) envelope
+        // write only when the envelope really changes, so clips outside the dialogue stay shared with the undo snapshot
+        if serde_json::to_value(&ca.audio.duck_gain).ok() != serde_json::to_value(&prop).ok() { std::sync::Arc::make_mut(ca).audio.duck_gain = prop; }
     }
     Ok(json!({"clips":tr.clips.len(),"envelope_step":0.05,"separate_from_volume":true}))
 }
@@ -452,12 +489,7 @@ fn sync_clips_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
             let Source::Media { asset } = &c.source else {
                 return Err("audio sync requires media".into());
             };
-            let path = &ss
-                .project
-                .assets
-                .get(asset)
-                .ok_or("missing sync asset")?
-                .path;
+            let path = &ss.project.resolve(&ss.project.assets.get(asset).ok_or("missing sync asset")?.path);
             let mut clean = c.clone();
             clean.duration = c.duration.min(window);
             clean.audio = Audio::default();
@@ -572,7 +604,7 @@ fn rebuild(ss: &mut Session, id: &str) -> Result<(), String> {
         .iter_mut()
         .find(|t| t.id == g.track_id)
         .ok_or("multicam track deleted")?
-        .clips = made;
+        .clips = made.into_iter().map(std::sync::Arc::new).collect();
     Ok(())
 }
 fn add_multicam_inner(ss: &mut Session, a: &Value) -> Result<Value, String> {
@@ -691,12 +723,12 @@ pub fn commands() -> Vec<Command> {
  Command{name:"set_caption_style",description:"Apply caption preset to every cue; optional size/y overrides.",mutates:true,schema:obj(vec![("caption_id",s("group")),("style",s("subtitle|boxed|yellow")),("size",n("px")),("y",n("px"))],&["caption_id","style"]),run:set_caption_style},
  Command{name:"edit_caption",description:"Edit caption text, timeline start, or duration.",mutates:true,schema:obj(vec![("clip_id",s("cue")),("text",s("caption text")),("start",n("timeline seconds")),("duration",n("seconds"))],&["clip_id"]),run:edit_caption},
  Command{name:"burn_in",description:"Enable/disable caption group's presence in preview and exports without deleting cues.",mutates:true,schema:obj(vec![("caption_id",s("group")),("enabled",json!({"type":"boolean"}))],&["caption_id","enabled"]),run:burn_in},
- Command{name:"add_audio_effect",description:"Append validated EQ/compressor/deesser/reverb/denoise. Render/export uses validated FFmpeg filters plus CPU reverb. Reverb is stereo damped-comb/allpass Schroeder; tail cropped to clip duration, reverb applied after FFmpeg effects.",mutates:true,schema:obj(vec![("clip_id",s("media clip")),("kind",json!({"type":"string","enum":["eq","compressor","deesser","reverb","denoise"]})),("params",json!({"type":"object","additionalProperties":{"type":"number"}}))],&["clip_id","kind"]),run:add_audio_effect},
+ Command{name:"add_audio_effect",description:"Append validated EQ/compressor/deesser/reverb/denoise or raw biquad (DFII transposed f64 state), fir and stereo mix_matrix. Raw defaults identity; no normalization/clamping. Render/export uses validated FFmpeg filters plus CPU reverb. Reverb is stereo damped-comb/allpass Schroeder; tail cropped to clip duration, reverb applied after FFmpeg effects.",mutates:true,schema:obj(vec![("clip_id",s("media clip")),("kind",json!({"type":"string","enum":["eq","compressor","deesser","reverb","denoise","biquad","fir","mix_matrix"]})),("params",json!({"type":"object","additionalProperties":true}))],&["clip_id","kind"]),run:add_audio_effect},
  Command{name:"remove_audio_effect",description:"Remove effect by zero-based index.",mutates:true,schema:obj(vec![("clip_id",s("clip")),("effect_index",json!({"type":"integer","minimum":0}))],&["clip_id","effect_index"]),run:remove_audio_effect},
  Command{name:"set_audio_pan",description:"Stereo balance -1 left to +1 right; attenuates opposite channel.",mutates:true,schema:obj(vec![("clip_id",s("clip")),("pan",n("-1..1"))],&["clip_id","pan"]),run:set_audio_pan},
  Command{name:"measure_loudness",description:"EBU R128 integrated stereo LUFS and sample peak. Optional clip_id measures decoded post filters/pre gain; absent measures final timeline mix. Silence or <400ms LUFS returns null. true_peak=true adds 4x sinc reconstruction peak estimate (not certified).",mutates:false,schema:obj(vec![("clip_id",s("optional clip")),("true_peak",json!({"type":"boolean","default":false}))],&[]),run:measure_loudness},
  Command{name:"normalize_loudness",description:"Replace clip volume with measured loudness gain. Rejects sample peaks over -1dBFS; target -36..-5 LUFS. Remeasure final timeline after mix.",mutates:true,schema:obj(vec![("clip_id",s("clip")),("target_lufs",n("default -14"))],&["clip_id"]),run:normalize_loudness},
- Command{name:"auto_duck",description:"Measure under-track RMS and generate a separate target-track duck envelope; volume keys preserved. Re-run after changing source dialogue.",mutates:true,schema:obj(vec![("track",s("target music track")),("under",s("dialogue track")),("amount_db",n("-60..0 default -12")),("threshold_db",n("default -35")),("attack",n("seconds default .1")),("release",n("seconds default .3"))],&["track","under"]),run:auto_duck},
+ Command{name:"auto_duck",description:"Measure under-track RMS and generate a separate target-track duck envelope; or use explicit speech_windows without decoding. volume keys preserved. under required only without speech_windows. Re-run replaces the duck envelope.",mutates:true,schema:obj(vec![("track",s("target music track")),("under",s("dialogue track for RMS detection; omit with speech_windows")),("speech_windows",json!({"type":"array","items":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"description":"Optional 0..1000 ABSOLUTE timeline-second [start,end] speech windows; sorted/merged, clamped to TARGET clip extents. under and threshold_db are ignored if supplied. Empty list removes the previous duck envelope (unity), never RMS fallback. No RMS decode; exact relative gain during windows, linear attack pre-roll/release post-roll, preserves volume"})),("amount_db",n("-60..0 default -12")),("threshold_db",n("default -35")),("attack",n("seconds default .1")),("release",n("seconds default .3"))],&["track"]),run:auto_duck},
  Command{name:"sync_clips",description:"Align 1x media clips by bounded RMS audio correlation (5ms resolution; rejects silence and ambiguous repeats), or explicit source in-point SMPTE timecodes, optional drop_frame at 29.97/59.94. Shifts starts, preserves source in-points.",mutates:true,schema:obj(vec![("clip_ids",json!({"type":"array","items":{"type":"string"},"minItems":2,"maxItems":16})),("by",json!({"type":"string","enum":["audio","timecode"]})),("timecodes",json!({"type":"array","items":{"type":"string"}})),("fps",n("integer non-drop or 30000/1001,60000/1001 drop")),("drop_frame",json!({"type":"boolean","default":false})),("window",n("1..60s default30")),("max_offset",n(".05..10s default5")),("min_correlation",n("default .75"))],&["clip_ids","by"]),run:sync_clips},
  Command{name:"add_multicam",description:"Move 2..16 synchronized media clips into persistent multicam group; common interval, angle zero video, fixed audio angle. Generates normal timeline clips for all exports.",mutates:true,schema:obj(vec![("angles",json!({"type":"array","items":{"type":"string"}})),("audio_angle",json!({"type":"integer","minimum":0}))],&["angles"]),run:add_multicam},
  Command{name:"switch_angle",description:"Switch multicam video at absolute timeline seconds t, zero-based angle; continuous audio remains fixed. Rebuilds group track, replacing manual edits there.",mutates:true,schema:obj(vec![("multicam_id",s("group")),("t",n("absolute timeline seconds")),("angle",json!({"type":"integer","minimum":0}))],&["multicam_id","t","angle"]),run:switch_angle},

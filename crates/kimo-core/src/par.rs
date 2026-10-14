@@ -24,7 +24,7 @@ pub fn ranges(n: usize, min_per_thread: usize, f: impl Fn(usize, usize) + Sync) 
     let t = threads().min(n / min_per_thread.max(1)).max(1);
     if t <= 1 { f(0, n); return; }
     let step = (n + t - 1) / t;
-    std::thread::scope(|s| { for k in 0..t { let (a, b) = (k * step, ((k + 1) * step).min(n)); if a >= b { break; } let f = &f; s.spawn(move || f(a, b)); } });
+    std::thread::scope(|s| { for k in 0..t { let (a, b) = (k * step, ((k + 1) * step).min(n)); if a >= b { break; } let f = &f; crate::guard::scope_spawn(s, move || f(a, b)); } });
 }
 /// Fill `out` (len = rows*stride) row-wise: `f(row_index, row_slice)`.
 pub fn rows_mut<T: Send>(out: &mut [T], stride: usize, f: impl Fn(usize, &mut [T]) + Sync) {

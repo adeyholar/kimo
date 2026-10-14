@@ -27,6 +27,7 @@ fn rz(d: f64) -> M { let (s, c) = d.to_radians().sin_cos(); [[c, -s, 0.0], [s, c
 /// Rotation order: Z then Y then X applied to the local plane (R = Rx * Ry * Rz).
 pub fn rot_matrix(r: [f64; 3]) -> M { mul(&rx(r[0]), &mul(&ry(r[1]), &rz(r[2]))) }
 
+#[derive(Clone)]
 pub struct Projector { w: usize, h: usize, f: f64, c: [f64; 3], rc: M, p0: [f64; 3], r: M, n: [f64; 3], s: f64 }
 impl Projector {
     pub fn new(w: usize, h: usize, cam: &Camera, pose: &Pose) -> Projector {
@@ -39,6 +40,27 @@ impl Projector {
         let t = ((self.p0[0] - self.c[0]) * self.n[0] + (self.p0[1] - self.c[1]) * self.n[1] + (self.p0[2] - self.c[2]) * self.n[2]) / den; if t <= 0.0 { return None; }
         let p = [self.c[0] + t * d[0] - self.p0[0], self.c[1] + t * d[1] - self.p0[1], self.c[2] + t * d[2] - self.p0[2]]; let l = app(&tr(&self.r), p);
         Some((self.w as f64 / 2.0 + l[0] / self.s, self.h as f64 / 2.0 + l[1] / self.s, t, if den < 0.0 { 1.0 } else { -1.0 }))
+    }
+    /// World-space unit view direction (camera to pixel) and the unit plane normal facing the camera, at a screen pixel.
+    pub fn view_and_normal(&self, x: f64, y: f64) -> ([f64; 3], [f64; 3]) {
+        let d0 = app(&self.rc, [x - self.w as f64 / 2.0, y - self.h as f64 / 2.0, self.f]); let dl = (d0[0] * d0[0] + d0[1] * d0[1] + d0[2] * d0[2]).sqrt(); let d = [d0[0] / dl, d0[1] / dl, d0[2] / dl];
+        let dn = d[0] * self.n[0] + d[1] * self.n[1] + d[2] * self.n[2]; let sg = if dn > 0.0 { -1.0 } else { 1.0 }; (d, [sg * self.n[0], sg * self.n[1], sg * self.n[2]])
+    }
+    /// Slab refraction at a screen pixel: a glass slab of `thickness` (world px) and index `ior` lies on the layer plane.
+    /// The eye ray hits the front face at angle thetai to the normal, bends to thetat (Snell) and leaves the back face displaced
+    /// in-plane by thickness*(tan thetai - tan thetat). Returns the screen offset (dx, dy) from the straight-through position to the
+    /// backdrop point the eye actually sees. Zero at normal incidence, grows with the angle. None if the ray misses the plane.
+    pub fn slab_offset(&self, x: f64, y: f64, thickness: f64, ior: f64) -> Option<(f64, f64)> {
+        let d0 = app(&self.rc, [x - self.w as f64 / 2.0, y - self.h as f64 / 2.0, self.f]); let dl = (d0[0] * d0[0] + d0[1] * d0[1] + d0[2] * d0[2]).sqrt(); let d = [d0[0] / dl, d0[1] / dl, d0[2] / dl];
+        let dn = d[0] * self.n[0] + d[1] * self.n[1] + d[2] * self.n[2]; if dn.abs() < 1e-9 { return None; }
+        let t = ((self.p0[0] - self.c[0]) * self.n[0] + (self.p0[1] - self.c[1]) * self.n[1] + (self.p0[2] - self.c[2]) * self.n[2]) / dn; if t <= 0.0 { return None; }
+        let p = [self.c[0] + t * d[0], self.c[1] + t * d[1], self.c[2] + t * d[2]];
+        let ci = dn.abs().min(1.0); let si = (1.0 - ci * ci).sqrt(); let st = si / ior.max(1.0); let ct = (1.0 - st * st).sqrt();
+        let shift = thickness * (si / ci.max(1e-6) - st / ct.max(1e-6));
+        let tang = [d[0] - dn * self.n[0], d[1] - dn * self.n[1], d[2] - dn * self.n[2]]; let tl = (tang[0] * tang[0] + tang[1] * tang[1] + tang[2] * tang[2]).sqrt(); if tl < 1e-9 { return Some((0.0, 0.0)); }
+        let q = [p[0] - shift * tang[0] / tl, p[1] - shift * tang[1] / tl, p[2] - shift * tang[2] / tl];
+        let sc = |w: [f64; 3]| { let v = app(&tr(&self.rc), [w[0] - self.c[0], w[1] - self.c[1], w[2] - self.c[2]]); if v[2] <= 1e-6 { None } else { Some((self.w as f64 / 2.0 + self.f * v[0] / v[2], self.h as f64 / 2.0 + self.f * v[1] / v[2])) } };
+        let (a, b) = (sc(p)?, sc(q)?); Some((b.0 - a.0, b.1 - a.1))
     }
     /// Layer-local pixel (source coords) -> screen pixel and view depth (>0 in front of camera).
     pub fn src_to_screen(&self, sx: f64, sy: f64) -> Option<(f64, f64, f64)> {

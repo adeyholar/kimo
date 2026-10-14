@@ -90,7 +90,19 @@ pub struct Clip {
     pub text_fx: Option<TextFx>,
     /// Transition INTO this clip from the previous clip on the track.
     pub transition_in: Option<Transition>,
+    /// A5: transform parent (clip id). The child's x/y/scale/rotation/opacity compose with the parent's, per `inherit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Inherit::is_default")] pub inherit: Inherit,    /// U1: optional project-unique handle for `@name` references, a free-form role label, and tags. All skipped when empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub tags: Vec<String>,
 }
+/// Which parts of the parent's transform a child inherits (all on by default).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Inherit { #[serde(default = "yes")] pub position: bool, #[serde(default = "yes")] pub scale: bool, #[serde(default = "yes")] pub rotation: bool, #[serde(default = "yes")] pub opacity: bool }
+fn yes() -> bool { true }
+impl Default for Inherit { fn default() -> Self { Inherit { position: true, scale: true, rotation: true, opacity: true } } }
+impl Inherit { pub fn is_default(&self) -> bool { *self == Inherit::default() } }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(tag = "mode", rename_all = "snake_case")]
@@ -109,10 +121,11 @@ pub struct Transition { pub kind: String, pub duration: f64,
 fn d_ease() -> String { "in_out".into() } fn d_soft() -> f64 { 0.08 } fn d_one() -> f64 { 1.0 } fn d_count() -> f64 { 10.0 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Track { pub id: String, pub clips: Vec<Clip>, #[serde(default)] pub locked: bool, #[serde(default)] pub muted: bool, #[serde(default)] pub name: String }
+pub struct Track { pub id: String, pub clips: Vec<std::sync::Arc<Clip>>, #[serde(default)] pub locked: bool, #[serde(default)] pub muted: bool, #[serde(default)] pub name: String }
+impl Track { pub fn cm(&mut self, i: usize) -> &mut Clip { std::sync::Arc::make_mut(&mut self.clips[i]) } }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Asset { pub id: String, pub path: String, pub width: u32, pub height: u32, pub duration: f64, pub fps: f64 }
+pub struct Asset { #[serde(default,skip_serializing_if="Option::is_none")] pub origin:Option<String>, #[serde(default,skip_serializing_if="Option::is_none")] pub hash:Option<String>, #[serde(default,skip_serializing_if="Option::is_none")] pub kind:Option<String>, pub id: String, pub path: String, pub width: u32, pub height: u32, pub duration: f64, pub fps: f64 }
 
 /// Persisted auto-occluder anchor recipe: lets a reloaded project rebuild the surface reference frame from the source media.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -142,11 +155,17 @@ pub struct Project {
     pub next_id: u64,
     #[serde(default)]
     pub markers: Vec<Marker>,
+    /// Dependency records (size, sha256, ...) written by collect_project; absent in files that never recorded them (old files stay byte-stable).
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub deps: Option<crate::deps::DepTable>,
+    /// U2.4: user-authored batch templates (none ship with Kimo); absent when empty so old files stay byte-stable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub templates: Vec<crate::ext::templates::Template>,
+    /// Directory of the project file (canonical), set by load_project / save_project / collect. Never serialized. Relative stored paths resolve against it.
+    #[serde(skip)] pub base_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Project {
     fn default() -> Self {
-        Project { grade_scopes: Default::default(), lights: BTreeMap::new(), materials: BTreeMap::new(), editorial: Default::default(), ocio_view_delivery: None, occluders: BTreeMap::new(), color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![] }
+        Project { grade_scopes: Default::default(), lights: BTreeMap::new(), materials: BTreeMap::new(), editorial: Default::default(), ocio_view_delivery: None, occluders: BTreeMap::new(), color_pipeline: Default::default(), camera: BTreeMap::new(), name: "untitled".into(), width: 1280, height: 720, fps: 30.0, assets: BTreeMap::new(), tracks: vec![], next_id: 1, markers: vec![], deps: None, templates: vec![], base_dir: None }
     }
 }
 
@@ -162,23 +181,113 @@ impl Clip {
 }
 
 impl Project {
-    /// Collision-safe id counter after loading: one past the largest trailing number in any id-like string (keys and string values), never below 1000.
-    pub fn recompute_next_id(&mut self) {
+    /// Resolves a stored path against this project's directory (see deps::resolve_path). Absolute paths resolve to themselves.
+    pub fn resolve(&self, stored: &str) -> String { crate::deps::resolve_path(self.base_dir.as_deref(), stored).path.to_string_lossy().into_owned() }
+    /// Largest trailing number in any id-like string (keys and string values) of this project; 0 when there is none.
+    pub fn max_id_suffix(&self) -> u64 {
         fn walk(v: &serde_json::Value, m: &mut u64) {
             let tail = |s: &str| { let d: String = s.chars().rev().take_while(|c| c.is_ascii_digit()).collect::<Vec<_>>().into_iter().rev().collect(); if d.is_empty() || d.len() > 12 || s.len() > 64 { 0 } else { d.parse::<u64>().unwrap_or(0) } };
             match v { serde_json::Value::String(s) => *m = (*m).max(tail(s)), serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, m)), serde_json::Value::Object(o) => for (k, x) in o { *m = (*m).max(tail(k)); walk(x, m); }, _ => {} }
         }
-        let mut m = 999u64; if let Ok(v) = serde_json::to_value(&*self) { walk(&v, &mut m); } self.next_id = m + 1;
+        let mut m = 0u64; if let Ok(v) = serde_json::to_value(self) { walk(&v, &mut m); } m
     }
+    /// Collision-safe id counter after undo/redo/restore: one past the largest trailing number in any id-like string, never below 1000.
+    pub fn recompute_next_id(&mut self) { self.next_id = self.max_id_suffix().max(999) + 1; }
+    /// Id counter after load_project (F1): one past the largest id number in the project and in every history snapshot (`others`), no 1000 floor, so ids
+    /// continue exactly where an in-memory session would have continued. Unique-id guarantee: the counter is above every id that can come back through undo/redo.
+    pub fn continue_ids_after_load(&mut self, others: &[&Project]) { let m = others.iter().map(|p| p.max_id_suffix()).fold(self.max_id_suffix(), u64::max); self.next_id = m + 1; }
     pub fn gen_id(&mut self, p: &str) -> String { let i = self.next_id; self.next_id += 1; format!("{p}{i}") }
     pub fn duration(&self) -> f64 {
         self.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| c.start + c.duration).fold(0.0, f64::max)
     }
     pub fn find_clip_mut(&mut self, id: &str) -> Option<&mut Clip> {
-        self.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).find(|c| c.id == id)
+        self.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).find(|c| c.id == id).map(|c| std::sync::Arc::make_mut(c))
     }
     pub fn find_clip(&self, id: &str) -> Option<&Clip> {
-        self.tracks.iter().flat_map(|t| t.clips.iter()).find(|c| c.id == id)
+        self.tracks.iter().flat_map(|t| t.clips.iter()).find(|c| c.id == id).map(|c| &**c)
+    }
+}
+
+
+/// A clip-id reference that was cleared because its target clip was removed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ClearedRef { pub clip_id: String, pub field: String, pub removed_id: String }
+
+/// Every clip-id reference held by `c` (not recursing into precomps): (field path, referenced id). ONE place that knows the reference kinds.
+/// Known kinds are cleared on delete. Unknown `strings` values that equal a clip id are reported by dangling_refs only (field prefix "unknown:").
+pub fn clip_refs(c: &Clip) -> Vec<(String, String)> {
+    let mut v = vec![];
+    if let Some(m) = &c.mask {
+        if let Some(t) = &m.matte { v.push(("mask.matte.source".to_string(), t.source.clone())); }
+        for l in &m.layers { if let Some(r) = l.strings.get("ref_clip") { v.push((format!("mask.layers.{}.ref_clip", l.id), r.clone())); } }
+    }
+    match &c.source {
+        Source::ShardBurst(e) => { if let Some(t) = e.plane.as_ref().and_then(|p| p.occlusion_target.as_ref()) { v.push(("source.plane.occlusion_target".to_string(), t.clone())); } }
+        Source::Emitter(e) => {
+            if !e.emit_clip.is_empty() { v.push(("source.emit_clip".to_string(), e.emit_clip.clone())); }
+            for (i, k) in e.colliders.iter().enumerate() { if k.kind == "layer" && !k.clip_id.is_empty() { v.push((format!("source.colliders.{i}.clip_id"), k.clip_id.clone())); } }
+        }
+        _ => {}
+    }
+    v
+}
+/// Unknown string-map values (effect strings, mask layer strings other than ref_clip) that look like clip ids of existing-or-removed clips; reported, never cleared.
+fn unknown_string_refs(c: &Clip, ids: &std::collections::HashSet<&str>, max_id: u64) -> Vec<(String, String)> {
+    let looks = |s: &str| { let d: String = s.chars().rev().take_while(|x| x.is_ascii_digit()).collect(); s.starts_with("clip") && !d.is_empty() && d.parse::<u64>().map(|n| n < max_id).unwrap_or(false) && !ids.contains(s) };
+    let mut v = vec![];
+    for e in &c.effects { for (k, val) in &e.strings { if looks(val) { v.push((format!("unknown:effects.{}.strings.{k}", e.id), val.clone())); } } }
+    if let Some(m) = &c.mask { for l in &m.layers { for (k, val) in &l.strings { if k != "ref_clip" && looks(val) { v.push((format!("unknown:mask.layers.{}.strings.{k}", l.id), val.clone())); } } } }
+    v
+}
+fn clear_in_tracks(tracks: &mut Vec<Track>, ids: &[String], out: &mut Vec<ClearedRef>) {
+    for t in tracks.iter_mut() { for ac in t.clips.iter_mut() {
+        let hits: Vec<(String, String)> = clip_refs(ac).into_iter().filter(|(_, r)| ids.contains(r)).collect();
+        let nested = matches!(ac.source, Source::Precomp { .. });
+        if hits.is_empty() && !nested { continue; }
+        let c = std::sync::Arc::make_mut(ac);
+        for (field, rid) in hits {
+            if field == "mask.matte.source" { if let Some(m) = c.mask.as_mut() { m.matte = None; } }
+            else if field == "source.plane.occlusion_target" { if let Source::ShardBurst(e) = &mut c.source { if let Some(p) = e.plane.as_mut() { p.occlusion_target = None; } } }
+            else if field == "source.emit_clip" { if let Source::Emitter(e) = &mut c.source { e.emit_clip.clear(); } }
+            else if let Some(i) = field.strip_prefix("source.colliders.").and_then(|x| x.strip_suffix(".clip_id")).and_then(|x| x.parse::<usize>().ok()) { if let Source::Emitter(e) = &mut c.source { if i < e.colliders.len() { e.colliders[i].clip_id.clear(); } } }
+            else if let Some(lid) = field.strip_prefix("mask.layers.").and_then(|x| x.strip_suffix(".ref_clip")) { if let Some(m) = c.mask.as_mut() { for l in m.layers.iter_mut().filter(|l| l.id == lid) { l.strings.remove("ref_clip"); } } }
+            out.push(ClearedRef { clip_id: c.id.clone(), field, removed_id: rid });
+        }
+        if let Source::Precomp { tracks } = &mut c.source { clear_in_tracks(tracks, ids, out); }
+    } }
+}
+fn collect_ids<'a>(tracks: &'a [Track], out: &mut std::collections::HashSet<&'a str>) { for t in tracks { for c in &t.clips { out.insert(c.id.as_str()); if let Source::Precomp { tracks } = &c.source { collect_ids(tracks, out); } } } }
+fn dangling_in<'a>(tracks: &[Track], ids: &std::collections::HashSet<&'a str>, max_id: u64, out: &mut Vec<ClearedRef>) {
+    for t in tracks { for c in &t.clips {
+        for (f, r) in clip_refs(c).into_iter().filter(|(_, r)| !ids.contains(r.as_str())).chain(unknown_string_refs(c, ids, max_id)) { out.push(ClearedRef { clip_id: c.id.clone(), field: f, removed_id: r }); }
+        if let Source::Precomp { tracks } = &c.source { dangling_in(tracks, ids, max_id, out); }
+    } }
+}
+
+impl Project {
+    /// Clear every reference to the given (removed) clip ids: known kinds are cleared (matte, mask ref_clip, shard occlusion target, emitter emit_clip and layer colliders, occluder entry keyed by the id, caption group membership), recursing into precomps. Ids are never reused, so a cleared reference can only come back through undo.
+    /// Process-global planar state for a removed target is dropped too.
+    pub fn clear_refs_to(&mut self, ids: &[String]) -> Vec<ClearedRef> {
+        let mut out = vec![];
+        if ids.is_empty() { return out; }
+        clear_in_tracks(&mut self.tracks, ids, &mut out);
+        for id in ids {
+            if self.occluders.remove(id).is_some() { out.push(ClearedRef { clip_id: id.clone(), field: "occluders".into(), removed_id: id.clone() }); }
+            crate::planar::clear_seq(id); crate::planar::remove_anchor(id);
+        }
+        for (f, rid) in self.grade_scopes.remove_clips(ids) { out.push(ClearedRef { clip_id: String::new(), field: f, removed_id: rid }); }
+        for (gid, g) in self.editorial.captions.iter_mut() { for id in ids { if g.clips.contains(id) { g.clips.retain(|x| x != id); out.push(ClearedRef { clip_id: gid.clone(), field: "editorial.captions.clips".into(), removed_id: id.clone() }); } } }
+        out
+    }
+    /// Validator: references whose target clip does not exist (recurses into precomps). Empty on a consistent project.
+    pub fn dangling_refs(&self) -> Vec<ClearedRef> {
+        let mut ids = std::collections::HashSet::new(); collect_ids(&self.tracks, &mut ids);
+        let mut out = vec![]; dangling_in(&self.tracks, &ids, self.next_id, &mut out);
+        for k in self.occluders.keys() { if !ids.contains(k.as_str()) { out.push(ClearedRef { clip_id: k.clone(), field: "occluders".into(), removed_id: k.clone() }); } }
+        for c in self.grade_scopes.clip_bindings.keys() { if !ids.contains(c.as_str()) { out.push(ClearedRef { clip_id: String::new(), field: "grade_scopes.clip_bindings".into(), removed_id: c.clone() }); } }
+        for (i, g) in self.grade_scopes.groups.iter().enumerate() { for c in &g.clips { if !ids.contains(c.as_str()) { out.push(ClearedRef { clip_id: g.id.clone(), field: format!("grade_scopes.groups[{i}].clips"), removed_id: c.clone() }); } } }
+        for (gid, g) in &self.editorial.captions { for x in &g.clips { if !ids.contains(x.as_str()) { out.push(ClearedRef { clip_id: gid.clone(), field: "editorial.captions.clips".into(), removed_id: x.clone() }); } } }
+        out
     }
 }
 

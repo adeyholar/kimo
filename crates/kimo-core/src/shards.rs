@@ -14,7 +14,7 @@ pub struct ShardBurst {
     #[serde(default = "d_smin")] pub size_min: f64, #[serde(default = "d_smax")] pub size_max: f64, #[serde(default = "d_seed")] pub seed: u64,
     #[serde(default = "d_tint")] pub tint: [f64; 3], #[serde(default = "d_drag")] pub drag: f64, #[serde(default)] pub gravity: f64, #[serde(default = "d_spin")] pub spin: f64,
     #[serde(default = "d_dof")] pub dof: f64, #[serde(default)] pub focus: f64, #[serde(default = "d_one")] pub brightness: f64, #[serde(default = "d_light")] pub light: [f64; 3],
-    #[serde(default)] pub toward_camera: f64, #[serde(default)] pub spread_time: f64, #[serde(default)] pub fade_out: f64, #[serde(default)] pub dispersion: f64, #[serde(default)] pub origin_spread: f64,
+    #[serde(default)] pub toward_camera: f64, #[serde(default)] pub spread_time: f64, #[serde(default)] pub fade_out: f64, #[serde(default)] pub dispersion: f64, #[serde(default, skip_serializing_if = "refd_zero")] pub refract_dispersion: f64, #[serde(default)] pub origin_spread: f64,
     #[serde(default)] pub physics: bool, #[serde(default = "d_rest")] pub restitution: f64, #[serde(default = "d_fric")] pub friction: f64, #[serde(default)] pub floor: Option<f64>, #[serde(default)] pub ang_drag: f64, #[serde(default = "d_tr")] pub collide: bool,
     #[serde(default)] pub thickness: Option<[f64; 2]>, #[serde(default)] pub glass: f64, #[serde(default)] pub aspect: Option<[f64; 2]>, #[serde(default)] pub fresnel: f64, #[serde(default)] pub refract: f64, #[serde(default)] pub falloff: f64,
     /// Opt-in looks. Legacy preserves the existing shader. Size controls affect free-burst geometry and physics, not pane cells.
@@ -88,13 +88,19 @@ fn sstep(x: f64) -> f64 { let t = x.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) }
 
 struct Prim { depth: f64, pts: [(f64, f64); 6], n: usize, nz: f64, spec: f64, rim_c: f64, blur: f64, alpha: f64, face: usize, u: f64, tx: f64, ty: f64, n3: [f64; 3], tex: Option<[f64; 6]>, id: u64, flat: f64, env: ([f64; 3], f64) }
 
-pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
+/// Per-render state that used to be process-global. Built once per frame from the project and passed down; two renders with different ctx never interfere.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RenderCtx { pub work_linear: bool }
+
+pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) { render_ctx(&RenderCtx::default(), e, f, t, cam, fps, total) }
+
+pub fn render_ctx(ctx: &RenderCtx, e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, total: f64) {
     let (w, hh) = (f.w, f.h); let cv = CamView::new(w, hh, cam); let fl = cv.focal(); let k = w.min(hh) as f64 / 720.0;
     let nsub = if e.shutter_deg <= 0.0 { 1usize } else if e.blur_samples > 0 { (e.blur_samples as usize).clamp(1, 64) } else if e.plane.as_ref().map(|p| p.texture.is_some()).unwrap_or(false) { 8usize } else { 4usize }; let shutter = (e.shutter_deg.clamp(0.0, 720.0) / 360.0) / fps.max(1.0); let mut accc = vec![0f32; w * hh * 3]; let mut acca = vec![0f32; w * hh]; let rf = e.refract > 0.0 && e.material.transmissive(); let mut dacc = vec![0f32; if rf { w * hh * 2 } else { 0 }]; let mut dsum = vec![0f32; if rf { w * hh * 2 } else { 0 }];
     let lg = { let l = e.light; let m = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt().max(1e-9); [l[0] / m, l[1] / m, l[2] / m] };
     let focus = if e.focus > 0.0 { e.focus } else { fl };
     let pcells: Option<(Plane, Vec<Cell>)> = e.plane.as_ref().map(|p| (p.clone(), plane_cells(p, e.seed, k)));
-    let tex = e.plane.as_ref().and_then(|p| p.texture.as_ref().and_then(|t| load_tex(t, p.region)));
+    let tex = e.plane.as_ref().and_then(|p| p.texture.as_ref().and_then(|t| load_tex(ctx, t, p.region)));
     let occ = if let Some(m) = EXT_OCC.with(|c| c.borrow_mut().take()) { if m.len() == w * hh { Some(m) } else { None } } else { e.plane.as_ref().and_then(|p| p.occlusion.as_ref().and_then(|o| load_occ(o, (t * fps).round() as i64, w, hh))) };
     let mut shadow = vec![0f32; if e.contact_shadow > 0.0 { w * hh } else { 0 }]; let sreach = if e.shadow_reach > 0.0 { e.shadow_reach } else { 220.0 } * k;
     let traj = if e.physics { Some((bake_cached(e, k, total, hh), 0)) } else { None };
@@ -127,7 +133,7 @@ pub fn render(e: &ShardBurst, f: &mut Frame, t: f64, cam: &Camera, fps: f64, tot
             let mut shard: Vec<([(f64, f64); 6], f64, f64, f64, f64)> = vec![]; // per face
             let nrm = [rm[0][2], rm[1][2], rm[2][2]];
             let eye = cv.eye(); let to_eye = [eye[0]-pos[0], eye[1]-pos[1], eye[2]-pos[2]];
-            let env_for = |normal| if e.env_reflection.is_finite() && e.env_reflection > 0.0 { shard_look::environment(normal, to_eye, e.env_roughness, WORK_LINEAR.load(std::sync::atomic::Ordering::Relaxed)) } else { ([0.0;3],0.0) }; let mut zsum = 0.0; let mut ok = true;
+            let env_for = |normal| if e.env_reflection.is_finite() && e.env_reflection > 0.0 { shard_look::environment(normal, to_eye, e.env_roughness, ctx.work_linear) } else { ([0.0;3],0.0) }; let mut zsum = 0.0; let mut ok = true;
             for face in 0..2 { let zoff = if face == 0 { thick * 0.5 } else { -thick * 0.5 }; let mut pts = [(0.0, 0.0); 6]; let mut dz = 0.0;
                 for v in 0..nv { let l = [loc[v].0, loc[v].1, zoff]; let wp = [pos[0] + rm[0][0] * l[0] + rm[0][1] * l[1] + rm[0][2] * l[2], pos[1] + rm[1][0] * l[0] + rm[1][1] * l[1] + rm[1][2] * l[2], pos[2] + rm[2][0] * l[0] + rm[2][1] * l[1] + rm[2][2] * l[2]];
                     match cv.project(wp) { Some((sx, sy, zv)) => { pts[v] = (sx, sy); dz += zv; } None => { ok = false; } } }
@@ -228,11 +234,10 @@ thread_local! { static DISP: std::cell::RefCell<Option<(usize, usize, Vec<f32>)>
 /// Take the premultiplied screen-space refraction field written by the last shard render (if refract > 0).
 pub fn take_disp() -> Option<(usize, usize, Vec<f32>)> { DISP.with(|d| d.borrow_mut().take()) }
 /// Bend the canvas behind a layer by a premultiplied displacement field; `layer_a` is the layer alpha (field is divided by it).
-pub fn refract_canvas(out: &mut Frame, disp: &(usize, usize, Vec<f32>), layer: &Frame) {
+pub fn refract_canvas(out: &mut Frame, disp: &(usize, usize, Vec<f32>), layer: &Frame, rdisp: f64) {
     let (w, hh) = (out.w, out.h); if disp.0 != w || disp.1 != hh { return; } let src = out.d.clone();
     for y in 0..hh { for x in 0..w { let o = y * w + x; let a = layer.d[o * 4 + 3]; if a < 0.003 { continue; } let lim = 28.0 * (hh as f32 / 720.0); let (dx, dy) = ((disp.2[o * 2] / a.max(0.05)).clamp(-lim, lim), (disp.2[o * 2 + 1] / a.max(0.05)).clamp(-lim, lim));
-        let (sx, sy) = ((x as f32 + dx).clamp(0.0, w as f32 - 1.001), (y as f32 + dy).clamp(0.0, hh as f32 - 1.001)); let (x0, y0) = (sx as usize, sy as usize); let (fx, fy) = (sx - x0 as f32, sy - y0 as f32);
-        let wgt = a.min(1.0); for j in 0..3 { let v = |xx: usize, yy: usize| src[(yy * w + xx) * 4 + j]; let s = v(x0, y0) * (1.0 - fx) * (1.0 - fy) + v(x0 + 1, y0) * fx * (1.0 - fy) + v(x0, y0 + 1) * (1.0 - fx) * fy + v(x0 + 1, y0 + 1) * fx * fy; out.d[o * 4 + j] = src[o * 4 + j] * (1.0 - wgt) + s * wgt; } } }
+        let wgt = a.min(1.0); for j in 0..3 { let sc = 1.0 + rdisp as f32 * (j as f32 - 1.0); let (sx, sy) = ((x as f32 + dx * sc).clamp(0.0, w as f32 - 1.001), (y as f32 + dy * sc).clamp(0.0, hh as f32 - 1.001)); let (x0, y0) = (sx as usize, sy as usize); let (fx, fy) = (sx - x0 as f32, sy - y0 as f32); let v = |xx: usize, yy: usize| src[(yy * w + xx) * 4 + j]; let s = v(x0, y0) * (1.0 - fx) * (1.0 - fy) + v(x0 + 1, y0) * fx * (1.0 - fy) + v(x0, y0 + 1) * (1.0 - fx) * fy + v(x0 + 1, y0 + 1) * fx * fy; out.d[o * 4 + j] = src[o * 4 + j] * (1.0 - wgt) + s * wgt; } } }
 }
 
 struct Tex { w: usize, h: usize, d: Vec<f32>, mean: [f64; 3] }
@@ -241,11 +246,12 @@ impl Tex { fn sample(&self, u: f64, v: f64) -> [f64; 3] { let x = (u * self.w as
 thread_local! { static TEX: std::cell::RefCell<Option<(String, std::sync::Arc<Tex>)>> = std::cell::RefCell::new(None); }
 /// Load an image as an sRGB-decoded linear float texture at the plane's UV size (via ffmpeg, bounded to 4096x4096).
 /// Set by the renderer: true when frame buffers are scene-linear (colour pipeline on), false when display-referred 0..1 (default).
-pub static WORK_LINEAR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-fn load_tex(path: &str, region: [f64; 2]) -> Option<std::sync::Arc<Tex>> {
-    let wl = WORK_LINEAR.load(std::sync::atomic::Ordering::Relaxed); let key = format!("{}|{}|{}|{}", path, region[0], region[1], wl); if let Some((k, t)) = TEX.with(|c| c.borrow().clone()) { if k == key { return Some(t); } }
+/// Texture cache key: depends on the decode flag so a linear and an sRGB render never share a decoded texture.
+pub fn tex_key(ctx: &RenderCtx, path: &str, region: [f64; 2]) -> String { format!("{}|{}|{}|{}", path, region[0], region[1], ctx.work_linear) }
+fn load_tex(ctx: &RenderCtx, path: &str, region: [f64; 2]) -> Option<std::sync::Arc<Tex>> {
+    let wl = ctx.work_linear; let key = tex_key(ctx, path, region); if let Some((k, t)) = TEX.with(|c| c.borrow().clone()) { if k == key { return Some(t); } }
     let (w, hh) = ((region[0].round() as usize).clamp(8, 4096), (region[1].round() as usize).clamp(8, 4096));
-    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", path, "-vf", &format!("scale={}:{}", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
+    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", &crate::deps::resolve_str(path), "-vf", &format!("scale={}:{}", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
     if out.stdout.len() != w * hh * 3 { return None; }
     let lin = |b: u8| { let c = b as f32 / 255.0; if !wl { c } else if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) } }; let lut: Vec<f32> = (0..256).map(|i| lin(i as u8)).collect();
     let d: Vec<f32> = out.stdout.iter().map(|&b| lut[b as usize]).collect(); let mut mean = [0.0f64; 3]; for (i, v) in d.iter().enumerate() { mean[i % 3] += *v as f64; } for m in mean.iter_mut() { *m /= (w * hh) as f64; } let t = std::sync::Arc::new(Tex { w, h: hh, d, mean }); TEX.with(|c| *c.borrow_mut() = Some((key, t.clone()))); Some(t)
@@ -263,7 +269,7 @@ fn load_occ(pat: &str, frame: i64, w: usize, hh: usize) -> Option<std::sync::Arc
     let path = if let Some(i) = pat.find('%') { let rest = &pat[i + 1..]; let digs: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect(); let wid: usize = digs.parse().unwrap_or(0); if rest[digs.len()..].starts_with('d') { format!("{}{:0wid$}{}", &pat[..i], frame.max(0), &rest[digs.len() + 1..], wid = wid) } else { pat.to_string() } } else { pat.to_string() };
     let key = format!("{}|{}|{}", path, w, hh); if let Some((k, m)) = OCC.with(|c| c.borrow().clone()) { if k == key { return Some(m); } }
     // alpha if present, else luma; sized to the canvas
-    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", &path, "-vf", &format!("scale={}:{},format=rgba,alphaextract", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
+    let out = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", &crate::deps::resolve_str(&path), "-vf", &format!("scale={}:{},format=rgba,alphaextract", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
     let rgbmode = std::process::Command::new("ffmpeg").args(["-v", "error", "-i", &path, "-vf", &format!("scale={}:{}", w, hh), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).output().ok()?;
     let a = if out.stdout.len() == w * hh { out.stdout } else { Vec::new() }; let l = if rgbmode.stdout.len() == w * hh { rgbmode.stdout } else { Vec::new() };
     let src = if !a.is_empty() && a.iter().any(|&v| v < 250) { a } else { l }; if src.len() != w * hh { return None; }
@@ -278,3 +284,4 @@ pub fn take_probe() -> Vec<ProbeShard> { PROBE.with(|p| std::mem::take(&mut *p.b
 
 /// Depth sink of a not-yet-released cell: ramps over `preload_time`, strongest at the impact, held until the cell's birth.
 fn pre_dep(p: &Plane, d: f64, k: f64, ts: f64, birth: f64) -> f64 { if p.preload_depth <= 0.0 || ts >= birth { return 0.0; } let r = sstep(ts / p.preload_time.max(1e-3)); p.preload_depth * k * r * (-(d / (p.radius * k * 5.0)).powi(2)).exp() }
+fn refd_zero(v: &f64) -> bool { *v == 0.0 }

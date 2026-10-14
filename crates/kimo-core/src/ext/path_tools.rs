@@ -26,13 +26,13 @@ pub fn commands() -> Vec<Command> { vec![
         run: |ss, a| { let d = resolve_d(a)?; let eo = rule(a)?; let p = Path::parse(&d, eo)?;
             let mut args = a.as_object().cloned().unwrap_or_default(); for k in ["d","points","closed","smooth","tension","fill_rule"] { args.remove(k); } args.insert("shape".into(), json!("rect"));
             let r = crate::commands::dispatch(ss, "add_shape", &Value::Object(args))?; let id = r.get("clip_id").and_then(|v| v.as_str()).map(String::from).or_else(|| r.get("clip_ids").and_then(|v| v.get(0)).and_then(|v| v.as_str()).map(String::from)).ok_or("add_shape returned no clip id")?;
-            let c = ss.project.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).find(|c| c.id == id).ok_or("clip vanished")?;
+            let c = ss.project.find_clip_mut(&id).ok_or("clip vanished")?;
             if let Source::Shape { shape, .. } = &mut c.source { *shape = "path".into(); } store(c, &d, eo);
             let mut o = info(&p, &d); o["clip_id"] = json!(id); Ok(o) } },
     Command { name: "set_path", description: "Replace the Bezier path of a path shape (clears path keys) (same inputs as add_path_shape: d or points[+closed/smooth/tension], fill_rule). Modifiers and styles on the clip are kept. Validates before changing anything.", mutates: true,
         schema: obj(vec![("clip_id", s("path shape clip")), ("d", s("SVG path data")), ("points", json!({"type":"array","items":{"type":"array","items":{"type":"number"}}})), ("closed", json!({"type":"boolean"})), ("smooth", json!({"type":"boolean"})), ("tension", n("0..1")), ("fill_rule", s("nonzero|evenodd"))], &["clip_id"]),
         run: |ss, a| { let d = resolve_d(a)?; let eo = rule(a)?; let p = Path::parse(&d, eo)?; let cid = str_arg(a, "clip_id")?.to_string();
-            let c = ss.project.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).find(|c| c.id == cid).ok_or(format!("no such clip '{cid}'"))?;
+            let c = ss.project.find_clip_mut(&cid).ok_or(format!("no such clip '{cid}'"))?;
             if !matches!(&c.source, Source::Shape { shape, .. } if shape == "path") { return Err("clip is not a path shape (create with add_path_shape)".into()); } store(c, &d, eo); Ok(info(&p, &d)) } },
     Command { name: "path_info", description: "Report a path shape's SVG data, arc length in px, flattened segment count, subpath count, bbox and fill rule. Animate draw-on with add_shape_modifier kind=trim and keyframes on its `end` param.", mutates: false,
         schema: obj(vec![("clip_id", s("path shape clip"))], &["clip_id"]),
@@ -42,12 +42,12 @@ pub fn commands() -> Vec<Command> { vec![
         schema: obj(vec![("clip_id", s("path shape clip")), ("time", n("clip-local seconds")), ("d", s("SVG path data")), ("points", json!({"type":"array","items":{"type":"array","items":{"type":"number"}}})), ("closed", json!({"type":"boolean"})), ("smooth", json!({"type":"boolean"})), ("tension", n("0..1")), ("ease", s("linear|in|out|in_out|hold, for the segment leaving this key"))], &["clip_id","time"]),
         run: |ss, a| { let d = resolve_d(a)?; Path::parse(&d, false)?; let t = num_arg(a, "time")?; if !t.is_finite() || t < 0.0 { return Err("time must be >= 0".into()); }
             let ez = a.get("ease").and_then(|v| v.as_str()).unwrap_or("linear").to_string(); if !["linear","in","out","in_out","hold"].contains(&ez.as_str()) { return Err(format!("ease must be linear|in|out|in_out|hold, got '{ez}'")); }
-            let cid = str_arg(a, "clip_id")?.to_string(); let c = ss.project.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).find(|c| c.id == cid).ok_or(format!("no such clip '{cid}'"))?;
+            let cid = str_arg(a, "clip_id")?.to_string(); let c = ss.project.find_clip_mut(&cid).ok_or(format!("no such clip '{cid}'"))?;
             let e = c.effects.iter().find(|e| e.kind == "shape_path").ok_or("clip has no path (create with add_path_shape)")?; let base = e.strings.get("d").cloned().unwrap_or_default();
             crate::paths::same_structure(&base, &d).map_err(|m| format!("{m}; base path is: {base}"))?;
             let mut keys = keys_of(c); if keys.len() >= 256 { return Err("max 256 path keys".into()); } if keys.is_empty() && t > 1e-9 { keys.push((0.0, base.clone(), "linear".into())); }
             keys.retain(|k| (k.0 - t).abs() > 1e-6); keys.push((t, d, ez)); keys.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
             let e = c.effects.iter_mut().find(|e| e.kind == "shape_path").unwrap(); e.strings.insert("keys".into(), serde_json::to_string(&keys).unwrap()); Ok(json!({"keys": keys.iter().map(|k| json!({"time": k.0, "ease": k.2})).collect::<Vec<_>>()})) } },
     Command { name: "clear_path_keys", description: "Remove all path keyframes (the base path stays).", mutates: true, schema: obj(vec![("clip_id", s("path shape clip"))], &["clip_id"]),
-        run: |ss, a| { let cid = str_arg(a, "clip_id")?.to_string(); let c = ss.project.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).find(|c| c.id == cid).ok_or(format!("no such clip '{cid}'"))?; let e = c.effects.iter_mut().find(|e| e.kind == "shape_path").ok_or("clip has no path")?; Ok(json!({"removed": e.strings.remove("keys").is_some()})) } },
+        run: |ss, a| { let cid = str_arg(a, "clip_id")?.to_string(); let c = ss.project.find_clip_mut(&cid).ok_or(format!("no such clip '{cid}'"))?; let e = c.effects.iter_mut().find(|e| e.kind == "shape_path").ok_or("clip has no path")?; Ok(json!({"removed": e.strings.remove("keys").is_some()})) } },
 ] }

@@ -18,9 +18,9 @@ fn display_scope_respects_cancellation_without_mutating_input() {
         Kind::Vectorscope,
         Kind::Histogram,
     ] {
-        guard::CANCEL.store(true, Relaxed);
+        let tok=guard::new_token();tok.store(true,Relaxed);let g=guard::install_token(&tok);
         let result = std::panic::catch_unwind(|| render(&f, Options::sdr(kind)));
-        guard::CANCEL.store(false, Relaxed);
+        drop(g);
         assert!(result.is_err());
         assert_eq!(f.d, before);
     }
