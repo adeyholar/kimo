@@ -73,6 +73,7 @@ create_shared_grade_graph 58fa459ac9911fc4
 decompose_track_homography f43e9c6e1eecb210
 delete_clip f4a1f352f81309a7
 delete_track e83a622c3e4b81fe
+derive_vertex_tangents 9f133ebacc301575
 describe_frame 29274974284be9a5
 detect_beats 0a305ba852c6ffd1
 detect_cuts 2d0b26c91f7deda5
@@ -122,6 +123,7 @@ import_mesh_raw 333cadbf73de6f0d
 import_pixels 90496dc0f91defc9
 import_samples 8a66895f38c7ad58
 import_srt 7ae0ccdd578e7529
+ingest_vertex_stream ea0e4b037307853d
 insert_gap b236ff202828ce3c
 inspect_asc_cdl 2cad335b491d5690
 inspect_color_delivery 319e512feadfa939
@@ -138,6 +140,7 @@ inspect_mesh_primitive 41a827335f54d629
 inspect_ocio_config 04834eee72a14d76
 inspect_scene_matrices b676789695e0fd2f
 inspect_threed_backend c448f0e8502b0106
+inspect_vertex_stream 1131d4d20cf1ffed
 job_status bcf6ed2cefd135f0
 join_export 93d05ac7e76da91f
 kimo_info 22a891990956a689
@@ -222,6 +225,7 @@ render_mesh_camera_pass b8c3fb682443996e
 render_mesh_cpu_reference 106df2b961354147
 render_ocio_display_view 413392dc0f5e7a7b
 render_scope 0ba759192f5e77dd
+render_vertex_stream_pbr e257a7f88203a83d
 reorder_mask b182a28a665330c4
 restore dab5b50df493b4be
 resume_job ddf7317d0c4d5591
@@ -230,6 +234,7 @@ ripple_trim 67fb9388eed31127
 roll_edit 0e15462a35d306ee
 roto_propagate d82172bedca52a94
 sample_diffuse_sh_raw 7d79d4f10018ecab
+sample_direct_lighting ea9833caf846de5b
 sample_field 00e7b2d0d2c14a73
 sample_linear_neutral f521f85a77fcec69
 sample_noise 0efa7d68b87bccf8
