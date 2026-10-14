@@ -67,6 +67,7 @@ compare_linear_exposure afcdd34f6dab8f45
 compute_text_bounds a1e565a4cc3fe0e4
 connect_nodes b6edfff20b9c6d1f
 contact_sheet 4c3841fa11139b4c
+contour_sdf_graph 34fd48aa1703f2c5
 copy_curve 5560581f371d7986
 corner_disagreement 364bb4e3f8409a46
 create_shared_grade_graph 58fa459ac9911fc4
@@ -139,6 +140,7 @@ inspect_mesh_buffers a4392c1483aea11f
 inspect_mesh_primitive 41a827335f54d629
 inspect_ocio_config 04834eee72a14d76
 inspect_scene_matrices b676789695e0fd2f
+inspect_sdf_graph 9e3e075357bb85a5
 inspect_threed_backend c448f0e8502b0106
 inspect_vertex_stream 1131d4d20cf1ffed
 job_status bcf6ed2cefd135f0
@@ -241,6 +243,7 @@ sample_linear_neutral f521f85a77fcec69
 sample_noise 0efa7d68b87bccf8
 sample_pbr_raw 86bc792607aa9747
 sample_property 3994cff551e8910e
+sample_sdf_graph b9b932be852b16ac
 sample_sdf_raw b0e579f1cde1279c
 save_project d51a7abb5be457b3
 session_stats 08b78ec5daffb184
