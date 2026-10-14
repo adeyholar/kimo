@@ -9,3 +9,7 @@ pub mod import;
 
 pub mod primitives;
 pub mod perspective;
+pub mod vertex_stream;
+pub mod ingest;
+pub mod lighting_stage;
+pub mod lit_raster;
