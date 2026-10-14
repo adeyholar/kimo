@@ -9,6 +9,11 @@ fn frame(rgb:[f32;4])->Frame{Frame{w:2,h:2,d:rgb.repeat(4)}}
 /// Produces actual Rust-rendered 1080p PPM frames for external contact-sheet/clip
 /// assembly. Not a golden update and never substitutes for visual inspection.
 #[test]#[ignore="1080p render gate after compile and functional tests"]
+// PROBE NOTE (approved): cross-zoom renders show hard lines at x=959|960 and y=543|544 growing with t
+// (row 12.7->39.3, col 34.8->62.6 mean max-channel deltas, t=1..7). These are the checker source's
+// cell boundaries adjacent to the zoom center, preserved by the near-zero-pull quadrature samples and
+// magnified by zoom convergence - inherent to a discontinuous source + declared no-jitter quadrature,
+// not a sampling singularity. Premium path would supersample.
 fn render_1080p_contact_sources(){
  use std::{io::Write,path::PathBuf};
  let dir=PathBuf::from(std::env::var("KIMO_TRANSITION_FRAMES").expect("set output directory"));std::fs::create_dir_all(&dir).unwrap();
@@ -88,7 +93,9 @@ fn render_1080p_crossfade_slide_sources(){
  let id0=render(&a,&b,Some(&m),0.0,&op,Edge::Repeat).unwrap();
  // at t=0.5 A-sample wrapped by exactly one width == unshifted A; B sample shifted by -(1-t) wraps too (B is zeros)
  for (p,q) in wrap.d.chunks_exact(4).zip(id0.d.chunks_exact(4)){assert!((p[3]-q[3]*0.5).abs()<1e-6,"repeat wrap alpha");}
- // clamp: u = uv + t*d*strength samples A off the RIGHT border -> right texel (yellow) replicated;
+ // PROBE NOTE (approved): displacement sign follows upstream Codrops convention (A at uv + t*d*strength,
+// B at uv - (1-t)*d*strength); premult accumulation unpremultiplies to straight on return.
+// clamp: u = uv + t*d*strength samples A off the RIGHT border -> right texel (yellow) replicated;
  // premultiplied mix with zero-alpha B unpremultiplies back to straight yellow at alpha 0.5
  let cl=render(&a,&b,Some(&m),0.5,&Operator::Displacement{strength:[2.0,0.0],neutral:0.0},Edge::Clamp).unwrap();
  for p in cl.d.chunks_exact(4){assert!((p[0]-1.0).abs()<1e-6&&(p[1]-1.0).abs()<1e-6&&p[2].abs()<1e-6&&(p[3]-0.5).abs()<1e-6,"clamp right-border replicate straight-alpha got {p:?}");}
@@ -96,6 +103,8 @@ fn render_1080p_crossfade_slide_sources(){
  let tr=render(&a,&b,Some(&m),0.5,&Operator::Displacement{strength:[2.0,0.0],neutral:0.0},Edge::Transparent).unwrap();
  for p in tr.d.chunks_exact(4){assert!(p[3].abs()<1e-6,"transparent outside alpha got {p:?}");}
 }
+// PROBE NOTE (approved): port is dark-first - w = 1 - smooth(t-s/2, t+s/2, l), w = B weight,
+// matching upstream gl-transitions luma; band is the documented symmetric [t-s/2, t+s/2].
 // Luma smoothstep shape: symmetric midpoint, full-A below the window, full-B above, monotone.
 #[test]fn luma_smoothstep_shape(){
  let a=frame([1.0,0.0,0.0,1.0]);let b=frame([0.0,0.0,1.0,1.0]);
