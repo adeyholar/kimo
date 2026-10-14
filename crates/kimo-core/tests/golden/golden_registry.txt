@@ -54,6 +54,8 @@ burn_in 0df91ac9090a9beb
 cache_clear 6022ac3871ddd27b
 cache_set_budget 422160a7f6a95562
 cache_stats fda818c878e0e6dc
+camera_clip_triangle bb5e8ec86c11e72f
+camera_project_points 9925e0b55b1c4af3
 camera_solve_info 68eba83a999378cc
 cancel_job 71597b2319b6d6cf
 checkpoint 4063b9f4243b3a4e
