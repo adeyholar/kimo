@@ -5,6 +5,8 @@
 //! Every tools/call is also reported to the spectator GUI when KIMO_SPECTATOR is set (spectator.rs): out of band, never on stdout.
 use kimo_core::commands::{dispatch, Session};
 mod inline;
+mod png;
+mod preview;
 mod spectator;
 use kimo_core::toolgroups;
 use serde_json::{json, Value};
@@ -38,7 +40,7 @@ fn run_guarded(ss: &Arc<Mutex<Session>>, name: &str, args: &Value, out: &mut imp
 fn main() {
     kimo_core::guard::init();
     spectator::init(); // opt-in telemetry for the spectator GUI (KIMO_SPECTATOR); off = no thread, no work
-    std::panic::set_hook(Box::new(|i| { eprintln!("kimo: {i}"); }));
+    std::panic::set_hook(Box::new(|i| { if std::thread::current().name() == Some("kimo-preview") { return; } eprintln!("kimo: {i}"); })); // a cancelled live preview is not news
     let ss = Arc::new(Mutex::new(Session::new()));
     let mut enabled: std::collections::HashSet<String> = std::collections::HashSet::new();
     let stdin = std::io::stdin();

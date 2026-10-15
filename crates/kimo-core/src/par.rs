@@ -6,7 +6,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static OVERRIDE: AtomicUsize = AtomicUsize::new(0);
 /// Force the worker count (0 = auto). Used by benches/tests; KIMO_THREADS env also works.
 pub fn set_threads(n: usize) { OVERRIDE.store(n, Ordering::Relaxed); }
+thread_local! { static LOCAL: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+/// Cap the worker count for work started from the current thread only (0 = no cap), e.g. the spectator's
+/// background preview renderer, so it leaves cores free for tool calls. Other threads are unaffected.
+pub fn set_thread_cap(n: usize) { LOCAL.with(|l| l.set(n)); }
 pub fn threads() -> usize {
+    let cap = LOCAL.with(|l| l.get());
+    if cap > 0 { return threads_uncapped().min(cap); }
+    threads_uncapped()
+}
+fn threads_uncapped() -> usize {
     let o = OVERRIDE.load(Ordering::Relaxed); if o > 0 { return o.min(16); }
     if let Ok(v) = std::env::var("KIMO_THREADS") { if let Ok(n) = v.parse::<usize>() { if n > 0 { return n.min(16); } } }
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8)

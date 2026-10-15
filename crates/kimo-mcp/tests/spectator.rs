@@ -224,6 +224,12 @@ fn export_reports_progress() {
         }
     }
     assert_eq!(pe.last().unwrap()["payload"]["eta_ms"], 0, "nothing left at the end");
+    // the Renders history row reads the output size from the complete event (telemetry only; stdout unchanged)
+    let size = std::fs::metadata(&mp4).unwrap().len();
+    let done = ex.last().unwrap();
+    assert_eq!(done["payload"]["bytes"].as_u64(), Some(size), "{done}");
+    assert_eq!(done["payload"]["result"]["bytes"].as_u64(), Some(size));
+    assert!(!out.contains("\"bytes\""), "the tool result itself is unchanged: {out}");
     let _ = std::fs::remove_file(&p); let _ = std::fs::remove_file(&mp4);
 }
 

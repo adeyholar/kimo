@@ -233,6 +233,16 @@ and with no app listening events are dropped. The app can be opened and closed a
 engine notices a closed window before its next event, reconnects on its own (retrying after 50 ms, doubling to
 at most 1 s between attempts, never waiting on the tool calls), and events from while no app was listening are
 dropped rather than replayed.
+The viewer follows the project live: after any call that changes it (import, add/move/trim/split a clip,
+transforms, effects, colour, text...), the engine renders the frame at the playhead in the background and sends it as
+`{"type":"frame_rendered","auto":true,"png_b64",...}` (at most 640 px wide; `KIMO_SPECTATOR_FRAME_PX` changes that),
+so the app never waits for the agent to call `render_frame`. Read-only calls (`get_*`, `list_*`, searches,
+`tools/list`) render nothing. Bursts coalesce, latest wins: the frame renders once no call has arrived for 40 ms (or
+400 ms into a long burst, between two calls), one at a time, never while a call is running, on its own thread with
+its own decode cache, so tool calls never wait for it. The playhead moves to an explicit `time`/`at` (a split shows
+the cut), else into the clip the call touched, and otherwise stays put. Frames are only rendered while an app is
+connected (one that opens mid-session gets the current frame at once); with telemetry off or nobody listening
+there is no render thread at all, and `KIMO_SPECTATOR_FRAMES=0` keeps the call events but turns the frames off.
 `export` progress events carry `current_frame` (frames finished, so the index of the next frame), `total_frames`,
 `fps` (the instantaneous rate over the time since the previous progress report) and `eta_ms` (null until the first
 frame is done) beside `pct` and `elapsed_ms`. To watch in a plain browser instead of the app, run

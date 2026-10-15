@@ -15,7 +15,8 @@
 //!   start    {args}
 //!   progress {pct 0..100, progress 0..1, stage, elapsed_ms} plus, from frame-counting tools (export),
 //!            {current_frame (frames finished = next frame index), total_frames, fps (instantaneous), eta_ms}
-//!   complete {dur_ms, result, changed, mutated} plus the router's vocabulary where the engine state shows it:
+//!   complete {dur_ms, result, changed, mutated} plus `bytes` (output file size, also in result) for export
+//!            tools, plus the router's vocabulary where the engine state shows it:
 //!            from/to (+param) for a field change, clip/track/s/e/label for an insert, s/e/at for edits,
 //!            effect, on (mute/solo), text/s/e (captions)
 //!   error    {dur_ms, error, code, param, hint}
@@ -26,7 +27,7 @@ use kimo_core::commands::Session;
 use kimo_core::toolgroups;
 use serde_json::{json, Map, Value};
 use std::io::Write;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -47,6 +48,9 @@ struct Sink { tx: SyncSender<Msg> }
 static SINK: OnceLock<Option<Sink>> = OnceLock::new();
 static SEQ: AtomicU64 = AtomicU64::new(0);
 static REV: AtomicU64 = AtomicU64::new(0);
+/// True while the writer holds a live connection to the sink (a file sink counts once opened). Read by the live
+/// preview (preview.rs), which renders nothing while no spectator is listening.
+static CONNECTED: AtomicBool = AtomicBool::new(false);
 static ACTIVE: Mutex<Option<Active>> = Mutex::new(None);
 
 struct Active { call_id: String, tool: String, target: Value, t0: Instant, snap: Snap, last_progress: Option<(Instant, f64)>, last_frame: Option<(Instant, u64)>, frames_t0: Option<(Instant, u64)>, args: Value }
@@ -89,6 +93,15 @@ fn init_with(dest: Option<Dest>) {
 
 #[inline]
 pub fn enabled() -> bool { matches!(SINK.get(), Some(Some(_))) }
+
+/// The sink has a live listener right now.
+#[inline]
+pub fn connected() -> bool { CONNECTED.load(Ordering::Relaxed) }
+
+/// A live preview frame from the preview thread (same bounded, drop-on-full queue as every event).
+pub(crate) fn emit_frame(v: &Value) { emit(v) }
+
+pub(crate) fn now_ms() -> u64 { ts_ms() }
 
 fn emit(v: &Value) {
     if let Some(Some(s)) = SINK.get() {
@@ -184,15 +197,20 @@ fn writer(dest: Dest, rx: Receiver<Msg>) {
             Msg::Line(mut l) => {
                 if conn.as_mut().map_or(false, |c| !c.alive()) {
                     conn = None;
+                    CONNECTED.store(false, Ordering::Relaxed);
                     retry_at = Instant::now();
                 }
                 if conn.is_none() && Instant::now() >= retry_at {
                     conn = open(&dest);
-                    if conn.is_some() { backoff.reset(); } else { retry_at = Instant::now() + backoff.fail(); }
+                    if conn.is_some() {
+                        backoff.reset();
+                        CONNECTED.store(true, Ordering::Relaxed);
+                        crate::preview::reconnected(); // a spectator that just (re)opened gets the current frame
+                    } else { retry_at = Instant::now() + backoff.fail(); }
                 }
                 if let Some(c) = conn.as_mut() {
                     l.push('\n');
-                    if c.write_line(l.as_bytes()).is_err() { conn = None; retry_at = Instant::now() + backoff.fail(); }
+                    if c.write_line(l.as_bytes()).is_err() { conn = None; CONNECTED.store(false, Ordering::Relaxed); retry_at = Instant::now() + backoff.fail(); }
                 }
             }
         }
@@ -393,6 +411,7 @@ pub fn call_start(name: &str, args: &Value, ss: &Arc<Mutex<Session>>) {
     if let Some(g) = group { ev["group"] = json!(g); }
     emit(&ev);
     *ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(a);
+    crate::preview::call_started();
 }
 
 /// Progress from the engine (kimo_core::telemetry) for the call in flight; throttled to ~25/s (the first and last
@@ -444,6 +463,7 @@ pub fn call_end(result: &Value, ss: &Arc<Mutex<Session>>) {
         for k in ["code", "param", "hint"] { if let Some(v) = sc.and_then(|s| s.get(k)).filter(|v| !v.is_null()) { p[k] = v.clone(); } }
         let mut ev = event(&a, "error", p); ev["duration_ms"] = json!(dur_ms);
         emit(&ev);
+        crate::preview::call_finished(ss, &a.call_id, REV.load(Ordering::Relaxed), false, crate::preview::Hint::None, a.snap.duration, connected());
         return;
     }
     let after = snapshot(ss, a.target["clip_id"].as_str());
@@ -453,12 +473,43 @@ pub fn call_end(result: &Value, ss: &Arc<Mutex<Session>>) {
     let images = result.get("content").and_then(|c| c.as_array()).map_or(0, |c| c.iter().filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("image")).count());
     let mut p = json!({"dur_ms": dur_ms, "result": summarize(&res), "changed": changed, "mutated": mutated});
     if images > 0 { p["images"] = json!(images); }
+    if let Some(n) = output_bytes(&a.tool, &res) { p["bytes"] = json!(n); if p["result"].is_object() { p["result"]["bytes"] = json!(n); } }
     let changed = p["changed"].clone();
     vocabulary(&mut p, &a.tool, &a.args, &a.target, &changed, &after, ss);
     let mut ev = event(&a, "complete", p); ev["duration_ms"] = json!(dur_ms);
     emit(&ev);
-    if let Some(f) = frame_event(&a.call_id, &a.args, &res) { emit(&f); }
+    let hint = playhead_hint(&a.args, &a.target, &changed, &after);
+    if let Some(f) = frame_event(&a.call_id, &a.args, &res) { emit(&f); crate::preview::shown_by_agent(); }
     if mutated { emit(&json!({"type": "project_changed", "rev": REV.fetch_add(1, Ordering::Relaxed) + 1, "call_id": a.call_id, "ts_ms": ts_ms()})); }
+    // live preview: any call that changed the project (or is declared mutating) queues one frame at the playhead
+    let live = mutated || declared_mutating(&a.tool);
+    crate::preview::call_finished(ss, &a.call_id, REV.load(Ordering::Relaxed), live, hint, after.duration, connected());
+}
+
+/// Size on disk of a finished export's output file, for the GUI's Renders history ("done · 18.4 MB"). Telemetry
+/// only: the tool result on stdout is not touched. None for a path pattern (PNG sequences) or a missing file.
+fn output_bytes(tool: &str, res: &Value) -> Option<u64> {
+    if !(tool.starts_with("export") || tool == "join_export") { return None; }
+    std::fs::metadata(res.get("path")?.as_str()?).ok().filter(|m| m.is_file()).map(|m| m.len())
+}
+
+/// The registry's own `mutates` flag for a tool (group calls arrive here already resolved to the tool).
+fn declared_mutating(tool: &str) -> bool {
+    kimo_core::commands::registry_ref().iter().find(|c| c.name == tool).map_or(false, |c| c.mutates)
+}
+
+/// Where the playhead goes after a call: an explicit `time`/`at`/`t` inside the touched clip (or with no clip
+/// involved), else the touched clip (the one added, else the target), else it stays.
+fn playhead_hint(args: &Value, target: &Value, changed: &Value, after: &Snap) -> crate::preview::Hint {
+    use crate::preview::Hint;
+    let explicit = ["time", "at", "t"].iter().find_map(|k| args.get(*k).and_then(|v| v.as_f64()));
+    let clip = changed["clips_added"].get(0).and_then(|c| c["clip_id"].as_str()).or_else(|| target["clip_id"].as_str());
+    match (clip.and_then(|c| after.find(c)), explicit) {
+        (Some((_, s, e)), Some(t)) if t >= s - 1e-9 && t <= e + 1e-9 => Hint::At(t),
+        (Some((_, s, e)), _) => Hint::Clip(s, e),
+        (None, Some(t)) => Hint::At(t),
+        (None, None) => Hint::None,
+    }
 }
 
 /// The call in flight is being abandoned (hung worker; the process is about to exit). Emits its error and drains briefly.
