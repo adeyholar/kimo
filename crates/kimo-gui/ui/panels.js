@@ -28,7 +28,7 @@ export function fmtArgs(a, tool = '') {
   const out = [...pos, ...named].join(', ');
   return out || kv(a);
 }
-const fmtDur = ms => (ms == null || !Number.isFinite(+ms) ? '' : +ms < 95 ? Math.max(1, Math.round(+ms)) + 'ms' : (ms / 1000).toFixed(1) + 's');   // real sub-0.1 s latencies read in ms, not "0.0s"
+const fmtDur = ms => (ms == null || !Number.isFinite(+ms) ? '' : Math.max(1, Math.round(+ms)) + 'ms');   // one rule (Naman 4:37): integer ms everywhere, rail and Inspector ('37ms', '100ms', '1240ms')
 
 function rng(seed) { let s = (seed * 9301 + 49297) % 233280 || 1; return () => (s = (s * 9301 + 49297) % 233280) / 233280; }
 function head(spec, data, extra = '') {
