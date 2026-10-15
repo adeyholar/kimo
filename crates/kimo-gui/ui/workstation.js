@@ -112,6 +112,7 @@ function setPill(){
             : `sim feed - ${callCount} calls`;
   $('#live-text').textContent=label;
   $('#live-badge').classList.toggle('sim', feedKind==='sim');
+  $$('.p-head .count').forEach(c=>{ c.textContent=callCount+' calls'; });
 }
 setInterval(()=>{ const s=Math.floor((performance.now()-T0)/1000);
   $('#elapsed').textContent=[s/3600,s/60%60,s%60].map(v=>String(Math.floor(v)).padStart(2,'0')).join(':'); },1000);
@@ -125,7 +126,7 @@ const SPAN=22;
     t.style.cssText=`position:absolute;left:${s/SPAN*100}%;bottom:0;width:1px;height:${s%5?3:6}px;background:var(--hair2)`;
     r.appendChild(t);
     if(s%5===0){ const l=document.createElement('span'); l.className='tick';
-      l.style.left=(s/SPAN*100)+'%';
+      l.style.left=(s/SPAN*100)+'%'; if(s===0) l.style.transform='none';
       l.textContent='00:'+String(s).padStart(2,'0'); r.appendChild(l); }
   }
 })();
@@ -143,19 +144,21 @@ clip('#lane-v1','walk_ridge',0,28,13); clip('#lane-v1','dune_wide',30,34,14); cl
   d.textContent=t; $('#lane-cap').appendChild(d);
 });
 $$('.wave').forEach(c=>{
-  const g=c.getContext('2d'); const w=c.width=Math.max(320,c.clientWidth*2||640), h=c.height=60;
+  const g=c.getContext('2d'); const w=c.width=Math.max(640,c.clientWidth*2||1280), h=c.height=64;
   const rnd=mulberry32(+c.dataset.seed);
-  const bumps=Array.from({length:5},()=>[rnd()*w, 8+rnd()*20, 10+rnd()*22]);
+  const comp=Array.from({length:3},(_,i)=>[[12+rnd()*12,5+rnd()*5,2+rnd()*3][i], 0.6+rnd()*1.6, rnd()*6.28]);  // amp, freq, phase
+  const env=Array.from({length:2},()=>[0.5+rnd()*0.5, 0.25+rnd()*0.3, rnd()*6.28]);
+  const amp=x=>{ let a=0; for(const[A,f,p]of comp) a+=A*Math.sin(6.28*f*x/w+p);
+    let e=0; for(const[A,f,p]of env) e+=A*Math.sin(6.28*f*x/w+p);
+    return a*Math.max(0.35,Math.min(1,e)); };
   g.beginPath(); g.moveTo(0,h/2);
-  for(let x=0;x<=w;x+=4){ let a=0; for(const[bx,bw,ba]of bumps){ const d=(x-bx)/bw; a+=ba*Math.exp(-d*d); }
-    g.lineTo(x,h/2-Math.min(a,h/2-3)); }
-  for(let x=w;x>=0;x-=4){ let a=0; for(const[bx,bw,ba]of bumps){ const d=(x-bx)/bw; a+=ba*Math.exp(-d*d); }
-    g.lineTo(x,h/2+Math.min(a,h/2-3)); }
-  g.closePath(); g.fillStyle='rgba(231,229,228,.5)'; g.fill();
+  for(let x=0;x<=w;x+=3) g.lineTo(x, h/2-Math.max(-h/2+4,Math.min(h/2-4,amp(x))));
+  for(let x=w;x>=0;x-=3) g.lineTo(x, h/2+Math.max(-h/2+4,Math.min(h/2-4,amp(x))));
+  g.closePath(); g.fillStyle='rgba(231,229,228,.8)'; g.fill();
 });
 
 /* ---------- playhead + timecode (advances only during activity) ---------- */
-let playT=9.0, lastEvent=-1e9;
+let playT=4.0, lastEvent=-1e9;
 const tc=s=>`01:00:${String(Math.floor(s)).padStart(2,'0')}:${String(Math.floor(s%1*24)).padStart(2,'0')}`;
 function setPlay(){ $('#tl-play').style.left=(playT/SPAN*100)+'%'; $('#nle-tc').textContent=tc(playT); }
 setPlay();
@@ -176,19 +179,19 @@ $$('.kf-lane').forEach(l=>{
   const sc=new THREE.Scene(); sc.background=new THREE.Color(0x17151a);
   sc.fog=new THREE.Fog(0x17151a,8,18);
   const cam=new THREE.PerspectiveCamera(35,1,0.1,100);
-  cam.position.set(3.6,2.6,4.6); cam.lookAt(0,1.1,0);
-  const plateG=new THREE.BoxGeometry(1.5,0.045,0.34);
+  cam.position.set(4.2,3.0,5.2); cam.lookAt(0,1.9,0);
+  const plateG=new THREE.BoxGeometry(1.9,0.05,0.5);
   const plateM=new THREE.MeshStandardMaterial({color:0xd9d2c4,roughness:0.42,metalness:0.25});
   const helix=new THREE.Group();
-  for(let i=0;i<44;i++){ const m=new THREE.Mesh(plateG,plateM);
-    const a=i*0.30; m.position.set(Math.cos(a)*0.9, i*0.055, Math.sin(a)*0.9); m.rotation.y=-a;
+  for(let i=0;i<56;i++){ const m=new THREE.Mesh(plateG,plateM);
+    const a=i*0.22; m.position.set(Math.cos(a)*0.55, i*0.075, Math.sin(a)*0.55); m.rotation.y=-a;
     helix.add(m); }
   sc.add(helix);
   const floor=new THREE.Mesh(new THREE.CircleGeometry(6,48),
     new THREE.MeshStandardMaterial({color:0x1c1a20,roughness:0.9}));
   floor.rotation.x=-Math.PI/2; sc.add(floor);
   const key=new THREE.DirectionalLight(0xfff0dd,2.1); key.position.set(3,4,2); sc.add(key);
-  const rim=new THREE.DirectionalLight(0xbcd2ff,0.9); rim.position.set(-4,2,-3); sc.add(rim);
+  const rim=new THREE.DirectionalLight(0xbcd2ff,0.9); window.__rim=rim; rim.position.set(-4,2,-3); sc.add(rim);
   sc.add(new THREE.AmbientLight(0xf4f0e8,0.35));
   let dirty=true, raf=0, last=0;
   const spinUntil = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : performance.now()+4000;
@@ -204,21 +207,30 @@ $$('.kf-lane').forEach(l=>{
   }
   const mark=()=>{ dirty=true; if(!raf) raf=requestAnimationFrame(frame); };
   new ResizeObserver(mark).observe(canvas); mark();
-  window.__tintViewport = c => { plateM.color.set(c); mark(); };
+  window.__tintViewport = c => { rim.color.set(c); rim.intensity=1.6; mark(); };
+})();
+
+/* curve editor time labels (aligned with kf lanes) */
+(function curveLabels(){
+  const wrap=$('#curve-wrap'); if(!wrap) return;
+  const row=document.createElement('div'); row.id='curve-labels';
+  for(let s=0;s<=6;s++){ const l=document.createElement('span'); l.style.left=(s/6*100)+'%'; l.textContent=s+'s'; row.appendChild(l); }
+  wrap.after(row);
 })();
 
 /* ---------- grade wheels + parade (simulated) ---------- */
 (function wheels(){
   const defs=[['Lift',['-0.02','0.00','+0.03'],0,false],['Gamma',['+0.01','0.00','-0.01'],0,false],['Gain',['+0.06','+0.04','+0.02'],0.9,true]];
   const hues=['#e86a6a','#e8c86a','#7fc97f','#6ac8c8','#6a9ae8','#b07fe8'];
-  $('#wheels').innerHTML=defs.map(([name,vals,off,hot],wi)=>{
-    const arcs=hues.map((hcol,i)=>{ const a0=(i*60-90)*Math.PI/180, a1=((i+1)*60-96)*Math.PI/180;
+  $('#wheels').innerHTML=defs.map(([name,vals,off,hot])=>{
+    const arcs=hues.map((hcol,i)=>{ const a0=(i*60-88)*Math.PI/180, a1=((i+1)*60-92)*Math.PI/180;
       const x0=43+34*Math.cos(a0),y0=43+34*Math.sin(a0),x1=43+34*Math.cos(a1),y1=43+34*Math.sin(a1);
-      return `<path d="M ${x0} ${y0} A 34 34 0 0 1 ${x1} ${y1}" fill="none" stroke="${hcol}" stroke-opacity=".45" stroke-width="5"/>`; }).join('');
+      return `<path d="M ${x0} ${y0} A 34 34 0 0 1 ${x1} ${y1}" fill="none" stroke="${hcol}" stroke-opacity=".28" stroke-width="5"/>`; }).join('');
     const da=off*Math.PI*2-Math.PI/2, dx=43+20*Math.cos(da), dy=43+20*Math.sin(da);
-    return `<div class="wheel"><svg width="86" height="86" viewBox="0 0 86 86">${arcs}
+    return `<div class="wheel"><svg width="86" height="86" viewBox="0 0 86 86">
+      <circle cx="43" cy="43" r="34" fill="none" stroke="rgba(231,229,228,.16)" stroke-width="5"/>${arcs}
       <line x1="43" y1="6" x2="43" y2="80" stroke="rgba(231,229,228,.1)"/><line x1="6" y1="43" x2="80" y2="43" stroke="rgba(231,229,228,.1)"/>
-      <circle cx="${dx}" cy="${dy}" r="5" fill="${hot?'var(--ember)':'var(--cream)'}"/></svg>
+      <circle cx="${dx}" cy="${dy}" r="5" fill="${hot?'#ff5a23':'#e7e5e4'}"/></svg>
       <div class="wname">${name}</div>
       <div class="wvals">${vals.map((v,i)=>i===0&&hot?`<span class="hot">${v}</span>`:v).join('&nbsp;&nbsp;')}</div></div>`;
   }).join('');
@@ -271,7 +283,7 @@ function kick(){ if(!rafOn){ rafOn=true; lastTick=performance.now(); requestAnim
 function loop(t){
   const dt=(t-lastTick)/1000; lastTick=t;
   const active=t-lastEvent<2500;
-  if(active&&playT<21.5){ playT=Math.min(21.5,playT+dt); setPlay(); }
+  if(active&&playT<21.5){ playT=Math.min(21.5,playT+dt*0.6); setPlay(); }
   for(const c of $$('.agent-rows')) for(const el of c.querySelectorAll('.arow.active')){
     if(el.dataset.t0) el.querySelector('.adur').textContent=((t-el.dataset.t0)/1000).toFixed(1)+'s';
   }
