@@ -79,6 +79,8 @@ function viewer({ spec, data, w, h, state }) {
     (data.src ? `<img src="${E(data.src)}" alt="">` : '<div class="ph-frame"></div>') +
     // a running grade/effect wipes across the frame: before (ungraded) on the right of the edge, result on the left
     (data.src && data.wipe != null && data.wipe < 1 ? `<img class="before" src="${E(data.src)}" alt="" style="clip-path:inset(0 0 0 ${px(data.wipe * 100)}%)"><i class="wipe" style="left:${px(data.wipe * fw)}px"></i>` : '');
+  // false colour: the frame's right side through the exposure LUT (painted by POST.viewer), split edge in ember
+  if (data.src && data.falsecolor) { const sp = data.falsecolor.split ?? .5; html += `<canvas class="fc" width="${Math.round(fw)}" height="${Math.round(fh)}" style="clip-path:inset(0 0 0 ${px(sp * 100)}%)"></canvas><i class="split" style="left:${px(sp * fw)}px"></i>`; }
   if (data.overlay) html += `<svg class="ov" viewBox="0 0 ${fw} ${fh}">${overlay(data.overlay, fw, fh)}</svg>`;
   for (const t of (data.tags || (data.tag ? [{ text: data.tag }] : []))) {
     const pos = t.pos === 'tr' ? `right:${t.x ?? 10}px` : `left:${t.x ?? 10}px`;
@@ -479,8 +481,52 @@ function scopeGeom(o, w, h) {
   return { wx0: o.wx0 ?? 44, wx1: o.wx1 ?? 680, wy0: o.wy0 ?? 20, wy1: o.wy1 ?? 222, split: o.split ?? 701, vx: o.vx ?? 894, vy: o.vy ?? 122, vr: o.vr ?? 110 };
 }
 const DIG = '0123456789abcdefghijklmnopqrstuvwxyz';
+// ---------- false colour ----------
+// Standard exposure LUT on Rec.709 luma (IRE = code value / 255 * 100):
+//   < 2.5 crushed: pink-purple · 2.5-16 shadows: purple · 39.5-43 skin: green
+//   92-97 high: yellow/orange · >= 97 clipping: red with zebra hatch · else grey.
+// Pure function of the decoded frame; cached per src+size so a re-render only blits.
+export function falseColorLUT(Y, x, y) {
+  if (Y < 2.5) return [138, 44, 122];
+  if (Y < 16) { const k = .55 + Y / 16 * .9; return [34 * k, 19 * k, 51 * k]; }
+  if (Y >= 39.5 && Y < 43) { const k = Y / 41.6; return [84 * k, 120 * k, 62 * k]; }
+  if (Y >= 97) return ((x + y) >> 2) & 1 ? [40, 10, 8] : [224, 48, 42];
+  if (Y >= 92) return Y >= 95 ? [238, 128, 36] : [232, 196, 52];
+  return null;
+}
+const FC = new Map();
+function paintFalseColor(cv, im) {
+  const w = cv.width, h = cv.height, key = im.src.length + ':' + im.src.slice(-64) + ':' + w + 'x' + h;
+  let d = FC.get(key);
+  if (!d) {
+    const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d');
+    const s = Math.max(w / im.naturalWidth, h / im.naturalHeight), dw = im.naturalWidth * s, dh = im.naturalHeight * s; // object-fit: cover
+    g.drawImage(im, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    d = g.getImageData(0, 0, w, h); const p = d.data;
+    for (let i = 0, n = 0; i < p.length; i += 4, n++) {
+      const Y = (.2126 * p[i] + .7152 * p[i + 1] + .0722 * p[i + 2]) / 2.55, x = n % w, y = (n / w) | 0;
+      const f = falseColorLUT(Y, x, y);
+      if (f) { p[i] = f[0]; p[i + 1] = f[1]; p[i + 2] = f[2]; }
+      else { const v = Y * 2.55; p[i] = v * .85 + p[i] * .15; p[i + 1] = v * .85 + p[i + 1] * .15; p[i + 2] = v * .85 + p[i + 2] * .15; }
+    }
+    if (FC.size > 8) FC.clear();
+    FC.set(key, d);
+  }
+  cv.getContext('2d').putImageData(d, 0, 0);
+}
+
 // After-mount painters (canvas): called by the render loop right after a panel's markup lands.
 export const POST = {
+  cie(el, { spec, w, h }) {
+    const cv = el.querySelector('canvas.ciecv'); if (!cv) return;
+    const [ox, oy, scx, scy] = cv.dataset.geo.split(',').map(Number), dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    cv.getContext('2d').putImageData(cieFill(w, h, ox, oy, scx, scy, dpr, (spec.opts || {}).fillOp ?? .85), 0, 0);
+  },
+  viewer(el) {
+    const cv = el.querySelector('canvas.fc'), im = el.querySelector('.frame img'); if (!cv || !im) return;
+    if (im.complete && im.naturalWidth) paintFalseColor(cv, im); else im.addEventListener('load', () => paintFalseColor(cv, im), { once: true });
+  },
   scopes(el, { spec, data, w, h }) {
     const cv = el.querySelector('canvas.scopecv'); if (!cv || !data.wave) return;
     const dpr = window.devicePixelRatio || 1;
@@ -532,7 +578,7 @@ function cie({ spec, data, w, h }) {
     <linearGradient id="cy" x1="0" x2="0" y1="1" y2="0"><stop offset="0" stop-color="#5a2bff" stop-opacity=".9"/><stop offset=".5" stop-color="#ffffff" stop-opacity=".0"/><stop offset="1" stop-color="#30ff60" stop-opacity=".7"/></linearGradient>
     <radialGradient id="cw" cx="${px(P([.3127, .329])[0])}" cy="${px(P([.3127, .329])[1])}" r="${px(.16 * scx)}" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity=".4"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>`;
   if (o.grid) { for (let v = 0; v <= .9001; v += .1) { const [x] = P([v, 0]), [, y] = P([0, v]); if (v <= .8001) s += `<line x1="${x}" x2="${x}" y1="${px(by)}" y2="${px(oy)}" stroke="${o.gridC || '#24241f'}"/>`; s += `<line x1="${px(bx)}" x2="${px(bx + (o.gridW ?? bw))}" y1="${y}" y2="${y}" stroke="${o.gridC || '#24241f'}"/>`; } }
-  s += `<g clip-path="url(#hs)" opacity="${o.fillOp ?? .85}"><rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="url(#cx)"/><rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="url(#cy)"/>${o.white ? `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="url(#cw)"/>` : ''}</g>`;
+  // the horseshoe fill is real chromaticity (xy -> XYZ -> sRGB, max channel = 1), painted by POST.cie
   s += `<path d="${path}" fill="none" stroke="#d9d4c9" stroke-width="1"/>`;
   for (const g of (data.gamuts || [])) {
     const lp = g.lpt ? P(g.lpt) : [P(g.pts[1])[0] + 6, P(g.pts[1])[1] + 2];
@@ -540,7 +586,25 @@ function cie({ spec, data, w, h }) {
   }
   for (const p of (data.points || [])) s += p[2] === 'ring' ? `<circle cx="${P(p)[0]}" cy="${P(p)[1]}" r="3" fill="none" stroke="#f4f0e8" stroke-width="1.4"/>` : `<circle cx="${P(p)[0]}" cy="${P(p)[1]}" r="3.5" fill="var(--ember)"/>`;
   s += `<text x="${o.labX ?? w / 2}" y="${h - (o.labB ?? 12)}" font-size="${o.labFs ?? 10.5}" fill="var(--dim)" text-anchor="middle" font-family="${o.labFont ?? 'inherit'}">${E(data.label || 'CIE 1931')}</text>`;
-  return head(spec, data) + `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
+  return head(spec, data) + `<canvas class="ciecv" data-geo="${[ox, oy, scx, scy].join(',')}" style="position:absolute;inset:0;width:${w}px;height:${h}px;pointer-events:none"></canvas>` +
+    `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
+}
+const CIEC = new Map(), DIM = .8, SAT = 1.6; // the mockup's horseshoe: ~20% under full brightness, a smaller white core
+function cieFill(w, h, ox, oy, scx, scy, dpr, op) {
+  const key = [w, h, ox, oy, scx, scy, dpr, op].join(); let d = CIEC.get(key); if (d) return d;
+  const W = Math.round(w * dpr), H = Math.round(h * dpr), c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d'); d = g.createImageData(W, H); const p = d.data;
+  const path = new Path2D(LOCUS.map((q, i) => (i ? 'L' : 'M') + (ox + q[0] * scx) * dpr + ' ' + (oy - q[1] * scy) * dpr).join('') + 'Z');
+  const gam = v => v <= .0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - .055;
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    if (!g.isPointInPath(path, i + .5, j + .5)) continue;
+    const x = ((i + .5) / dpr - ox) / scx, y = (oy - (j + .5) / dpr) / scy; if (y <= 1e-4) continue;
+    const X = x / y, Z = (1 - x - y) / y;
+    let r = 3.2406 * X - 1.5372 - .4986 * Z, gg = -.9689 * X + 1.8758 + .0415 * Z, b = .0557 * X - .2040 + 1.0570 * Z;
+    r = Math.max(0, r); gg = Math.max(0, gg); b = Math.max(0, b); const m = Math.max(r, gg, b) || 1;
+    const k = (j * W + i) * 4; p[k] = 255 * DIM * gam((r / m) ** SAT); p[k + 1] = 255 * DIM * gam((gg / m) ** SAT); p[k + 2] = 255 * DIM * gam((b / m) ** SAT); p[k + 3] = 255 * op;
+  }
+  if (CIEC.size > 4) CIEC.clear(); CIEC.set(key, d); return d;
 }
 
 // ---------- loudness ----------

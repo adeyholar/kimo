@@ -224,6 +224,8 @@ body.calls-sans{--call-font:var(--sans)}
 
 /* live wipe while a grade/effect call runs (driven by progress events) */
 .frame img.before{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:saturate(.25) brightness(.82) contrast(.92)}
+.frame canvas.fc{position:absolute;inset:0;width:100%;height:100%}
+.frame .split{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--ember)}
 .frame .wipe{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--ember);box-shadow:0 0 0 1px rgba(255,90,35,.25)}
 .kv .row.emb.bar{background:var(--emb-row-bg,transparent);margin:0 -15px;padding:0 15px}
 .call.recent .fn,.call.recent .args,.call.recent .pp{font-weight:600}
