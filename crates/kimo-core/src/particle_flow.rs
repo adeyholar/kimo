@@ -945,6 +945,91 @@ mod tests {
         assert!(s.velocity[0].abs() <= 4.0 * 0.5 + 0.6, "damped below restitution bound: {}", s.velocity[0]);
         assert!(s.position[0] < -0.9, "stays outside the sphere: {}", s.position[0]);
     }
+    #[cfg(feature = "flat-sah")]
+    #[test]
+    #[ignore]
+    fn pv4_frames() {
+        let dir = std::env::var("KIMO_PV4_FRAMES").unwrap_or_else(|_| "/tmp/pv4-frames".into());
+        std::fs::create_dir_all(&format!("{dir}/seq")).unwrap();
+        let camera = Camera { eye: [0.0, 0.3, -3.4], pan: 0.0, tilt: -0.06, roll: 0.0, sensor_height: 24.0, focal_length: 35.0, near: 0.1 };
+        let flow = || Flow {
+            emitter: Emitter {
+                seed: 9,
+                count: 2500,
+                origin: [0.0, -1.1, 0.0],
+                spread: [0.3, 0.06, 0.3],
+                base_velocity: [0.0, 1.6, 0.0],
+                velocity_jitter: 0.5,
+                birth_rate: 1200.0,
+                lifetime: [1.8, 2.6],
+                color_stops: vec![
+                    ColorStop { offset: 0.0, rgb: [1.0, 0.95, 0.5] },
+                    ColorStop { offset: 0.4, rgb: [1.0, 0.5, 0.12] },
+                    ColorStop { offset: 0.75, rgb: [0.7, 0.2, 0.6] },
+                    ColorStop { offset: 1.0, rgb: [0.15, 0.25, 0.9] },
+                ],
+                alpha_start: 0.9,
+                alpha_end: 0.55,
+                fade_in: 0.1,
+                fade_out: 0.15,
+                size_start: 0.008,
+                size_end: 0.045,
+                blend: Blend::Additive,
+                hardness: 5.0,
+            },
+            field: Advect::Curl3 { noise: "perlin".into(), seed: 4, frequency: 0.7, amplitude: 1.6, octaves: 3 },
+            gravity: [0.0, -0.1, 0.0],
+            drag: 0.04,
+            coupling: 3.5,
+            dt: 0.004,
+        };
+        let sphere = generate(&Primitive::Sphere { radius: 0.9, longitude_slices: 48, latitude_slices: 24 }).unwrap();
+        let stream = crate::threed::vertex_stream::Stream { vertices: sphere.vertices.clone(), indices: sphere.indices.clone() };
+        let index = crate::threed::flat_sah::Index::build(&stream).unwrap();
+        let styled = Style { shutter: 0.06, trail_speed: 0.8, exposure: 1.2, tonemap: Tonemap::Reinhard, bloom: Some(0.55) };
+        let styled_nobloom = Style { bloom: None, ..styled };
+        // Hero sheet: 2x2 960x540 at t=1.5 (a) raw (b) streaks+trails (c) +bloom (d) deflection styled.
+        let mut sim = Simulation::new(flow()).unwrap();
+        advance_deflect(&mut sim, 1.5, &index, &stream, 0.5, 0.7).unwrap();
+        let mut sheet = Frame::try_new(1920, 1080).unwrap();
+        let mut hero_stats = Vec::new();
+        for (k, st) in [Style::default(), styled_nobloom.clone(), styled.clone()].iter().enumerate() {
+            let (f, out) = render_styled(&mut sim, &camera, 960, 540, Some(&sphere), [0.5, 20.0], st).unwrap();
+            crate::render::write_image(&f, &format!("{dir}/hero-{k}.png")).unwrap();
+            hero_stats.push((k, out.active, out.drawn, out.occluded_by_mesh));
+            let (ox, oy) = ((k % 2) * 960, (k / 2) * 540);
+            for y in 0..540 {
+                let s0 = &f.d[y * 960 * 4..(y + 1) * 960 * 4];
+                let d0 = ((oy + y) * 1920 + ox) * 4;
+                sheet.d[d0..d0 + 960 * 4].copy_from_slice(s0);
+            }
+        }
+        advance_deflect(&mut sim, 2.2, &index, &stream, 0.5, 0.7).unwrap();
+        let (f, out) = render_styled(&mut sim, &camera, 960, 540, Some(&sphere), [0.5, 20.0], &styled).unwrap();
+        crate::render::write_image(&f, &format!("{dir}/hero-3.png")).unwrap();
+        hero_stats.push((3, out.active, out.drawn, out.occluded_by_mesh));
+        for y in 0..540 {
+            let s0 = &f.d[y * 960 * 4..(y + 1) * 960 * 4];
+            let d0 = ((540 + y) * 1920 + 960) * 4;
+            sheet.d[d0..d0 + 960 * 4].copy_from_slice(s0);
+        }
+        crate::render::write_image(&sheet, &format!("{dir}/hero-contact.png")).unwrap();
+        eprintln!("hero stats (panel,active,drawn,occluded): {hero_stats:?}");
+        // 30-frame orbit sequence, raw vs styled, 640x360.
+        let mut sim = Simulation::new(flow()).unwrap();
+        let mut seq_stats = Vec::new();
+        for k in 0..30 {
+            advance_deflect(&mut sim, (k + 1) as f64 / 15.0, &index, &stream, 0.5, 0.7).unwrap();
+            let (fr, or_) = render_styled(&mut sim, &camera, 640, 360, Some(&sphere), [0.5, 20.0], &Style::default()).unwrap();
+            crate::render::write_image(&fr, &format!("{dir}/seq/frame{k:02}-raw.png")).unwrap();
+            let (fs, os) = render_styled(&mut sim, &camera, 640, 360, Some(&sphere), [0.5, 20.0], &styled).unwrap();
+            crate::render::write_image(&fs, &format!("{dir}/seq/frame{k:02}-styled.png")).unwrap();
+            if k % 10 == 9 {
+                seq_stats.push((k + 1, or_.active, or_.drawn, os.drawn, os.occluded_by_mesh));
+            }
+        }
+        eprintln!("seq stats (frame,active,drawn_raw,drawn_styled,occluded): {seq_stats:?}");
+    }
     #[test]
     #[ignore]
     fn pv3_frames() {
