@@ -5,4 +5,12 @@ pub fn commands()->Vec<Command>{vec![
   let mut cache=crate::threed::scene::Cache::new();
   let out=crate::threed::scene::compile(&scene,&mut cache)?;
   Ok(serde_json::to_value(&out).map_err(|e|e.to_string())?)}},
+ Command{name:"render_scene3d_cpu",description:"CPU multi-draw executor over a compiled scene descriptor: every (node, source-instance) draw rasterized onto ONE shared frame + depth buffer, so cross-source occlusion, intersecting surfaces and near-plane clipping resolve per-pixel (exact depth ties keep the earlier draw; no sorting, painter order is the documented tiebreak). Surface textures are NOT sampled by this executor - albedo/metallic/roughness scalars only. Camera-v2 has no far plane (near-plane clip only). Bit-identical to the argmin-depth composite of isolated per-draw renders (tested). Frame tone-mapped with the ACES fitted curve (exposure 1.0), then deterministic TPDF-dithered before 8-bit PNG quantization. Fresh contour cache per call (stateless). No shadows, no specular IBL; CPU correctness pass - premium look pending.",mutates:false,schema:obj(vec![("scene",json!({"type":"object"})),("width",json!({"type":"integer"})),("height",json!({"type":"integer"})),("path",s("PNG"))],&["scene","width","height","path"]),run:|_,a|{
+  let path=str_arg(a,"path")?;if !path.to_lowercase().ends_with(".png"){return Err("PNG required".into());}
+  let scene:crate::threed::scene::Scene=read(a,"scene")?;
+  let mut cache=crate::threed::scene::Cache::new();
+  let compiled=crate::threed::scene::compile(&scene,&mut cache)?;
+  let out=crate::threed::scene::render_cpu(&compiled,read(a,"width")?,read(a,"height")?)?;
+  crate::render::write_image_tpdf(&out.frame,path)?;
+  Ok(json!({"path":path,"covered_pixels":out.covered,"clipped_triangles":out.clipped_triangles,"draws":compiled.stats.draws,"sources_resolved":compiled.stats.sources_resolved,"vertices":compiled.stats.vertices,"triangles":compiled.stats.triangles,"contour_polygonized":compiled.stats.contour_polygonized,"contour_cache_hits":compiled.stats.contour_cache_hits,"backend":"cpu_multi_draw_shared_depth","depth_tiebreak":"exact ties keep the earlier draw (painter order)","textures":"not sampled (scalar albedo/metallic/roughness only)","far_plane":"none (camera-v2 is near-clip only)","png_encoding":"ACES fitted tone map (exposure 1.0), TPDF-dithered 8-bit, display-referred"}))}},
 ]}

@@ -51,6 +51,18 @@ impl Cache{pub fn new()->Self{Self::default()} pub fn contour_entries(&self)->us
  fn contour_get(&self,key:u64)->Option<&Stream>{self.contours.get(&key)}
  fn contour_insert(&mut self,key:u64,stream:Stream){if self.contours.contains_key(&key){self.contours.insert(key,stream);return;}while self.order.len()>=CONTOUR_CACHE_CAP{if let Some(old)=self.order.pop_front(){self.contours.remove(&old);}}self.order.push_back(key);self.contours.insert(key,stream);}}
 
+/// Surface -> base Material for the lit CPU path: texture slots are IGNORED (honest
+/// label; textured execution is the textured-BVH/wgpu path, not this one).
+fn surface_to_material(s:&Surface)->super::pbr::Material{super::pbr::Material{albedo:s.albedo,metallic:s.metallic,roughness:s.roughness}}
+/// CPU multi-draw executor (CP2): bake each node's world into its stream (inverse-transpose
+/// normals, reflection winding fix), then compose ALL draws over one shared depth buffer in
+/// draw order via lit_raster::render_multi. Empty draw list renders an empty frame.
+pub fn render_cpu(c:&Compiled,w:usize,h:usize)->Result<super::lit_raster::Output,String>{
+ let mut baked=Vec::with_capacity(c.draws.len());
+ for d in &c.draws{baked.push(super::node_ingest::transform(&d.stream,d.world)?);}
+ let materials:Vec<super::pbr::Material>=c.draws.iter().map(|d|surface_to_material(&d.surface)).collect();
+ let refs:Vec<(&Stream,&super::pbr::Material)>=baked.iter().zip(materials.iter()).map(|(s,m)|(s,m)).collect();
+ super::lit_raster::render_multi(&refs,&c.camera,w,h,&c.lights)}
 fn check_affine(m:&Matrix,what:&str)->Result<(),String>{if m[3]!=[0.,0.,0.,1.]||m.iter().flatten().any(|v|!v.is_finite()){return Err(format!("{what}: finite affine transform required (last row 0,0,0,1)"));}Ok(())}
 
 /// Structural validation only - no geometry is built. Unreferenced sources are
@@ -146,6 +158,45 @@ pub fn compile(s:&Scene,cache:&mut Cache)->Result<Compiled,String>{
   let st=run(mk(1),&mut cache);assert_eq!((st.contour_polygonized,st.contour_cache_hits),(0,1),"FIFO: only the front was evicted");
   // entry 0 was evicted despite the earlier hit (strict FIFO, no refresh): re-request re-contours
   let st=run(mk(0),&mut cache);assert_eq!((st.contour_polygonized,st.contour_cache_hits),(1,0),"evicted entry re-contours");}
+ #[test]fn render_cpu_occludes_nearer_over_farther(){
+  // camera at origin, +z view: near red sphere at z=+2, far blue at z=+6, same lateral spot: center pixels
+  // must be the near material's shaded tone, and output must differ from the far-only render
+  let near=Stream{vertices:generate(&Primitive::Sphere{radius:1.,longitude_slices:16,latitude_slices:8}).unwrap().vertices,indices:generate(&Primitive::Sphere{radius:1.,longitude_slices:16,latitude_slices:8}).unwrap().indices};
+  let m_node=|z|{let mut m=ident();m[2][3]=z;m};
+  let red=Surface{albedo:[0.9,0.1,0.1],metallic:0.,roughness:0.5,base:None,metal_rough:None,occlusion:None,normal:None,ao_strength:1.,normal_scale:1.,double_sided:false};
+  let blue=Surface{albedo:[0.1,0.1,0.9],metallic:0.,roughness:0.5,base:None,metal_rough:None,occlusion:None,normal:None,ao_strength:1.,normal_scale:1.,double_sided:false};
+  let cam=Camera{eye:[0.,0.,0.],pan:0.,tilt:0.,roll:0.,sensor_height:24.,focal_length:35.,near:0.1};
+  let lights=vec![Light::Directional{travel_direction:[0.,0.,1.],radiance:[2.;3]}];
+  let s=Scene{sources:vec![Source::Stream{stream:near.clone()}],nodes:vec![Node{source:0,world:m_node(2.),material:0},Node{source:0,world:m_node(6.),material:1}],materials:vec![red.clone(),blue.clone()],lights:lights.clone(),camera:cam};
+  let c=compile(&s,&mut Cache::new()).unwrap();assert_eq!(c.draws.len(),2);
+  let multi=render_cpu(&c,64,36).unwrap();assert!(multi.covered>0);
+  // isolated far-only baseline: same source at z=-6 with the blue material
+  let s_far=Scene{sources:vec![Source::Stream{stream:near}],nodes:vec![Node{source:0,world:m_node(6.),material:1}],materials:vec![red,blue],lights,camera:cam};
+  let far=render_cpu(&compile(&s_far,&mut Cache::new()).unwrap(),64,36).unwrap();
+  let cx=(18*64+32)*4;assert!(multi.frame.d[cx]>far.frame.d[cx],"center pixel: near red out-radiances far blue channel (occlusion), {} vs {}",multi.frame.d[cx],far.frame.d[cx]);
+  assert!(multi.frame.d.iter().zip(&far.frame.d).any(|(a,b)|a!=b),"multi differs from far-only baseline");}
  #[test]fn scene_json_roundtrip_deterministic(){let s=Scene{sources:vec![sphere_source()],nodes:vec![Node{source:0,world:ident(),material:0}],materials:vec![surf()],lights:vec![Light::Point{position:[0.,0.,3.],intensity:[1.;3],min_distance:0.01}],camera:cam()};
   let j=serde_json::to_string(&s).unwrap();let back:Scene=serde_json::from_str(&j).unwrap();assert_eq!(serde_json::to_string(&back).unwrap(),j,"JSON round-trip stable");}
+ #[cfg(all(feature="mesh-import",feature="surface-contour"))]
+ #[test]fn render_cpu_mixed_gltf_and_sdf_sources_matches_argmin_oracle(){
+  // in-memory glTF scene (round-tripped cube) + SDF contour sphere, overlapping: the
+  // multi-draw frame must equal the pixelwise argmin-depth composite of isolated draws
+  let cube=Stream{vertices:generate(&Primitive::Cube{size:[1.6;3],subdivisions:1}).unwrap().vertices,indices:generate(&Primitive::Cube{size:[1.6;3],subdivisions:1}).unwrap().indices};
+  let glb=crate::threed::gltf_export::to_glb(&cube).unwrap();
+  let graph=Graph{nodes:vec![crate::threed::sdf_graph::Field::Sphere{center:[0.;3],radius:1.}],output:0};
+  let s=Scene{
+   sources:vec![Source::GltfScene{bytes:glb,buffers:vec![],derive_tangents:false,scene_index:0},Source::SdfContour{graph,config:contour_wrapped::Config{bounds:[[-1.5;3],[1.5;3]],resolution:16,normal_epsilon:0.001}}],
+   nodes:vec![Node{source:0,world:{let mut m=ident();m[0][3]=-0.4;m[2][3]=4.0;m},material:0},Node{source:1,world:{let mut m=ident();m[0][3]=0.4;m[2][3]=4.4;m},material:1}],
+   materials:vec![surf(),Surface{albedo:[0.2,0.2,0.9],metallic:0.,roughness:0.5,base:None,metal_rough:None,occlusion:None,normal:None,ao_strength:1.,normal_scale:1.,double_sided:false}],
+   lights:vec![Light::Directional{travel_direction:[0.2,0.3,1.],radiance:[2.;3]}],
+   camera:Camera{eye:[0.,0.,0.],pan:0.,tilt:0.,roll:0.,sensor_height:24.,focal_length:35.,near:0.5}};
+  let (w,h)=(96,54);
+  let multi=render_cpu(&compile(&s,&mut Cache::new()).unwrap(),w,h).unwrap();assert!(multi.covered>100);
+  // per-node isolated baselines -> argmin-depth oracle
+  let iso:Vec<_>=(0..2).map(|i|{let one=Scene{sources:s.sources.clone(),nodes:vec![s.nodes[i].clone()],materials:s.materials.clone(),lights:s.lights.clone(),camera:s.camera};render_cpu(&compile(&one,&mut Cache::new()).unwrap(),w,h).unwrap()}).collect();
+  for px in 0..w*h{
+   let mut best:Option<(f64,usize)>=None;
+   for(i,o)in iso.iter().enumerate(){let z=o.depth[px];if z.is_finite()&&best.map(|(bz,_)|z<bz).unwrap_or(true){best=Some((z,i));}}
+   match best{None=>assert!(multi.frame.d[px*4..px*4+4].iter().all(|v|*v==0.)),Some((_,i))=>assert_eq!(&multi.frame.d[px*4..px*4+4],&iso[i].frame.d[px*4..px*4+4],"px {px} from nearest draw {i}"),}}
+ }
 }
