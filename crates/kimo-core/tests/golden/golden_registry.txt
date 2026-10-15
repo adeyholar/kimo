@@ -238,7 +238,7 @@ render_particle_flow cd9f93ba7ca535b1
 render_particle_flow_motion eb05f96c9b39b857
 render_scope 0ba759192f5e77dd
 render_textured_bvh ff1f91fde6db4cfa
-render_vertex_stream_pbr e257a7f88203a83d
+render_vertex_stream_pbr 0fe723ec8fd57699
 render_wgpu_pbr 2be19c04be4cef5f
 reorder_mask b182a28a665330c4
 restore dab5b50df493b4be
