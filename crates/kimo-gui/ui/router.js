@@ -960,7 +960,10 @@ function sceneOps(state, MODES, ev) {
         const pos = Array.isArray(A.pos) && numOf(A.pos[0]) != null && numOf(A.pos[1]) != null ? [numOf(A.pos[0]), numOf(A.pos[1])] : null;
         const col = Array.isArray(A.color) && A.color.length >= 3 ? A.color.slice(0, 3).map(numOf) : null;
         const tK = numOf(A.temperature ?? A.kelvin), v = tK != null ? `${Math.round(tK)}K` : [A.kind, numOf(A.intensity) != null ? fmtVal(A.intensity) : null].filter(Boolean).join(' · ');   // m11 Lights shows the colour temperature
-        if (A.id != null || A.kind != null) { add(String(A.id ?? A.kind), A.kind, v, pos, col); hit = true; }
+        if (A.id != null || A.kind != null) { add(String(A.id ?? A.kind), A.kind, v, pos, col); hit = true;
+          // the 3D screen's Scene tree carries the light by its id (it lives in the project the camera sees)
+          const SV = MODES.scene3d ? (state.views.scene3d || (state.views.scene3d = {})) : null, trl = MODES.scene3d ? Object.entries(MODES.scene3d.panels).find(([, sp]) => sp.kind === 'tree') : null;
+          if (trl && SV) { const S = SV[trl[0]] || (SV[trl[0]] = {}); S.items = S.items || []; const nm = String(A.id ?? A.kind); if (!S.items.some(x => x.name === nm)) { const at = S.items.findIndex(x => x.icon !== 'cam' && x.icon !== 'light'); S.items.splice(at < 0 ? S.items.length : at, 0, { name: nm, icon: 'light', _flash: now() }); if (S.items.length > 14) S.items.length = 14; } } }
       } else if (A.preset && ev.phase === 'complete') {
         const pre = String(A.prefix ?? 'rig'), sub = Array.isArray(A.subject) ? A.subject.map(numOf) : null;
         const ids = Array.isArray(R.lights) ? R.lights.map(x => typeof x === 'string' ? x : x && x.id).filter(Boolean) : ['key', 'fill', 'rim'].map(r => `${pre}_${r}`);
@@ -1008,12 +1011,22 @@ function sceneOps(state, MODES, ev) {
       if (kp && timed.length) {
         const KK = V[kp[0]] || (V[kp[0]] = {}), last = timed[timed.length - 1], props = [...new Set(timed.map(k => k.prop))];
         KK.ruler = { t0: 0, t1: Math.max(4, Math.ceil(Math.max(...timed.map(k => k.t)) + 1)), step: 1, fmt: 's', align: 'left' };
-        KK.lanes = props.map(pr => ({ label: `<span class=cream>camera</span> <span class=dim>${E2(pr.replace(/^cam_/, ''))}</span>`, html: true, sel: pr === last.prop, keys: timed.filter(k => k.prop === pr).map(k => k === last ? { t: k.t, em: true } : k.t) }));
+        KK.lanes = props.map(pr => ({ label: `<span class=cream>camera</span> <span class=dim>${E2(pr.replace(/^cam_/, ''))}</span>`, html: true, line: true, sel: pr === last.prop, keys: timed.filter(k => k.prop === pr).map(k => k === last ? { t: k.t, em: true } : k.t) }));
         KK.playhead = last.t;
       }
       const o = ov(); o.push({ cam: { ...cam }, keys: keys.filter(k => k.prop === 'cam_pan').map(k => k.v), _call: ev.call_id, _kind: 'camera' });
       const kvn = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'kv');
-      if (kvn) { ev._kvDone = true; const K = V[kvn[0]] || (V[kvn[0]] = {}); K.blocks = K.blocks || []; for (const [k, lab, u] of [['cam_fov', 'FOV', '°'], ['cam_pan', 'Pan', '°'], ['cam_tilt', 'Tilt', '°'], ['cam_z', 'Dolly', ' px']]) if (cam[k] != null) { let r = K.blocks.find(b => b.k === lab); const v = fmtVal(cam[k]) + u; if (!r) { r = { k: lab }; K.blocks.push(r); } if (r.v !== v) { if (r.v != null) r.from = r.v; r.v = v; r._flash = now(); } } }
+      if (kvn) { ev._kvDone = true; const K = V[kvn[0]] || (V[kvn[0]] = {}); K.sub = 'camera';
+        // m13's rows: Transform (Position x/y/z, Rotation tilt/pan/roll, FOV), each only from the values the calls set
+        const keep = (K.blocks || []).filter(b => b._cam); K.blocks = keep.length ? keep : [{ sec: 'Transform', _cam: true }];
+        const f = k => cam[k] != null ? fmtVal(cam[k]) : null;
+        const pos = ['cam_x', 'cam_y', 'cam_z'].some(k => cam[k] != null) ? ['X', 'Y', 'Z'].map((l, i) => f(['cam_x', 'cam_y', 'cam_z'][i]) != null ? `${l} ${f(['cam_x', 'cam_y', 'cam_z'][i])}` : null).filter(Boolean).join('  ') : null;
+        const rot = ['cam_tilt', 'cam_pan', 'cam_roll'].some(k => cam[k] != null) ? ['cam_tilt', 'cam_pan', 'cam_roll'].map(k => f(k) ?? '0').join(', ') : null;
+        for (const [lab, v] of [['Position', pos], ['Rotation', rot], ['FOV', f('cam_fov')]]) { if (v == null) continue; let r = K.blocks.find(b => b.k === lab); if (!r) { r = { k: lab, _cam: true }; K.blocks.push(r); } if (r.v !== v) { if (r.v != null && lab !== 'Position') r.from = r.v; r.v = v; r._flash = now(); } }
+        const ord = ['Transform', 'Position', 'Rotation', 'FOV']; K.blocks.sort((a, b) => ord.indexOf(a.sec ?? a.k) - ord.indexOf(b.sec ?? b.k)); }
+      // the Scene tree carries the camera
+      const trc = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'tree');
+      if (trc) { const S = V[trc[0]] || (V[trc[0]] = {}); S.items = S.items || []; let it = S.items.find(x => x.icon === 'cam'); if (!it) { it = { name: 'camera', icon: 'cam' }; S.items.unshift(it); } for (const x of S.items) x.sel = x === it; it._flash = now(); }
       hit = true;
     }
     if (tn === 'add_scene3d' && ev.phase === 'complete' && A.config && typeof A.config === 'object') {

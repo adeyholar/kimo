@@ -402,7 +402,7 @@ function keys({ spec, data, w, h }) {
   html += '<div class="tl">';
   if (data.strip) { // mini curve strip above ruler
     const sy = o.stripY ?? 4, sh = o.stripH ?? 40;
-    let s = '';
+    let s = o.stripBg ? `<rect x="${o.stripX ?? 0}" y="0" width="${w - (o.stripX ?? 0)}" height="${sh}" rx="${o.stripR ?? 0}" fill="${o.stripBg}"/>` : '';
     for (const c of data.strip) s += `<path d="${c.pts.map((p, i) => (i ? 'L' : 'M') + px(X(p[0])) + ' ' + px(sh - 4 - p[1] * (sh - 8))).join('')}" fill="none" stroke="${c.em ? 'var(--ember)' : '#bdb8ae'}" stroke-width="1.4"/>`;
     html += `<svg style="position:absolute;left:0;top:${sy}px;width:${w}px;height:${sh}px" viewBox="0 0 ${w} ${sh}">${s}</svg>`;
   }
@@ -416,10 +416,12 @@ function keys({ spec, data, w, h }) {
   }
   html += ruler(r, X, o.rulerY ?? 6);
   if (o.sepX != null) html += `<i style="position:absolute;left:${o.sepX}px;top:${o.sepY ?? 5}px;height:${o.sepH ?? 25}px;width:1px;background:var(--line)"></i>`;
+  if (o.divX != null) html += `<i style="position:absolute;left:${o.divX}px;top:0;bottom:0;width:1px;background:var(--line)"></i>`;
+  if (o.headLine != null) html += `<i style="position:absolute;left:0;width:${o.divX ?? w}px;top:${o.headLine}px;height:1px;background:var(--line)"></i>`;
   let y = o.laneY ?? 32;
   for (const L of data.lanes || []) {
     const lh = L.h ?? o.laneH ?? 32;
-    html += `<div class="trk" style="top:${y}px;height:${lh}px${L.sel ? ';background:rgba(255,90,35,.07)' : ''}">`;
+    html += `<div class="trk" style="top:${y}px;height:${lh}px${L.sel ? `;background:${o.selBg ?? 'rgba(255,90,35,.07)'}` : ''}${o.laneSep ? `;border-top:1px solid ${o.laneSep}` : ''}">`;
     html += `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? (x0 - 20)}px">${L.html ? L.label : E(L.label)}</span>`;
     const mid = lh / 2;
     let s = '';
@@ -428,6 +430,7 @@ function keys({ spec, data, w, h }) {
     if (L.cache) { const [done, total] = L.cache, ch = o.cacheH ?? 18; s += `<rect x="${px(X(done))}" y="${mid - ch / 2}" width="${px(x1 - X(done))}" height="${ch}" rx="3" fill="#070707" stroke="#2a2a28"/><rect x="${x0}" y="${mid - ch / 2}" width="${px(X(done) - x0)}" height="${ch}" rx="4" fill="${o.cacheC ?? '#bdb8ae'}"/>`; for (let f = done + 2; f < total; f += 2) s += `<line x1="${px(X(f))}" x2="${px(X(f))}" y1="${mid - 4}" y2="${mid + 4}" stroke="#2a2a28"/>`; }
     if (L.area) { const pts = L.area, ah = o.areaH ?? 18, ab = mid + ah / 2; s += `<path d="M${px(X(pts[0][0]))} ${ab} ${pts.map(p => `L${px(X(p[0]))} ${px(ab - p[1] * ah)}`).join(' ')} L${px(X(pts[pts.length - 1][0]))} ${ab}Z" fill="${L.color || '#5a5650'}"${L.stroke ? ` stroke="${L.stroke}" stroke-width="1"` : ''}${o.areaR ? ` stroke-linejoin="round"` : ''}/>`; }
     if (L.dots) for (const t of L.dots) s += `<circle cx="${px(X(t))}" cy="${mid}" r="${L.r || 2.6}" fill="${L.dotColor || '#77736b'}"/>`;
+    if ((L.line || o.keyLine) && L.keys && L.keys.length > 1) { const ts = L.keys.map(k => typeof k === 'number' ? k : k.t); s += `<line x1="${px(X(Math.min(...ts)))}" x2="${px(X(Math.max(...ts)))}" y1="${mid}" y2="${mid}" stroke="${o.keyLine || '#5a5853'}" stroke-width="1"/>`; }
     if (L.keys) for (const k of L.keys) { const t = typeof k === 'number' ? k : k.t; const em = typeof k === 'object' && k.em; const d = L.size || 5.5; s += `<path d="M${px(X(t))} ${mid - d} L${px(X(t) + d)} ${mid} L${px(X(t))} ${mid + d} L${px(X(t) - d)} ${mid}Z" fill="${em ? 'var(--ember)' : (L.keyColor || 'var(--cream)')}"/>`; }
     html += `<svg style="position:absolute;left:0;top:0;width:${w}px;height:${lh}px" viewBox="0 0 ${w} ${lh}">${s}</svg></div>`;
     y += lh + (o.laneGap ?? 0);
@@ -863,10 +866,15 @@ function tree({ spec, data, w, h }) {
   const o = spec.opts || {};
   let html = head(spec, data);
   const ic = { cam: '<path d="M1 4h8v6H1z M9 6l4-2v6l-4-2" fill="none" stroke="currentColor" stroke-width="1.1"/>', light: '<circle cx="6" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M6 0v2M6 10v2M0 6h2M10 6h2" stroke="currentColor" stroke-width="1.1"/>', mesh: '<path d="M6 1l5 3v5l-5 3-5-3V4z" fill="none" stroke="currentColor" stroke-width="1.1"/>', plane: '<path d="M1 9l4-5h7l-4 5z" fill="none" stroke="currentColor" stroke-width="1.1"/>' };
-  (data.items || []).forEach((it, i) => {
+  if (o.headLine) html += `<i style="position:absolute;left:0;right:0;top:${o.headLine}px;height:1px;background:var(--line)"></i>`;
+  const items = data.items || [];
+  if (o.guide != null && items.length > 1) { const y1 = (o.y0 ?? 44) + (o.rowH ?? 30) * .5, y2 = (o.y0 ?? 44) + (items.length - 1) * (o.rowH ?? 30) + (o.rowH ?? 30) / 2 - 2;
+    html += `<i style="position:absolute;left:${o.guide}px;top:${px(y1 + (o.rowH ?? 30) / 2)}px;height:${px(y2 - y1 - (o.rowH ?? 30) / 2)}px;width:1px;background:#3a3935"></i>`;
+    items.forEach((it, i) => { if (i) html += `<i style="position:absolute;left:${o.guide}px;top:${px((o.y0 ?? 44) + i * (o.rowH ?? 30) + (o.rowH ?? 30) / 2 - 2)}px;width:8px;height:1px;background:#3a3935"></i>`; }); }
+  items.forEach((it, i) => {
     const y = (o.y0 ?? 44) + i * (o.rowH ?? 30);
-    html += `<div style="position:absolute;left:10px;right:10px;top:${y}px;height:${(o.rowH ?? 30) - 4}px;display:flex;align-items:center;gap:9px;padding-left:${10 + (it.d || 0) * 16}px;border-radius:4px;${it.sel ? 'background:var(--raise2);' : ''}font-family:var(--mono);font-size:12px">` +
-      `<svg width="14" height="12" viewBox="0 0 14 12" style="color:${it.sel ? 'var(--cream)' : 'var(--dim)'}">${ic[it.icon] || ''}</svg><span class="${it.sel ? 'cream' : 'text'}" style="color:${it.sel ? 'var(--cream)' : 'var(--text)'}">${E(it.name)}</span></div>`;
+    html += `<div style="position:absolute;left:${o.selL ?? 10}px;right:${o.selR ?? 10}px;top:${y}px;height:${(o.rowH ?? 30) - 4}px;display:flex;align-items:center;gap:${o.gap ?? 9}px;padding-left:${(o.padL ?? 10) + (it.d || 0) * 16}px;border-radius:${o.selRad ?? 4}px;${it.sel ? `background:${o.selBg ?? 'var(--raise2)'};` : ''}font-family:${o.font ?? 'var(--mono)'};font-size:${o.fs ?? 12}px">` +
+      `<svg width="${o.iconW ?? 14}" height="${(o.iconW ?? 14) * 12 / 14}" viewBox="0 0 14 12" style="color:${it.sel || o.iconCream ? 'var(--cream)' : 'var(--dim)'}">${ic[it.icon] || ''}</svg><span class="${it.sel ? 'cream' : 'text'}" style="color:${it.sel || o.textCream ? 'var(--cream)' : 'var(--text)'}">${E(it.name)}</span></div>`;
   });
   return html;
 }

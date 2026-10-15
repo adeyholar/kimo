@@ -6873,7 +6873,7 @@
       "sec": "Transform"
      },
      {
-      "html": "<div class=\"row\"><span class=\"k\">Position</span><span class=\"v\"><span class=dim>X</span> 1.20 <span class=dim>Y</span> 0.85 <span class=dim>Z</span> <span class=em>-3.40</span></span></div>"
+      "html": "<div class=\"row\" style=\"gap:8px\"><span class=\"k\">Position</span><span class=\"v\" style=\"font-size:15px;letter-spacing:-0.02em;overflow:visible\"><span style=\"font-family:var(--sans);color:var(--dim);margin-right:3px\">X</span>1.20<span style=\"font-family:var(--sans);color:var(--dim);margin:0 3px 0 6px\">Y</span>0.85<span style=\"font-family:var(--sans);color:var(--dim);margin:0 3px 0 6px\">Z</span><span class=em>-3.40</span></span></div>"
      },
      {
       "k": "Rotation",
@@ -6884,7 +6884,8 @@
       "v": "35"
      },
      {
-      "sec": "Lens"
+      "sec": "Lens",
+      "h": 40
      },
      {
       "k": "Focus",
@@ -6903,30 +6904,47 @@
    "keys": {
     "ruler": {
      "t0": 0,
-     "t1": 6.6,
+     "t1": 6.34,
      "step": 1,
      "fmt": "s",
-     "align": "left"
+     "align": "left",
+     "lx": 0,
+     "ticks": false
     },
     "playhead": 4.0,
     "strip": [
      {
-      "em": true,
       "pts": [
        [
-        0.05,
+        0.9,
         0
        ],
        [
-        0.4,
-        0.15
+        2.9,
+        0
        ],
        [
-        0.7,
-        0.7
+        3.3,
+        0.12
        ],
        [
-        1.0,
+        3.7,
+        0.5
+       ],
+       [
+        4.1,
+        0.82
+       ],
+       [
+        4.6,
+        0.97
+       ],
+       [
+        5.2,
+        1
+       ],
+       [
+        6.34,
         1
        ]
       ]
@@ -6934,20 +6952,37 @@
      {
       "pts": [
        [
-        3.0,
+        1.0,
         1
        ],
        [
-        3.6,
-        0.85
-       ],
+        6.34,
+        1
+       ]
+      ]
+     },
+     {
+      "em": true,
+      "pts": [
        [
-        4.3,
-        0.2
-       ],
-       [
-        5.0,
+        -0.05,
         0
+       ],
+       [
+        0.2,
+        0.08
+       ],
+       [
+        0.45,
+        0.4
+       ],
+       [
+        0.7,
+        0.82
+       ],
+       [
+        1.0,
+        1
        ]
       ]
      }
@@ -6957,6 +6992,7 @@
       "label": "<span class=cream>camera_main</span> <span class=dim>position</span>",
       "html": true,
       "sel": true,
+      "line": true,
       "keys": [
        0,
        1,
@@ -6965,17 +7001,18 @@
        {
         "t": 4,
         "em": true
-       },
-       5,
-       6
+       }
       ]
      },
      {
       "label": "<span class=cream>camera_main</span> <span class=dim>rotation</span>",
       "html": true,
+      "line": true,
       "keys": [
        0,
+       1,
        2,
+       3,
        4,
        6
       ]
@@ -6983,9 +7020,26 @@
      {
       "label": "<span class=cream>key_light</span> <span class=dim>intensity</span>",
       "html": true,
+      "line": true,
       "keys": [
        0,
+       1,
+       2,
        3,
+       4,
+       6
+      ]
+     },
+     {
+      "label": "<span class=cream>helix_plates</span> <span class=dim>rotation y</span>",
+      "html": true,
+      "line": true,
+      "keys": [
+       0,
+       1,
+       2,
+       3,
+       4,
        6
       ]
      }

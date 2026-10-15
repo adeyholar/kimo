@@ -211,7 +211,7 @@ body.calls-sans{--call-font:var(--sans)}
 .tline .ttc{width:70px;flex:none;font-family:var(--mono);color:var(--tr-meta,#6a675f)}
 .tline s{color:var(--smoke);text-decoration-thickness:1.5px}
 .tline .fix{color:var(--ember-text);text-decoration:underline;text-decoration-thickness:1.5px;text-underline-offset:4px}
-.kv.topline .row:first-child{border-top:1px solid var(--line2)}
+.kv.topline .row:first-child,.kv.topline > .sec:first-child{border-top:1px solid var(--line2)}
 .trk .lane{border-radius:var(--lane-r,7px)}
 .clip.cap{background:var(--cap-bg,#1f1e1c);color:var(--cap-c,var(--text))}
 .clip.cap.emb{background:var(--cap-emb-bg,var(--ember-tint));color:var(--ember-text)}
