@@ -9,17 +9,20 @@
   "app": {
     "windows": [
       {
-        "title": "Kimo · spectator",
-        "width": 1620,
-        "height": 980,
+        "title": "Kimo \u00b7 spectator",
+        "width": 1376,
+        "height": 768,
         "minWidth": 1200,
-        "minHeight": 760,
-        "resizable": true
+        "minHeight": 700,
+        "resizable": true,
+        "label": "main",
+        "backgroundColor": "#0a0a0b"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
-    }
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'"
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": false

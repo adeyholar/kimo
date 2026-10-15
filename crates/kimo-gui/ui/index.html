@@ -2,59 +2,22 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kimo · spectator</title>
+<link rel="preload" href="fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/GeistMono-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header id="topbar">
-  <svg class="mark" viewBox="0 0 34 26" width="26" height="20" aria-hidden="true"><rect x="0" y="10" width="3" height="16" rx="1"/><rect x="5" y="5" width="3" height="21" rx="1"/><rect x="10" y="12" width="3" height="14" rx="1"/><rect x="15" y="0" width="3" height="26" rx="1" class="ember-bar"/><rect x="20" y="8" width="3" height="18" rx="1"/><rect x="25" y="3" width="3" height="23" rx="1"/><rect x="30" y="13" width="3" height="13" rx="1"/></svg><span class="wordmark">kimo</span><span class="sub">spectator</span>
-  <span class="pill pill-live" id="conn-pill">● connecting · loopback :7421</span>
-  <span class="pill" id="rev-pill">rev —</span>
-  <span class="pill" id="rate-pill">tools —/min</span>
-  <span class="right-note">SPECTATOR · READ-ONLY · <span id="feed-label">starting</span></span>
-</header>
-<main>
-  <aside id="dock-left" class="dock">
-    <div class="card" id="calllog">
-      <div class="card-head"><button type="button" class="dock-toggle" data-dock="dock-left" aria-label="collapse call log">‹</button><span>CALL LOG</span><span class="dim">TOOL_START / TOOL_END</span></div>
-      <div id="log-rows" class="dock-body"></div>
-    </div>
-  </aside>
-  <section id="center">
-    <div id="frames">
-      <div class="card" id="viewport-card">
-        <div class="card-head"><span>VIEWPORT · SCENE3D</span><span class="dim">PREVIEW (THREE.JS)</span></div>
-        <div class="frame-body"><canvas id="gl"></canvas></div>
-      </div>
-      <div class="card" id="engine-card">
-        <div class="card-head"><span>ENGINE FRAME</span><span class="dim">TRUE RENDER · F <span id="frame-no">—</span></span></div>
-        <div class="frame-body" id="engine-frame"><canvas id="engine-canvas"></canvas><span class="tagline">your vision.</span></div>
-      </div>
-    </div>
-    <div class="card" id="graph-card">
-      <div class="card-head"><span>NODE GRAPH · PIPELINE</span><span class="dim">READ-ONLY · LIVE PATH ANIMATED</span></div>
-      <div id="graph-body"><svg id="edges"></svg><div id="nodes"></div></div>
-    </div>
-  </section>
-  <aside id="dock-right" class="dock">
-    <div class="card" id="passstack">
-      <div class="card-head"><span>PASS STACK</span><span class="dim">LAST RENDER</span><button type="button" class="dock-toggle" data-dock="dock-right" aria-label="collapse pass stack">›</button></div>
-      <div id="pass-rows" class="dock-body"></div>
-    </div>
-    <div class="card" id="inspector">
-      <div class="card-head" id="insp-head"><span>INSPECTOR</span><span class="dim" id="insp-name">—</span><button type="button" class="dock-toggle" data-dock="inspector" aria-label="collapse inspector">–</button></div>
-      <div id="insp-rows"></div>
-    </div>
-  </aside>
-</main>
-<footer id="timeline" class="card">
-  <div class="card-head"><button type="button" class="dock-toggle" data-dock="timeline" aria-label="collapse timeline">▾</button><span>TIMELINE</span><span class="dim" id="tc">00:00.0 · 24 FPS</span></div>
-  <div id="tl-body">
-    <div id="tl-ruler"></div>
-    <div id="tl-tracks"></div>
-    <div id="playhead"></div>
-  </div>
-</footer>
+<div id="app">
+  <header id="topbar">
+    <svg class="logo" viewBox="0 0 1024 1024" aria-label="kimo"><g transform="translate(71.68 78.56) scale(0.86)"><rect x="176" y="220" width="96" height="584" rx="24"/><rect x="320" y="360" width="96" height="444" rx="24"/><rect x="464" y="520" width="96" height="284" rx="24"/><rect x="608" y="360" width="96" height="444" rx="24"/><rect x="752" y="220" width="96" height="584" rx="24"/><rect class="ph" x="498" y="150" width="28" height="724"/><path class="ph" d="M452 110h120v8l-60 72l-60 -72z"/></g></svg><span class="brand">kimo</span><span class="slash">/</span><span class="proj" id="proj">—</span>
+    <div id="livepill" class="down"><span class="dot"></span><span id="pill-state">connecting</span><span class="sep">-</span><span id="pill-agent">—</span><span class="sep">-</span><span class="act" id="pill-act">—</span></div>
+    <div class="right" id="tb-right"><span class="ro">read-only</span><span class="vsep"></span><span class="clock" id="clock">00:00:00</span></div>
+  </header>
+  <main id="main"></main>
+  <footer id="footer"></footer>
+</div>
 <script type="module" src="app.js"></script>
 </body>
 </html>
