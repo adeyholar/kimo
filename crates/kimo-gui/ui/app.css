@@ -181,6 +181,7 @@ svg text{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .tbl .tr > *{overflow:hidden;text-overflow:ellipsis}
 .tbl .rjob{display:flex;align-items:center;gap:10px;min-width:0}
 .tbl .rthumb{flex:none;width:52px;height:29px;object-fit:cover;border:1px solid var(--line);border-radius:2px;background:#151513;display:block}
+.tbl .rthumb.empty{display:flex;align-items:center;justify-content:center;color:var(--faint)}   /* no frame yet: a dim film-frame glyph */
 .tbl .rname{display:flex;flex-direction:column;gap:2px;min-width:0}
 .tbl .rname > *{overflow:hidden;text-overflow:ellipsis}
 .tbl .rpath{font-size:10.5px}

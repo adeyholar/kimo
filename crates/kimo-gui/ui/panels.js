@@ -672,27 +672,32 @@ export const POST = {
     const c = cv.getContext('2d'); c.scale(dpr, dpr);
     const g = scopeGeom(spec.opts || {}, w, h);
     const cols = data.wave.cols, nb = data.wave.bins, cw = (g.wx1 - g.wx0) / cols.length, bh = (g.wy1 - g.wy0) / nb;
-    const paint = (alpha) => {
+    // the blurred passes are drawn plain into one offscreen layer and blurred ONCE: a canvas filter applies per
+    // draw call, so thousands of filtered fillRects cost ~20 s a render in software (measured headless, m05)
+    const layer = () => { const o = document.createElement('canvas'); o.width = cv.width; o.height = cv.height; const oc = o.getContext('2d'); oc.scale(dpr, dpr); return [o, oc]; };
+    const paint = (cx, alpha) => {
       for (let i = 0; i < cols.length; i++) {
         const col = cols[i];
         for (let b = 0; b < nb; b++) {
           const v = DIG.indexOf(col[b]); if (v <= 0) continue;
-          c.fillStyle = `rgba(236,214,196,${(v / 35 * alpha).toFixed(3)})`;
-          c.fillRect(g.wx0 + i * cw, g.wy1 - (b + 1) * bh, cw + .4, bh + .4);
+          cx.fillStyle = `rgba(236,214,196,${(v / 35 * alpha).toFixed(3)})`;
+          cx.fillRect(g.wx0 + i * cw, g.wy1 - (b + 1) * bh, cw + .4, bh + .4);
         }
       }
     };
+    const [wl, wc] = layer(); wc.globalCompositeOperation = 'lighter'; paint(wc, .35);
     c.globalCompositeOperation = 'lighter';
-    c.filter = 'blur(2px)'; paint(.35); c.filter = 'none'; paint(.72);
+    c.filter = 'blur(2px)'; c.drawImage(wl, 0, 0, w, h); c.filter = 'none'; paint(c, .72);
     c.globalCompositeOperation = 'source-over';
     // vectorscope
     const V = data.vec || {}, X = q => g.vx + q[0] * g.vr, Y = q => g.vy + q[1] * g.vr;
     c.strokeStyle = '#2c2b29'; c.lineWidth = 1;
     c.beginPath(); c.moveTo(g.vx - g.vr, g.vy); c.lineTo(g.vx + g.vr, g.vy); c.moveTo(g.vx, g.vy - g.vr); c.lineTo(g.vx, g.vy + g.vr); c.stroke();
     c.strokeStyle = '#b98d77'; c.lineWidth = 2; c.beginPath(); c.arc(g.vx, g.vy, g.vr, 0, Math.PI * 2); c.stroke();
-    c.filter = 'blur(3px)';
-    for (const q of V.pts || []) { c.fillStyle = q[2]; c.globalAlpha = .3; c.beginPath(); c.arc(X(q), Y(q), 4.5, 0, Math.PI * 2); c.fill(); }
-    c.filter = 'none'; c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
+    if ((V.pts || []).length) { const [vl, vc] = layer(); vc.globalAlpha = .3;
+      for (const q of V.pts) { vc.fillStyle = q[2]; vc.beginPath(); vc.arc(X(q), Y(q), 4.5, 0, Math.PI * 2); vc.fill(); }
+      c.filter = 'blur(3px)'; c.drawImage(vl, 0, 0, w, h); c.filter = 'none'; }
+    c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
     if (V.skin) { c.strokeStyle = '#efe7da'; c.lineWidth = 2; c.beginPath(); c.moveTo(X(V.skin[0]), Y(V.skin[0])); c.lineTo(X(V.skin[1]), Y(V.skin[1])); c.stroke(); }
     c.strokeStyle = '#a88a76'; c.lineWidth = 1.3;
     for (const q of V.targets || []) { c.beginPath(); c.arc(X(q), Y(q), 3.4, 0, Math.PI * 2); c.stroke(); }
@@ -969,7 +974,7 @@ function renders({ spec, data, w, h }) {
       if (i === 3) { const st = String(c); const em = st.startsWith('●'); return `<span class="mono ${em ? 'em' : st.startsWith('✕') ? 'err' : M && !/^[✓●]/.test(st) ? 'dim' : M ? 'cream' : 'dim'}">${status(st)}</span>`; }
       // a live job row (engine export): fixed 44px from its first frame so nothing shifts when it lands;
       // 16:9 thumb of the engine's last frame + output path under the name, each only when sent
-      if (i === 0 && r._job) return `<span class="rjob">${r._thumb ? `<img class="rthumb" src="${E(r._thumb)}">` : ''}<span class="rname"><span class="mono cream">${E(c)}</span>${r._path ? `<span class="mono dim rpath">${E(r._path)}</span>` : ''}</span></span>`;
+      if (i === 0 && r._job) return `<span class="rjob">${r._thumb ? `<img class="rthumb" src="${E(r._thumb)}">` : '<i class="rthumb empty"><svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="currentColor" stroke-width="1.1"><rect x=".6" y=".6" width="14.8" height="10.8" rx="1.6"/><path d="M4 .6v10.8M12 .6v10.8M.6 4h3.4M.6 8h3.4M12 4h3.4M12 8h3.4"/></svg></i>'}<span class="rname"><span class="mono cream">${E(c)}</span>${r._path ? `<span class="mono dim rpath">${E(r._path)}</span>` : ''}</span></span>`;
       return `<span class="${M ? (String(c) === '-' ? 'mono dim' : 'mono cream') : i ? 'mono dim' : 'mono cream'}">${E(c)}</span>`;
     }).join('') + '</div>').join('') + '</div>';
   if (M && o.footLine != null && data.foot) html += `<i style="position:absolute;left:${o.left ?? 13}px;right:${o.right ?? 12}px;top:${o.footLine}px;height:1px;background:var(--line)"></i>`;

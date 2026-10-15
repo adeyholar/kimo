@@ -666,6 +666,10 @@ export const METER_MS = 1600;   // hit + VU decay + peak-hold fall: frames run o
 // fps, ETA), the Export settings rows the call actually carried, and a job row in Renders that
 // counts up while rendering and stays in the list (history) when it lands.
 const mmss = ms => { const s = Math.max(0, Math.round(ms / 1000)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+// "~/films/…/dune_film_final.mp4": first folder + file, the middle elided; a long file name loses its own middle
+const midPath = (p, max = 26) => { const s = String(p).replace(/^\/(home|Users)\/[^/]+/, '~'); if (s.length <= max) return s; const seg = s.split('/'), file = seg.pop(), head = seg.filter(Boolean)[0];
+  let out = head && head !== file ? `${s.startsWith('/') ? '/' : ''}${head}/…/${file}` : file; if (out.length <= max) return out; out = file; if (out.length <= max) return '…/' + out;
+  const keep = max - 1, front = Math.ceil(keep / 2); return file.slice(0, front) + '…' + file.slice(file.length - (keep - front)); };
 const shortPath = (p, max = 24) => { let s = String(p).replace(/^\/(home|Users)\/[^/]+/, '~'); const seg = s.split('/'); return s.length > max && seg.length > 3 ? '…/' + seg.slice(-(max > 24 ? 3 : 2)).join('/') : s; };
 const fmtBytes = b => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b >= 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
 function exportOps(state, MODES, ev) {
@@ -692,7 +696,7 @@ function exportOps(state, MODES, ev) {
     const ext = (base.match(/\.([a-z0-9]+)$/i) || [])[1];
     const res = A.resolution ?? (A.width && A.height ? `${A.width} x ${A.height}` : null);
     const codec = A.codec ?? A.video_codec ?? null;   // only what the call carried: nothing is guessed
-    const set = [['Format', A.container ?? A.format ?? (ext ? ext.toUpperCase() : null)], ['Video', codec], ['Resolution', res], ['Frame rate', A.fps], ['Quality', A.crf != null ? 'CRF ' + A.crf : A.quality], ['Audio', A.audio === false ? 'off' : A.audio_codec], ['Output', path ? String(path).split(/[\\/]/).pop() : null]];   // the destination's file name; the full path rides the Renders row
+    const set = [['Format', A.container ?? A.format ?? (ext ? ext.toUpperCase() : null)], ['Video', codec], ['Resolution', res], ['Frame rate', A.fps], ['Quality', A.crf != null ? 'CRF ' + A.crf : A.quality], ['Audio', A.audio === false ? 'off' : A.audio_codec], ['Output', path ? midPath(path) : null]];   // the path with its middle elided, never a hard clip
     exp.blocks = exp.blocks || [];
     for (const [k, v] of set) { if (v == null || v === '') continue; const b = exp.blocks.find(x => x.k === k); if (b) { if (b.v !== String(v)) { if (k === 'Output') delete b.from; else b.from = b.v; b.v = String(v); } b._flash = now(); } else exp.blocks.push({ k, v: String(v), _flash: now() }); }   // a new output is a new file, not a change of one: no from → to
     const nParts = Array.isArray(A.parts) ? A.parts.length : null, sc = numOf(A.scale);
@@ -726,7 +730,7 @@ function exportOps(state, MODES, ev) {
     if (vw.src) row._thumb = vw.src;
     if (dur != null) row[4] = mmss(dur); row._flash = now(); row._live = false;
   }
-  if (vw.progress && !/^(collect_project|contact_sheet)$/.test(tn)) vw.progress = ok ? { ...vw.progress, pct: 100, left: vw.progress.left === 'starting' && row ? row[0] : vw.progress.left, right: (dur != null ? `done in ${mmss(dur)}` : 'done') } : { ...vw.progress, right: 'failed' };
+  if (vw.progress && !/^(collect_project|contact_sheet)$/.test(tn)) vw.progress = ok ? (vw.progress.left === 'starting' ? { ...vw.progress, pct: 100, left: 'done', right: dur != null ? `in ${mmss(dur)}` : '' } : { ...vw.progress, pct: 100, right: (dur != null ? `done in ${mmss(dur)}` : 'done') }) : { ...vw.progress, right: 'failed' };
   return true;
 }
 
