@@ -2,8 +2,10 @@
 //! Tools are generated from kimo_core::commands::registry().
 //! Every tool call runs on a worker thread under the sandbox layer (kimo_core::guard): argument sanitizer, project limits with
 //! rollback, memory budget, panic catching, and a wall-clock time limit with cooperative cancel (hard exit as the last resort).
-use kimo_core::commands::{dispatch, registry, Session};
+//! Every tools/call is also reported to the spectator GUI when KIMO_SPECTATOR is set (spectator.rs): out of band, never on stdout.
+use kimo_core::commands::{dispatch, Session};
 mod inline;
+mod spectator;
 use kimo_core::toolgroups;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -16,7 +18,9 @@ fn run_guarded(ss: &Arc<Mutex<Session>>, name: &str, args: &Value, out: &mut imp
     let r = match kimo_core::guard::run_tool_guarded(ss, name, args) {
         kimo_core::guard::Guarded::Done(r) => r,
         kimo_core::guard::Guarded::Hung { limit } => { // worker did not stop: report, then exit so the machine is never held hostage; the client restarts the server
-            let msg = json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":format!("tool '{name}' hung past {limit}s and could not be cancelled; the server is exiting safely. Restart it.")}],"isError":true}});
+            let text = format!("tool '{name}' hung past {limit}s and could not be cancelled; the server is exiting safely. Restart it.");
+            spectator::call_abort(&text);
+            let msg = json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":text}],"isError":true}});
             let _ = writeln!(out, "{msg}"); let _ = out.flush(); std::process::exit(124); }
     };
     match r {
@@ -33,6 +37,7 @@ fn run_guarded(ss: &Arc<Mutex<Session>>, name: &str, args: &Value, out: &mut imp
 
 fn main() {
     kimo_core::guard::init();
+    spectator::init(); // opt-in telemetry for the spectator GUI (KIMO_SPECTATOR); off = no thread, no work
     std::panic::set_hook(Box::new(|i| { eprintln!("kimo: {i}"); }));
     let ss = Arc::new(Mutex::new(Session::new()));
     let mut enabled: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -56,8 +61,9 @@ fn main() {
             "tools/call" => {
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                spectator::call_start(name, &args, &ss);
                 let text = |r: Result<Value, String>| match r { Ok(v) => json!({"content":[{"type":"text","text":serde_json::to_string(&v).unwrap()}],"isError":false}), Err(e) => json!({"content":[{"type":"text","text":e}],"isError":true}) };
-                Some(Ok(match name {
+                let r = match name {
                     "kimo_search" => { let qs = args.get("query").and_then(|v| v.as_str()).unwrap_or(""); let mut r = toolgroups::search(qs, args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize);
                         let (ef, tr) = { let mut g = ss.lock().unwrap_or_else(|e| e.into_inner()); (dispatch(&mut g, "list_effects", &json!({})).unwrap_or(json!([])), dispatch(&mut g, "list_transitions", &json!({})).unwrap_or(json!([]))) };
                         r["effects_and_transitions"] = json!(toolgroups::search_catalog(qs, &ef, &tr, 8)); text(Ok(r)) }
@@ -70,7 +76,9 @@ fn main() {
                     "kimo_describe" => text(toolgroups::describe(&args)),
                     n if toolgroups::is_group(n) => match toolgroups::resolve_group_call(n, &args) { Ok((a, ia)) => run_guarded(&ss, &a, &ia, &mut out, &id), Err(e) => text(Err(e)) },
                     _ => run_guarded(&ss, name, &args, &mut out, &id),
-                }))
+                };
+                spectator::call_end(&r, &ss);
+                Some(Ok(r))
             }
             m if m.starts_with("notifications/") => None,
             _ => Some(Err((-32601, format!("method not found: {method}")))),
@@ -81,4 +89,5 @@ fn main() {
             if notify_changed { writeln!(out, "{}", json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"})).ok(); out.flush().ok(); }
         }
     }
+    spectator::flush(std::time::Duration::from_millis(500));
 }

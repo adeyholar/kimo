@@ -678,6 +678,7 @@ pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mu
         let frames: Vec<Result<Vec<u8>, String>> = slots.into_iter().map(|m| m.into_inner().unwrap().unwrap()).collect();
         for f in frames { encoder.write(f?)?; }
         i = end;
+        crate::telemetry::progress(i as f64 / n as f64, "frames");
     }
     encoder.finish()?;
     // mux mixed audio
