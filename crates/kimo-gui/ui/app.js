@@ -47,6 +47,9 @@ function onEvent(ev) {
     state.calls.push({ sys:`project_changed  rev ${ev.rev}` });
   } else if (ev.type === 'frame_rendered') {
     $('#frame-no').textContent = ev.frame;
+    if (ev.png_b64) blitEngineFrame(ev.png_b64);
+  } else if (ev.type === 'timeline') {
+    if (Array.isArray(ev.tracks)) buildTracks(ev.tracks);
   } else if (ev.type === 'viewport_tint') {
     setCubeColor(ev.color);
   }
@@ -115,6 +118,21 @@ function renderInspector() {
   $('#insp-rows').innerHTML = rows.join('') || '<div class="insp-row"><span class="dim">no selection</span></div>';
 }
 
+/* engine frame: blit a real frame payload; without one the card keeps its
+   placeholder gradient + tagline (labeled by the feed state, as in mockup A) */
+function blitEngineFrame(b64) {
+  const img = new Image();
+  img.onload = () => {
+    const c = $('#engine-canvas'), r = c.parentElement.getBoundingClientRect();
+    c.width = r.width; c.height = r.height;
+    const g = c.getContext('2d');
+    const s = Math.max(c.width/img.width, c.height/img.height);
+    g.drawImage(img, (c.width-img.width*s)/2, (c.height-img.height*s)/2, img.width*s, img.height*s);
+    $('.tagline').style.display = 'none';
+  };
+  img.src = 'data:image/png;base64,' + b64;
+}
+
 /* ---------- timeline (DOM-only playhead, zero GPU) ---------- */
 const TL0 = 210, PXS = 48;               // one time->x scale: ruler, bars and playhead share it
 const tx = s => TL0 + s*PXS;
@@ -124,6 +142,16 @@ const TRACKS = [                          // times in seconds
   { label:'V1 plate.mp4',   color:'#7fb7a6', t0:2.5, t1:17,   kfs:[] },
   { label:'A1 score.wav',   color:'#b9a6e8', t0:2.5, t1:18.5, kfs:[] },
 ];
+function buildTracks(tracks) {
+  const el = $('#tl-tracks'); el.innerHTML = '';
+  for (const tr of tracks) {
+    const row = document.createElement('div'); row.className='track';
+    row.innerHTML = `<span class="tlabel">${tr.label}</span>
+      <span class="bar" style="left:${tx(tr.t0)}px;width:${(tr.t1-tr.t0)*PXS}px;background:${tr.color}"></span>` +
+      (tr.kfs||[]).map(x=>`<span class="kf" style="left:${tx(x)}px"></span>`).join('');
+    el.appendChild(row);
+  }
+}
 function buildTimeline() {
   const ruler = $('#tl-ruler');
   for (let s=0; s<=20; s+=2) {
@@ -131,14 +159,7 @@ function buildTimeline() {
     t.style.left = tx(s)+'px'; t.textContent = '00:'+String(s).padStart(2,'0');
     ruler.appendChild(t);
   }
-  const tracks = $('#tl-tracks');
-  for (const tr of TRACKS) {
-    const el = document.createElement('div'); el.className='track';
-    el.innerHTML = `<span class="tlabel">${tr.label}</span>
-      <span class="bar" style="left:${tx(tr.t0)}px;width:${(tr.t1-tr.t0)*PXS}px;background:${tr.color}"></span>` +
-      tr.kfs.map(x=>`<span class="kf" style="left:${tx(x)}px"></span>`).join('');
-    tracks.appendChild(el);
-  }
+  buildTracks(TRACKS);  // fallback demo set until a timeline event arrives
   const ph = $('#playhead'); const t0 = performance.now();
   (function tick(){
     const el = (performance.now()-t0)/1000;
@@ -164,6 +185,19 @@ const binding = connect(onEvent, (st, detail) => {
 }, () => { setPill('● dev · simulated feed', true); runSimulatedFeed(); });
 if (binding.kind === 'tauri') setPill('● connecting · loopback :7421', false);
 
+/* Procedural stand-in for an engine frame (sim feed only): a real PNG drawn
+   on an offscreen canvas, so the blit path is exercised end-to-end. */
+function demoFramePng() {
+  const c = document.createElement('canvas'); c.width = 640; c.height = 360;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0,0,640,360);
+  grad.addColorStop(0,'#dd5227'); grad.addColorStop(.55,'#33222e'); grad.addColorStop(1,'#15151b');
+  g.fillStyle = grad; g.fillRect(0,0,640,360);
+  g.strokeStyle = '#f4f0e8'; g.lineWidth = 3; g.globalAlpha = .8;
+  g.strokeRect(150,80,340,200); g.globalAlpha = 1;
+  return c.toDataURL('image/png').split(',')[1];
+}
+
 /* Simulated feed for the Chromium dev harness: replays the mockup A scenario.
    Ships in the build; only runs when no shell is present. */
 function runSimulatedFeed() {
@@ -182,7 +216,7 @@ function runSimulatedFeed() {
     ['tool_start',{id:'c7',name:'render_frame',args:{f:142}}],
     ['viewport_tint',{color:0xdd5227}],
     ['tool_end',{id:'c7',name:'render_frame',dur_ms:380,status:'ok'}],
-    ['frame_rendered',{frame:142}],
+    ['frame_rendered',{frame:142,png_b64:demoFramePng()}],
     ['tool_end',{id:'c5',name:'composite',dur_ms:31,status:'ok'}],
     ['tool_start',{id:'c8',name:'export_mp4',x:760,y:150,inputs:[{port:'in',from:'composite:out'}]}],
     ['tool_end',{id:'c8',name:'export_mp4',dur_ms:0,status:'ok'}],
@@ -192,6 +226,7 @@ function runSimulatedFeed() {
     ['tool_end',{id:'c10',name:'search_tools',dur_ms:3,status:'ok'}],
     ['project_changed',{rev:214}],
   ];
+  onEvent({ type:'timeline', tracks:TRACKS });
   let i = 0;
   (function step(){
     if (i >= seq.length) return;
