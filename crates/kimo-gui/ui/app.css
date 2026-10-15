@@ -177,6 +177,11 @@ svg text{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .tbl .tr{display:grid;height:var(--tr-h,30px);align-items:center;white-space:nowrap;border-bottom:1px solid var(--line2)}
 .tbl .tr.h{color:var(--dim);font-family:var(--mono);font-size:10.5px;border-bottom:1px solid var(--line)}
 .tbl .tr > *{overflow:hidden;text-overflow:ellipsis}
+.tbl .rjob{display:flex;align-items:center;gap:10px;min-width:0}
+.tbl .rthumb{flex:none;width:52px;height:29px;object-fit:cover;border:1px solid var(--line);border-radius:2px;background:#151513;display:block}
+.tbl .rname{display:flex;flex-direction:column;gap:2px;min-width:0}
+.tbl .rname > *{overflow:hidden;text-overflow:ellipsis}
+.tbl .rpath{font-size:10.5px}
 
 /* ---------- footer ---------- */
 #footer{display:flex;align-items:center;gap:var(--foot-gap,22px);padding:0 14px;font-family:var(--mono);font-size:var(--foot-fs,15px);color:var(--dim);white-space:nowrap;overflow:hidden}

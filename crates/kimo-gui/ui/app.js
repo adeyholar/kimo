@@ -79,6 +79,8 @@ export function apply(ev) {
         for (const k of ['tc', 'res', 'tag', 'left', 'right']) if (ev[k] !== undefined) v[k] = ev[k];
         if (ev.frame !== undefined) v.frame = ev.frame;
       }
+      // a render job still running takes each new engine frame as its Renders thumbnail
+      if (src) for (const r of state.views.export?.renders?.rows || []) if (r._live) r._thumb = src;
       break;
     }
     case 'project_changed':

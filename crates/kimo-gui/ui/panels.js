@@ -760,8 +760,11 @@ function renders({ spec, data, w, h }) {
   const cols = `grid-template-columns:${o.cols || '2.2fr 1.6fr 1fr 1.6fr 1fr'}`;
   let html = head(spec, data);
   html += `<div class="tbl" style="top:${o.top ?? 42}px">` + `<div class="tr h" style="${cols}">${(data.head || []).map(x => `<span>${E(x)}</span>`).join('')}</div>` +
-    (data.rows || []).map(r => `<div class="tr" style="${cols};height:${o.rowH ?? 30}px">` + r.map((c, i) => {
+    (data.rows || []).map(r => `<div class="tr" style="${cols};height:${r._job ? (o.jobH ?? 44) : (o.rowH ?? 30)}px">` + r.map((c, i) => {
       if (i === 3) { const st = String(c); const em = st.startsWith('●'); return `<span class="mono ${em ? 'em' : st.startsWith('✕') ? 'err' : 'dim'}">${E(st)}</span>`; }
+      // a live job row (engine export): fixed 44px from its first frame so nothing shifts when it lands;
+      // 16:9 thumb of the engine's last frame + output path under the name, each only when sent
+      if (i === 0 && r._job) return `<span class="rjob">${r._thumb ? `<img class="rthumb" src="${E(r._thumb)}">` : '<i class="rthumb"></i>'}<span class="rname"><span class="mono cream">${E(c)}</span>${r._path ? `<span class="mono dim rpath">${E(r._path)}</span>` : ''}</span></span>`;
       return `<span class="${i ? 'mono dim' : 'mono cream'}">${E(c)}</span>`;
     }).join('') + '</div>').join('') + '</div>';
   if (data.foot) html += `<div class="pfoot" style="left:auto;right:15px">${E(data.foot)}</div>`;

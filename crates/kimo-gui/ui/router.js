@@ -290,7 +290,8 @@ export const METER_MS = 1600;   // hit + VU decay + peak-hold fall: frames run o
 // fps, ETA), the Export settings rows the call actually carried, and a job row in Renders that
 // counts up while rendering and stays in the list (history) when it lands.
 const mmss = ms => { const s = Math.max(0, Math.round(ms / 1000)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
-const shortPath = p => { let s = String(p).replace(/^\/(home|Users)\/[^/]+/, '~'); const seg = s.split('/'); return s.length > 24 && seg.length > 3 ? '…/' + seg.slice(-2).join('/') : s; };
+const shortPath = (p, max = 24) => { let s = String(p).replace(/^\/(home|Users)\/[^/]+/, '~'); const seg = s.split('/'); return s.length > max && seg.length > 3 ? '…/' + seg.slice(-(max > 24 ? 3 : 2)).join('/') : s; };
+const fmtBytes = b => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b >= 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
 function exportOps(state, MODES, ev) {
   const M = MODES.export; if (!M) return false;
   const V = state.views.export || (state.views.export = {});
@@ -310,7 +311,8 @@ function exportOps(state, MODES, ev) {
     exp.blocks = exp.blocks || [];
     for (const [k, v] of set) { if (v == null || v === '') continue; const b = exp.blocks.find(x => x.k === k); if (b) { if (b.v !== String(v)) { b.from = b.v; b.v = String(v); } b._flash = now(); } else exp.blocks.push({ k, v: String(v), _flash: now() }); }
     const preset = [res && String(res).replace(/\s*x\s*/, 'x'), codec].filter(Boolean).join(' ') || A.preset || '';
-    if (!row) { row = [base, preset, '', '● rendering 0%', 'now']; row._call = id; row._t0 = now(); ren.rows.unshift(row); }
+    if (!row) { row = [base, preset, '', '● rendering 0%', 'now']; row._call = id; row._t0 = now(); row._job = true; ren.rows.unshift(row); }
+    row._live = true; if (path) row._path = shortPath(path, 48); if (vw.src) row._thumb = vw.src;
     vw.progress = { pct: 0, left: 'starting', right: '' };
     return true;
   }
@@ -324,7 +326,17 @@ function exportOps(state, MODES, ev) {
     return true;
   }
   const ok = ev.phase === 'complete', dur = P.dur_ms ?? ev.duration_ms;
-  if (row) { row[3] = ok ? '✓ done' : '✕ failed'; if (dur != null) row[4] = mmss(dur); row._flash = now(); }
+  if (row) {
+    // history row: the last frame the engine rendered, the output path, length and final size, each
+    // only when the engine actually sent it (no placeholder)
+    const R = P.result && typeof P.result === 'object' ? P.result : {};
+    const bytes = [R.bytes, R.size_bytes, R.file_size, P.bytes, P.size_bytes].find(x => typeof x === 'number' && x > 0);
+    row[3] = ok ? '✓ done' + (bytes ? ' · ' + fmtBytes(bytes) : '') : '✕ failed';
+    if (ok && typeof R.duration === 'number') row[2] = mmss(R.duration * 1000);
+    if (ok && R.path) row._path = shortPath(R.path, 48);
+    if (vw.src) row._thumb = vw.src;
+    if (dur != null) row[4] = mmss(dur); row._flash = now(); row._live = false;
+  }
   if (vw.progress) vw.progress = ok ? { ...vw.progress, pct: 100, right: (dur != null ? `done in ${mmss(dur)}` : 'done') } : { ...vw.progress, right: 'failed' };
   return true;
 }

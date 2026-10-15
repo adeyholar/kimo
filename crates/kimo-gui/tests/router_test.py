@@ -142,11 +142,24 @@ async def main():
         await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': 'export', 'call_id': 'x1', 'phase': 'progress', 'target': {}, 'payload': {'current_frame': 72, 'total_frames': 144, 'fps': 41.7, 'pct': 50, 'elapsed_ms': 1700, 'eta_ms': 1700}})
         await pg2.wait_for_timeout(80)
         mid_txt = await pg2.evaluate("document.querySelector('[data-panel=viewer]').textContent + ' | ' + document.querySelector('[data-panel=renders]').textContent")
-        await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': 'export', 'call_id': 'x1', 'phase': 'complete', 'target': {}, 'payload': {'dur_ms': 3400}, 'duration_ms': 3400})
+        TINY = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+        await pg2.evaluate('e => __kimo.apply(e)', {'type': 'frame_rendered', 'png_b64': TINY})
+        await pg2.wait_for_timeout(80)
+        h_mid = await pg2.evaluate("document.querySelector('[data-panel=renders] .tr:not(.h)').getBoundingClientRect().height")
+        await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': 'export', 'call_id': 'x1', 'phase': 'complete', 'target': {}, 'payload': {'dur_ms': 3400, 'result': {'path': '/tmp/k/out.mp4', 'duration': 6.0, 'bytes': 4200000}}, 'duration_ms': 3400})
         await pg2.wait_for_timeout(80)
         end_txt = await pg2.evaluate("document.querySelector('[data-panel=renders]').textContent + ' | ' + document.querySelector('[data-panel=exp]').textContent")
-        ok_x = all(s in mid_txt for s in ['frame 72 / 144', '42 fps', 'eta 00:02', 'out.mp4', 'rendering 50%']) and '✓ done' in end_txt and 'MP4' in end_txt and 'out.mp4' in end_txt
-        print(f"{'PASS' if ok_x else 'FAIL'}  export job card: mid '{mid_txt[-120:]}' end '{end_txt[:90]}'")
+        row1 = await pg2.evaluate("(() => { const r = document.querySelector('[data-panel=renders] .tr:not(.h)'); const i = r.querySelector('img.rthumb'); return [r.getBoundingClientRect().height, i ? i.getAttribute('src').slice(0, 22) : null, r.textContent]; })()")
+        # a second job whose engine result carries no size: no size text, no placeholder
+        await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': 'export', 'call_id': 'x2', 'phase': 'start', 'target': {}, 'payload': {'args': {'path': '/tmp/k/out2.mp4'}}})
+        await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': 'export', 'call_id': 'x2', 'phase': 'complete', 'target': {}, 'payload': {'dur_ms': 900, 'result': {'path': '/tmp/k/out2.mp4', 'duration': 2.5}}, 'duration_ms': 900})
+        await pg2.wait_for_timeout(80)
+        row2 = await pg2.evaluate("document.querySelector('[data-panel=renders] .tr:not(.h)').textContent")
+        ok_x = (all(s in mid_txt for s in ['frame 72 / 144', '42 fps', 'eta 00:02', 'out.mp4', 'rendering 50%']) and '✓ done' in end_txt and 'MP4' in end_txt and 'out.mp4' in end_txt
+                and row1[1] == 'data:image/png;base64,' and '/tmp/k/out.mp4' in row1[2] and '00:06' in row1[2] and '4.2 MB' in row1[2] and abs(row1[0] - h_mid) < 0.5
+                and 'out2.mp4' in row2 and '00:03' in row2 and '✓ done' in row2 and ' · ' not in row2 and not re.search(r'undefined|NaN|null|-- ?MB|\? ?MB', row2))
+        if not ok_x: print('   checks:', [s in mid_txt for s in ['frame 72 / 144', '42 fps', 'eta 00:02', 'out.mp4', 'rendering 50%']], ['✓ done' in end_txt, 'MP4' in end_txt, 'out.mp4' in end_txt], end_txt[-200:])
+        print(f"{'PASS' if ok_x else 'FAIL'}  export job card + history row: mid '{mid_txt[-120:]}' row1 {row1[0]}px (mid {h_mid}) thumb {row1[1]} '{row1[2][:90]}' row2 '{row2[:80]}'")
         if not ok_x: fails.append('export-card')
         # ---- burst: 50 calls (start, 3 progress, complete) inside 100 ms ----
         r0 = await pg2.evaluate('__kimo.metrics.raf')
