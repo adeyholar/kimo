@@ -51,6 +51,30 @@ three.js 0.180.0 (MIT, vendored with LICENSE).
 - **Call log / pass stack / inspector / timeline**: all derive from the same
   event stream; the timeline parks its playhead at the end (zero idle).
 
+## Idle proof (tests/idle_proof.py)
+
+The render loop must cost nothing when nothing happens. One command proves it
+in headless Chromium (serves this crate itself on a free loopback port):
+
+    pip install playwright && python3 -m playwright install chromium   # once
+    python3 crates/kimo-gui/tests/idle_proof.py          # 10 s per phase, exit 1 on failure
+
+It counts requestAnimationFrame callbacks and timer callbacks per phase and logs
+the page's main-thread task time and the renderer process CPU time:
+
+| phase | rAF | timers |
+|---|---|---|
+| visible, live session, no events (after settle) | 0 | 1/s: the elapsed clock (text only) |
+| visible, finished/frozen session | 0 | 0 |
+| hidden, engine events still arriving (20/s) | 0 | 0 (events folded into state, not painted) |
+| hidden, no events | 0 | 0 |
+| visible again | exactly 1 (catch-up paint with the newest state) | - |
+
+Hidden is produced by overriding `document.visibilityState` and dispatching the real
+`visibilitychange` event; Chromium keeps running rAF for the page, so any frame the
+app requested would still fire and be counted. A running tool call's duration ticks
+at 10 Hz (text only) while visible; that is the only other timer.
+
 ## Build & run (needs webkit2gtk 4.1)
 
 Ubuntu 22.04: `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`

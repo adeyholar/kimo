@@ -147,7 +147,14 @@ function buildLayout() {
 const queue = [];
 let rafId = 0, dirty = true, hidden = document.visibilityState === 'hidden';
 export const metrics = { raf: 0, renders: 0, ticks: 0, events: 0, coalesced: 0 };
-function enqueue(ev) { queue.push(ev); metrics.events++; requestFrame(); }
+function enqueue(ev) {
+  metrics.events++;
+  // Hidden: fold the event into state right away (the reducer never touches
+  // the DOM) so the queue cannot grow without bound; the one paint happens
+  // when the window comes back.
+  if (hidden) { apply(ev); return; }
+  queue.push(ev); requestFrame();
+}
 function schedule() { dirty = true; requestFrame(); }
 function requestFrame() { if (!rafId && !hidden) rafId = requestAnimationFrame(frame); }
 function frame() {
