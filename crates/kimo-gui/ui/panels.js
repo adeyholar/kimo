@@ -433,10 +433,11 @@ function keys({ spec, data, w, h }) {
       (g.thr != null ? `<line x1="0" x2="${x1 - gx + 8}" y1="${vy(g.thr)}" y2="${vy(g.thr)}" stroke="#8a867d" stroke-dasharray="3 3"/><text x="${x1 - gx}" y="${vy(g.thr) - 4}" font-size="10" fill="var(--dim)" text-anchor="end">${E(g.thrLabel ?? '')}</text>` : '') +
       `<path d="${d}" fill="none" stroke="var(--cream)" stroke-width="1.3"/></svg>`;
   }
-  html += ruler(r, X, o.rulerY ?? 6);
+  const XR = o.rLabelK ? (t => x0 + (X(t) - x0) * o.rLabelK) : X;   // m13: the mockup's ruler labels run 0.6% wider than its keys
+  html += ruler(r, XR, o.rulerY ?? 6);
   // m13: thin second ticks just left of each ruler label, and the playhead's second in ember
-  if (o.rTickDx != null) for (let t = r.first ?? r.t0; t <= (r.last ?? r.t1) + 1e-6; t += r.step) html += `<i style="position:absolute;left:${px(X(t) + o.rTickDx)}px;top:${(o.rulerY ?? 6) + (o.rTickY ?? 2)}px;height:${o.rTickH ?? 16}px;width:1px;background:${o.rTickC ?? '#2e2d2a'}"></i>`;
-  if (o.rulerHl && data.playhead != null) { const t = Math.round(data.playhead); if (Math.abs(t - data.playhead) < 1e-6) html += `<div class="ruler" style="top:${o.rulerY ?? 6}px;pointer-events:none"><span style="left:${px(X(t))}px;transform:translateX(${r.lx ?? 4}px);color:var(--ember);font-weight:600;background:var(--panel);padding-right:2px">${fmtT(t, r.fmt)}</span></div>`; }
+  if (o.rTickDx != null) for (let t = r.first ?? r.t0; t <= (r.last ?? r.t1) + 1e-6; t += r.step) html += `<i style="position:absolute;left:${px(XR(t) + o.rTickDx)}px;top:${(o.rulerY ?? 6) + (o.rTickY ?? 2)}px;height:${o.rTickH ?? 16}px;width:1px;background:${o.rTickC ?? '#2e2d2a'}"></i>`;
+  if (o.rulerHl && data.playhead != null) { const t = Math.round(data.playhead); if (Math.abs(t - data.playhead) < 1e-6) html += `<div class="ruler" style="top:${o.rulerY ?? 6}px;pointer-events:none"><span style="left:${px(XR(t))}px;transform:translateX(${r.lx ?? 4}px);color:var(--ember);font-weight:600;background:var(--panel);padding-right:2px">${fmtT(t, r.fmt)}</span></div>`; }
   if (o.sepX != null) html += `<i style="position:absolute;left:${o.sepX}px;top:${o.sepY ?? 5}px;height:${o.sepH ?? 25}px;width:1px;background:var(--line)"></i>`;
   if (o.divX != null) html += `<i style="position:absolute;left:${o.divX}px;top:0;bottom:0;width:1px;background:var(--line)"></i>`;
   if (o.headLine != null) html += `<i style="position:absolute;left:0;width:${o.divX ?? w}px;top:${o.headLine}px;height:1px;background:var(--line)"></i>`;
@@ -445,7 +446,10 @@ function keys({ spec, data, w, h }) {
     const lh = L.h ?? o.laneH ?? 32;
     // selBg / altBg (every other lane) cover the whole row, or only the key area right of o.selX
     const bg = L.sel ? (o.selBg ?? 'rgba(255,90,35,.07)') : (o.altBg && li % 2 === 0 ? o.altBg : null);
-    const bgCss = bg ? (o.selX != null ? `;background:linear-gradient(90deg,transparent ${o.selX}px,${bg} ${o.selX}px)` : `;background:${bg}`) : '';
+    // m13: the selected lane warms toward the playhead and cools off after it (the mockup's glow), else flat
+    const ph = L.sel && o.selGlow && data.playhead != null ? X(data.playhead) : null, G = o.selGlow;
+    const bgCss = bg ? (ph != null && o.selX != null ? `;background:linear-gradient(90deg,transparent ${o.selX}px,${bg} ${o.selX}px,${bg} ${px(Math.max(o.selX, ph - G[1]))}px,${G[0]} ${px(ph)}px,${bg} ${px(ph + G[2])}px)`
+      : o.selX != null ? `;background:linear-gradient(90deg,transparent ${o.selX}px,${bg} ${o.selX}px)` : `;background:${bg}`) : '';
     html += `<div class="trk" style="top:${y}px;height:${lh}px${bgCss}${o.laneSep ? `;border-top:1px solid ${o.laneSep}` : ''}">`;
     html += `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? (x0 - 20)}px">${L.html ? L.label : E(L.label)}</span>`;
     const mid = lh / 2;
