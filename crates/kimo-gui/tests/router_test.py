@@ -235,6 +235,9 @@ async def main():
         print(f"{'PASS' if ok_x else 'FAIL'}  export job card + history row: mid '{mid_txt[-120:]}' row1 {row1[0]}px (mid {h_mid}) thumb {row1[1]} '{row1[2][:90]}' row2 '{row2[:80]}' kv gaps {[(k, g) for k, g, _ in kvfit]}")
         if not ok_x: fails.append('export-card')
         # ---- burst: 50 calls (start, 3 progress, complete) inside 100 ms ----
+        # already on the grading screen, so the count is the burst's own frames (a screen hop springs its splits for
+        # ~25 frames; that is measured by tests/spring_test.py)
+        await pg2.evaluate("() => __kimo.apply({type: 'mode', mode: 'grading'})"); await pg2.wait_for_timeout(800)
         r0 = await pg2.evaluate('__kimo.metrics.raf')
         await pg2.evaluate("""() => { const t0 = performance.now(); for (let k = 0; k < 50; k++) { const id = 'b' + k, tg = {track_id: 'track1', clip_id: 'clip2', param: 'temperature'};
             __kimo.apply({tool_name: 'grade', call_id: id, phase: 'start', target: tg, payload: {args: {k}}, ts: k});

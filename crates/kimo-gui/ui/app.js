@@ -138,6 +138,11 @@ function buildLayout() {
   const fl = rects[M.flex || 'viewer'] || [0, 0, DESIGN_W, H];
   main.style.gridTemplateColumns = tracks(X, fl[0], fl[2]);
   main.style.gridTemplateRows = tracks(Y, fl[1], fl[3]);
+  // spring-eased splits: a panel that exists on both screens of a mode hop starts at its old box and springs
+  // to its new one (transform only, so nothing else reflows); a resize or first build snaps
+  const hop = builtMode != null && builtMode !== state.mode && !hidden, old = {};
+  if (hop) for (const [k, el] of Object.entries(nodes)) old[k] = [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight];
+  springs.length = 0;
   main.innerHTML = '';
   for (const k of Object.keys(nodes)) delete nodes[k];
   for (const [name, spec] of Object.entries(M.panels)) {
@@ -151,7 +156,34 @@ function buildLayout() {
     main.appendChild(el);
     nodes[name] = el;
   }
+  if (hop) for (const [name, el] of Object.entries(nodes)) {
+    const f = old[name]; if (!f) continue;
+    const t = [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight];
+    if (!t[2] || !t[3] || f.every((v, i) => Math.abs(v - t[i]) < .5)) continue;
+    springs.push({ el, d: [f[0] - t[0], f[1] - t[1], f[2] / t[2], f[3] / t[3]], x: 1, v: 0 });
+    el.dataset.anim = '1'; el.style.transformOrigin = '0 0';
+  }
+  if (springs.length) { lastSpringT = 0; stepSprings(0); }
+  builtMode = state.mode;
   layoutDirty = false;
+}
+// One spring per hop (all moving panels share it): stiffness 420, damping ratio 0.86 -> settles in ~0.4 s with a
+// hint of overshoot. Driven by the render loop's own rAF only while a spring is moving; hidden -> snapped.
+const springs = []; let builtMode = null, lastSpringT = 0;
+const SK = 420, SC = 2 * Math.sqrt(SK) * .86;
+function stepSprings(now) {
+  if (!springs.length) return false;
+  const dt = lastSpringT ? Math.min((now - lastSpringT) / 1000, 1 / 30) : 0; lastSpringT = now;
+  let live = false;
+  for (const s of springs) {
+    if (dt) { s.v += (-SK * s.x - SC * s.v) * dt; s.x += s.v * dt; }
+    const done = Math.abs(s.x) < .002 && Math.abs(s.v) < .02;
+    if (done || hidden) { s.el.style.transform = ''; delete s.el.dataset.anim; s.x = 0; continue; }
+    live = true; const [dx, dy, sx, sy] = s.d, p = s.x;
+    s.el.style.transform = `translate(${dx * p}px, ${dy * p}px) scale(${1 + (sx - 1) * p}, ${1 + (sy - 1) * p})`;
+  }
+  if (!live) springs.length = 0;
+  return live;
 }
 
 // ---------- frame loop ----------
@@ -216,11 +248,12 @@ function frame() {
   if (dirty) { dirty = false; render(); metrics.renders++; }
   // meter ballistics: frames only while a hit/decay window is open, then nothing
   if (state.animUntil && performance.now() < state.animUntil) { dirty = true; requestFrame(); } else state.animUntil = 0;
+  if (stepSprings(performance.now())) requestFrame();   // a split still springing: one more frame
   armTicker();
 }
 function setHidden(h) {
   hidden = h;
-  if (h) { if (rafId) cancelAnimationFrame(rafId); rafId = 0; clearTimeout(tickId); tickId = 0; }
+  if (h) { if (rafId) cancelAnimationFrame(rafId); rafId = 0; clearTimeout(tickId); tickId = 0; stepSprings(0); }
   else { dirty = true; requestFrame(); }
 }
 document.addEventListener('visibilitychange', () => setHidden(document.visibilityState === 'hidden'));

@@ -20,11 +20,11 @@ CRATE = Path(__file__).resolve().parents[1]
 SAMPLE_JS = """() => {
   const R = e => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; };
   const o = { panels: {}, calls: [], rows: [], trks: [], mode: window.__kimo ? __kimo.state.mode : '', sig: window.__kimo ? __kimo.state.calls.map(c => c.id + ':' + c.status).join(',') : '' };
-  document.querySelectorAll('[data-panel]').forEach(e => o.panels[e.dataset.panel] = R(e));
-  document.querySelectorAll('.call').forEach(e => { const s = e.querySelector('.args'), d = e.querySelector('.dur');
+  document.querySelectorAll('[data-panel]').forEach(e => { if (!e.dataset.anim) o.panels[e.dataset.panel] = R(e); });   /* a springing split is the animation itself (tests/spring_test.py) */
+  document.querySelectorAll('.call').forEach(e => { if (e.closest('[data-anim]')) return; const s = e.querySelector('.args'), d = e.querySelector('.dur');
     o.calls.push({ key: (e.querySelector('.fn') || {}).textContent + '|' + (s ? s.textContent : ''), box: R(e), argsX: s ? s.getBoundingClientRect().x : null, durR: d ? d.getBoundingClientRect().right : null, durX: d ? d.getBoundingClientRect().x : null, argsW: s ? s.getBoundingClientRect().width : null }); });
-  document.querySelectorAll('.kv .row').forEach((e, i) => o.rows.push({ key: (e.querySelector('.k') || {}).textContent + '#' + i, h: e.getBoundingClientRect().height }));
-  document.querySelectorAll('.trk').forEach((e, i) => o.trks.push({ key: i, h: e.getBoundingClientRect().height }));
+  document.querySelectorAll('.kv .row').forEach((e, i) => e.closest('[data-anim]') || o.rows.push({ key: (e.querySelector('.k') || {}).textContent + '#' + i, h: e.getBoundingClientRect().height }));
+  document.querySelectorAll('.trk').forEach((e, i) => e.closest('[data-anim]') || o.trks.push({ key: i, h: e.getBoundingClientRect().height }));
   o.cells = []; document.querySelectorAll('[data-panel=renders] .tr:not(.h)').forEach((e, i) => { const nm = (e.querySelector('.cream') || {}).textContent || i; o.cells.push({ key: nm, h: e.getBoundingClientRect().height, xs: [...e.children].map(c => c.getBoundingClientRect().x), th: (() => { const t = e.querySelector('.rthumb'); return t ? R(t) : null; })() }); });
   o.meta = [...document.querySelectorAll('.vmeta')].map(e => [...e.children].map(c => c.getBoundingClientRect().x)[0] ?? null);
   o.bar = (() => { const v = document.querySelector('[data-panel=viewer]'); const b = v && [...v.children].find(c => c.style && c.style.height && c.style.height.endsWith('px') && c.firstElementChild && c.style.borderRadius); return b ? R(b) : null; })();
