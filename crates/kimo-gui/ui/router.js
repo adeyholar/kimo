@@ -325,6 +325,17 @@ function fitRuler(tl) {
 // Clip names a person reads: a file name when the call carried a path, the text of a text clip,
 // the engine's own label when it is a real name, else "V1 · Clip 02" (never a raw engine id).
 const RAW_ID = /^(c|clip|t|track|fx|effect|node|n|layer|l)[_-]?\d+$/i;
+// The rail's copy of a call's args: a raw clip id becomes that clip's name on the live timeline, or is
+// left out when the window has no name for it (never shown raw, never invented)
+const CLIP_KEYS = ['clip_id', 'clip', 'clip_a', 'clip_b', 'matte_clip_id'];
+function railArgs(state, a) {
+  if (!a || typeof a !== 'object' || Array.isArray(a)) return a;
+  let o = null;
+  for (const k of CLIP_KEYS) { const v = a[k]; if (typeof v !== 'string' || !RAW_ID.test(v)) continue;
+    const [t, i] = state.liveTL ? findClip(state.liveTL, { clip_id: v }) : [null, -1], lb = t ? t.clips[i].label : null;
+    o = o || { ...a }; if (lb && !RAW_ID.test(String(lb))) o[k] = String(lb); else delete o[k]; }
+  return o || a;
+}
 function clipLabel(P, t, fam) {
   const A = P.args || {};
   if (fam === 'text' && P.text) return P.text;
@@ -472,7 +483,12 @@ function maskOps(state, MODES, ev) {
   }
   if (tn === 'refine_matte') { rowsSet('Refine matte', [['Bg model', A.auto_bg != null ? (A.auto_bg ? 'auto' : 'manual') : null]]); if (K && !K.sub && A.clip_id != null) K.sub = 'refine matte';
     const mae = numOf(R.mae ?? R.matte_mae); if (mae != null) rowsSet('Quality', [['Matte MAE', mae.toFixed(2)]]); }
-  if (tn === 'set_track_matte' && KK) lane(`track matte${A.mode ? ' ' + String(A.mode) : ''}`, null);
+  if (tn === 'set_track_matte' && KK) {   // the matte holds for the whole clip: a span over the clip's range (from the edit timeline), else over the lanes' current range
+    const tl = state.liveTL, [ct, ci] = tl && A.clip_id != null ? findClip(tl, { clip_id: A.clip_id }) : [null, -1], c = ct ? ct.clips[ci] : null;
+    const lo = c ? fr(c.s) : KK.ruler ? KK.ruler.t0 + (KK.ruler.t1 - KK.ruler.t0) * .06 : null, hi = c ? fr(c.e) : KK.ruler ? KK.ruler.t1 - (KK.ruler.t1 - KK.ruler.t0) * .06 : null;
+    lane(`track matte${A.mode ? ' ' + String(A.mode) : ''}`, null, lo != null && hi != null && hi > lo ? { area: [[lo, 1], [hi, 1]], color: '#6f6c66', stroke: '#e8e0cc' } : {});
+    if (lo != null && hi != null) { const L = KK.lanes.find(l => l.label.startsWith('track matte')); if (L && L.keys.length === 0 && KK.ruler && (lo < KK.ruler.t0 || hi > KK.ruler.t1)) lane(L.label, null); }   // refit the ruler to include the span
+  }
   if (tn === 'remove_track_matte') { if (K) K.blocks = (K.blocks || []).filter(b => b.sec !== 'Key' && b._sec !== 'Key'); if (KK) KK.lanes = (KK.lanes || []).filter(l => !l.label.startsWith('track matte')); hit = true; }
   if (tn === 'reorder_mask' && numOf(A.index) != null && KK && KK.lanes) {   // the mask's lanes move to its new place in the stack order
     const mine = KK.lanes.filter(l => l.label.startsWith(mid + ' ')), rest = KK.lanes.filter(l => !l.label.startsWith(mid + ' ')); if (mine.length) { const at = Math.max(0, Math.min(rest.length, Math.round(numOf(A.index)))); KK.lanes = [...rest.slice(0, at), ...mine, ...rest.slice(at)]; for (const l of mine) l._flash = now(); hit = true; } }
@@ -722,8 +738,9 @@ export function route(ev, state, MODES) {
   const T = ev.target || {}, P = ev.payload || {};
   const param = T.param || P.param, val = P.to ?? P.value;
   const args = { ...(T.clip_id ? { clip: T.clip_id } : {}), ...(param && val != null ? { [param]: fmtVal(val, param) } : {}) };
+  if (ev.phase === 'start' && ev.ts_ms != null) (state._t0 || (state._t0 = {}))[id] = ev.ts_ms;
   if (ev.phase === 'start') {
-    out.push({ type: 'tool_start', id, name: ev.tool_name, args: P.args ? P.args : (Object.keys(args).length ? args : undefined) });
+    out.push({ type: 'tool_start', id, name: ev.tool_name, args: P.args ? railArgs(state, P.args) : (Object.keys(args).length ? railArgs(state, args) : undefined) });
     if (fam === 'export') exportOps(state, MODES, ev);
     hud(state, ev, fam);
   } else if (ev.phase === 'progress') {
@@ -735,10 +752,11 @@ export function route(ev, state, MODES) {
     hud(state, ev, fam, `${ev.tool_name} ${pct != null ? Math.round(pct) + '%' : ''}`.trim());
   } else if (ev.phase === 'complete' || ev.phase === 'error') {
     const err = ev.phase === 'error';
-    const dur = P.dur_ms ?? ev.duration_ms;
+    const t0 = state._t0 && state._t0[id]; if (t0 != null) delete state._t0[id];
+    const dur = numOf(P.dur_ms) ?? numOf(ev.duration_ms) ?? (t0 != null && ev.ts_ms != null && ev.ts_ms >= t0 ? ev.ts_ms - t0 : null);
     // the landed value replaces the rail's start-time args: "scale: 104% → 112%"
     const landed = !err && param && val != null ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
-    out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(landed ? { args: landed } : {}) });
+    out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(landed ? { args: railArgs(state, landed) } : {}) });
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
       if (/false_?colou?r/.test(String(ev.tool_name).toLowerCase())) { v.viewer = v.viewer || {}; v.viewer.falsecolor = { split: P.split ?? .5 }; }
@@ -771,6 +789,7 @@ const summary = r => {
 function inspectOps(state, MODES, ev, id) {
   const P = ev.payload || {}, T = ev.target || {}, A = P.args || {};
   const out = [];
+  if (ev.phase === 'start' && ev.ts_ms != null) (state._t0 || (state._t0 = {}))[id] = ev.ts_ms;
   if (ev.phase === 'start') {
     out.push({ type: 'tool_start', id, name: ev.tool_name, args: Object.keys(A).length ? A : undefined, read: true });
     hud(state, ev, 'inspect', ev.tool_name);
@@ -963,7 +982,7 @@ function sceneOps(state, MODES, ev) {
         if (A.id != null || A.kind != null) { add(String(A.id ?? A.kind), A.kind, v, pos, col); hit = true;
           // the 3D screen's Scene tree carries the light by its id (it lives in the project the camera sees)
           const SV = MODES.scene3d ? (state.views.scene3d || (state.views.scene3d = {})) : null, trl = MODES.scene3d ? Object.entries(MODES.scene3d.panels).find(([, sp]) => sp.kind === 'tree') : null;
-          if (trl && SV) { const S = SV[trl[0]] || (SV[trl[0]] = {}); S.items = S.items || []; const nm = String(A.id ?? A.kind); if (!S.items.some(x => x.name === nm)) { const at = S.items.findIndex(x => x.icon !== 'cam' && x.icon !== 'light'); S.items.splice(at < 0 ? S.items.length : at, 0, { name: nm, icon: 'light', _flash: now() }); if (S.items.length > 14) S.items.length = 14; } } }
+          if (trl && SV) { const S = SV[trl[0]] || (SV[trl[0]] = {}); S.items = S.items || []; const nm = String(A.id ?? A.kind); if (!S.items.some(x => x.name === nm)) { const at = S.items.findIndex(x => x.icon !== 'cam' && x.icon !== 'light' && x.icon !== 'fill'); S.items.splice(at < 0 ? S.items.length : at, 0, { name: nm, icon: /fill/i.test(nm) ? 'fill' : 'light', _flash: now() }); if (S.items.length > 14) S.items.length = 14; } } }
       } else if (A.preset && ev.phase === 'complete') {
         const pre = String(A.prefix ?? 'rig'), sub = Array.isArray(A.subject) ? A.subject.map(numOf) : null;
         const ids = Array.isArray(R.lights) ? R.lights.map(x => typeof x === 'string' ? x : x && x.id).filter(Boolean) : ['key', 'fill', 'rim'].map(r => `${pre}_${r}`);
@@ -1034,7 +1053,7 @@ function sceneOps(state, MODES, ev) {
       const objs = Array.isArray(A.config.objects) ? A.config.objects : [], lts = Array.isArray(A.config.lights) ? A.config.lights : [];
       if (tr && (objs.length || lts.length)) { const S = V[tr[0]] || (V[tr[0]] = {}); S.items = S.items || []; for (const x of S.items) x.sel = false;
         objs.forEach((ob, i) => S.items.push({ name: String(ob.name ?? ob.id ?? `${ob.kind ?? 'object'} ${i + 1}`), icon: ob.kind === 'plane' ? 'plane' : 'mesh', d: ob.parent ? 1 : 0, sel: i === objs.length - 1, _flash: now() }));
-        lts.forEach((l, i) => S.items.push({ name: String(l.name ?? `${l.kind ?? 'light'} ${i + 1}`), icon: 'light' }));
+        lts.forEach((l, i) => { const nm = String(l.name ?? `${l.kind ?? 'light'} ${i + 1}`); S.items.push({ name: nm, icon: /fill/i.test(nm) ? 'fill' : 'light' }); });
         if (S.items.length > 14) S.items.splice(0, S.items.length - 14); hit = true; }
     }
     // physics bodies: one ring per body at its pixel offset from the canvas centre (needs the project size)

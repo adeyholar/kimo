@@ -95,7 +95,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .call .pp{flex:none;color:var(--args,inherit)}
 .call .fn{flex:none}
 .call .sig{display:flex;min-width:0;flex:1;overflow:hidden}
-.call .dur{margin-left:auto;flex:none;width:var(--dur-w,5ch);text-align:right;font-family:var(--mono);color:var(--dim);font-size:var(--dur-fs,16px)}
+.call .dur{margin-left:auto;flex:none;width:var(--dur-w,5ch);display:flex;justify-content:flex-end;white-space:nowrap;overflow:visible;text-align:right;font-family:var(--mono);color:var(--dim);font-size:var(--dur-fs,16px)}
 .call.cur{background:var(--ember-tint);color:var(--cream)}
 .call.cur::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--ember)}
 .call.cur{color:var(--cur-text,#f6e2d3)}

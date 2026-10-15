@@ -17,12 +17,13 @@ export function fmtArgs(a) {
   // objects stay out of the rail (they are in the inspector)
   const ID = ['clip_id', 'clip', 'name', 'id', 'track_id', 'preset', 'kind', 'shape', 'mode', 'material', 'path', 'text', 'label', 'effect'];
   const prim = v => v != null && v !== '' && typeof v !== 'object' && !(typeof v === 'number' && !Number.isFinite(v));
-  const pos = ID.filter(k => prim(a[k])).map(k => k === 'path' ? String(a[k]).split(/[\\/]/).pop() : String(a[k]));
-  const named = Object.entries(a).filter(([k, v]) => !ID.includes(k) && prim(v)).map(([k, v]) => `${k}: ${typeof v === 'number' ? Math.round(v * 1000) / 1000 : v}`);
+  const maskT = prim(a.mask_id), skip = new Set(maskT ? ['mask_id', 'clip_id', 'clip'] : []);   // the mask is the target: "set_mask_path_key(mask_1, time: 4.2)"
+  const pos = [...(maskT ? [String(a.mask_id)] : []), ...ID.filter(k => !skip.has(k) && prim(a[k])).map(k => k === 'path' ? String(a[k]).split(/[\\/]/).pop() : String(a[k]))];
+  const named = Object.entries(a).filter(([k, v]) => !ID.includes(k) && !skip.has(k) && prim(v)).map(([k, v]) => `${k}: ${typeof v === 'number' ? Math.round(v * 1000) / 1000 : v}`);
   const out = [...pos, ...named].join(', ');
   return out || kv(a);
 }
-const fmtDur = ms => (ms == null ? '' : (ms / 1000).toFixed(1) + 's');
+const fmtDur = ms => (ms == null || !Number.isFinite(+ms) ? '' : +ms < 95 ? Math.max(1, Math.round(+ms)) + 'ms' : (ms / 1000).toFixed(1) + 's');   // real sub-0.1 s latencies read in ms, not "0.0s"
 
 function rng(seed) { let s = (seed * 9301 + 49297) % 233280 || 1; return () => (s = (s * 9301 + 49297) % 233280) / 233280; }
 function head(spec, data, extra = '') {
@@ -403,7 +404,8 @@ function keys({ spec, data, w, h }) {
   if (data.strip) { // mini curve strip above ruler
     const sy = o.stripY ?? 4, sh = o.stripH ?? 40;
     let s = o.stripBg ? `<rect x="${o.stripX ?? 0}" y="0" width="${w - (o.stripX ?? 0)}" height="${sh}" rx="${o.stripR ?? 0}" fill="${o.stripBg}"/>` : '';
-    for (const c of data.strip) s += `<path d="${c.pts.map((p, i) => (i ? 'L' : 'M') + px(X(p[0])) + ' ' + px(sh - 4 - p[1] * (sh - 8))).join('')}" fill="none" stroke="${c.em ? 'var(--ember)' : '#bdb8ae'}" stroke-width="1.4"/>`;
+    const sp = o.stripPad ?? 4;
+    for (const c of data.strip) s += `<path d="${c.pts.map((p, i) => (i ? 'L' : 'M') + px(X(p[0])) + ' ' + px(sh - sp - p[1] * (sh - 2 * sp))).join('')}" fill="none" stroke="${c.em ? 'var(--ember)' : (o.stripC ?? '#bdb8ae')}" stroke-width="${o.stripW ?? 1.4}"${c.em && o.stripEmOp ? ` stroke-opacity="${o.stripEmOp}"` : ''} stroke-linejoin="round"/>`;
     html += `<svg style="position:absolute;left:0;top:${sy}px;width:${w}px;height:${sh}px" viewBox="0 0 ${w} ${sh}">${s}</svg>`;
   }
   if (data.graph) { // residual-style graph box
@@ -415,13 +417,19 @@ function keys({ spec, data, w, h }) {
       `<path d="${d}" fill="none" stroke="var(--cream)" stroke-width="1.3"/></svg>`;
   }
   html += ruler(r, X, o.rulerY ?? 6);
+  // m13: thin second ticks just left of each ruler label, and the playhead's second in ember
+  if (o.rTickDx != null) for (let t = r.first ?? r.t0; t <= (r.last ?? r.t1) + 1e-6; t += r.step) html += `<i style="position:absolute;left:${px(X(t) + o.rTickDx)}px;top:${(o.rulerY ?? 6) + (o.rTickY ?? 2)}px;height:${o.rTickH ?? 16}px;width:1px;background:${o.rTickC ?? '#2e2d2a'}"></i>`;
+  if (o.rulerHl && data.playhead != null) { const t = Math.round(data.playhead); if (Math.abs(t - data.playhead) < 1e-6) html += `<div class="ruler" style="top:${o.rulerY ?? 6}px;pointer-events:none"><span style="left:${px(X(t))}px;transform:translateX(${r.lx ?? 4}px);color:var(--ember);font-weight:600;background:var(--panel);padding-right:2px">${fmtT(t, r.fmt)}</span></div>`; }
   if (o.sepX != null) html += `<i style="position:absolute;left:${o.sepX}px;top:${o.sepY ?? 5}px;height:${o.sepH ?? 25}px;width:1px;background:var(--line)"></i>`;
   if (o.divX != null) html += `<i style="position:absolute;left:${o.divX}px;top:0;bottom:0;width:1px;background:var(--line)"></i>`;
   if (o.headLine != null) html += `<i style="position:absolute;left:0;width:${o.divX ?? w}px;top:${o.headLine}px;height:1px;background:var(--line)"></i>`;
   let y = o.laneY ?? 32;
-  for (const L of data.lanes || []) {
+  (data.lanes || []).forEach((L, li) => {
     const lh = L.h ?? o.laneH ?? 32;
-    html += `<div class="trk" style="top:${y}px;height:${lh}px${L.sel ? `;background:${o.selBg ?? 'rgba(255,90,35,.07)'}` : ''}${o.laneSep ? `;border-top:1px solid ${o.laneSep}` : ''}">`;
+    // selBg / altBg (every other lane) cover the whole row, or only the key area right of o.selX
+    const bg = L.sel ? (o.selBg ?? 'rgba(255,90,35,.07)') : (o.altBg && li % 2 === 0 ? o.altBg : null);
+    const bgCss = bg ? (o.selX != null ? `;background:linear-gradient(90deg,transparent ${o.selX}px,${bg} ${o.selX}px)` : `;background:${bg}`) : '';
+    html += `<div class="trk" style="top:${y}px;height:${lh}px${bgCss}${o.laneSep ? `;border-top:1px solid ${o.laneSep}` : ''}">`;
     html += `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? (x0 - 20)}px">${L.html ? L.label : E(L.label)}</span>`;
     const mid = lh / 2;
     let s = '';
@@ -431,11 +439,11 @@ function keys({ spec, data, w, h }) {
     if (L.area) { const pts = L.area, ah = o.areaH ?? 18, ab = mid + ah / 2; s += `<path d="M${px(X(pts[0][0]))} ${ab} ${pts.map(p => `L${px(X(p[0]))} ${px(ab - p[1] * ah)}`).join(' ')} L${px(X(pts[pts.length - 1][0]))} ${ab}Z" fill="${L.color || '#5a5650'}"${L.stroke ? ` stroke="${L.stroke}" stroke-width="1"` : ''}${o.areaR ? ` stroke-linejoin="round"` : ''}/>`; }
     if (L.dots) for (const t of L.dots) s += `<circle cx="${px(X(t))}" cy="${mid}" r="${L.r || 2.6}" fill="${L.dotColor || '#77736b'}"/>`;
     if ((L.line || o.keyLine) && L.keys && L.keys.length > 1) { const ts = L.keys.map(k => typeof k === 'number' ? k : k.t); s += `<line x1="${px(X(Math.min(...ts)))}" x2="${px(X(Math.max(...ts)))}" y1="${mid}" y2="${mid}" stroke="${o.keyLine || '#5a5853'}" stroke-width="1"/>`; }
-    if (L.keys) for (const k of L.keys) { const t = typeof k === 'number' ? k : k.t; const em = typeof k === 'object' && k.em; const d = L.size || 5.5; s += `<path d="M${px(X(t))} ${mid - d} L${px(X(t) + d)} ${mid} L${px(X(t))} ${mid + d} L${px(X(t) - d)} ${mid}Z" fill="${em ? 'var(--ember)' : (L.keyColor || 'var(--cream)')}"/>`; }
+    if (L.keys) for (const k of L.keys) { const t = typeof k === 'number' ? k : k.t; const em = typeof k === 'object' && k.em; const d = (L.size || o.keySize || 5.5) * (em && o.emKeyScale ? o.emKeyScale : 1); s += `<path d="M${px(X(t))} ${mid - d} L${px(X(t) + d)} ${mid} L${px(X(t))} ${mid + d} L${px(X(t) - d)} ${mid}Z" fill="${em ? 'var(--ember)' : (L.keyColor || 'var(--cream)')}"/>`; }
     html += `<svg style="position:absolute;left:0;top:0;width:${w}px;height:${lh}px" viewBox="0 0 ${w} ${lh}">${s}</svg></div>`;
     y += lh + (o.laneGap ?? 0);
-  }
-  if (data.playhead != null) html += `<div class="playhead" style="left:${px(X(data.playhead))}px;top:${o.phTop ?? 4}px;bottom:${o.phBot ?? 8}px"></div>`;
+  });
+  if (data.playhead != null) html += `<div class="playhead" style="left:${px(X(data.playhead) + (o.phDx ?? 0))}px;top:${o.phTop ?? 4}px;bottom:${o.phBot ?? 8}px"></div>`;
   return html + '</div>';
 }
 
@@ -865,7 +873,14 @@ function list({ spec, data, w, h }) {
 function tree({ spec, data, w, h }) {
   const o = spec.opts || {};
   let html = head(spec, data);
-  const ic = { cam: '<path d="M1 4h8v6H1z M9 6l4-2v6l-4-2" fill="none" stroke="currentColor" stroke-width="1.1"/>', light: '<circle cx="6" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M6 0v2M6 10v2M0 6h2M10 6h2" stroke="currentColor" stroke-width="1.1"/>', mesh: '<path d="M6 1l5 3v5l-5 3-5-3V4z" fill="none" stroke="currentColor" stroke-width="1.1"/>', plane: '<path d="M1 9l4-5h7l-4 5z" fill="none" stroke="currentColor" stroke-width="1.1"/>' };
+  // per-type icons traced from the m13 mockup (17 x 15): camera with reel + lens, bulb (key/rim), bulb with rays (fill), stacked plates (mesh), floor plane
+  const SW = 'fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"';
+  const bulb = (cx, cy, r) => `<path d="M${cx - r * .62} ${cy + r * .78}A${r} ${r} 0 1 1 ${cx + r * .62} ${cy + r * .78}L${cx + r * .45} ${cy + r * 1.25}H${cx - r * .45}Z" ${SW}/><path d="M${cx - r * .4} ${cy + r * 1.75}H${cx + r * .4}" ${SW}/>`;
+  const ic = { cam: `<circle cx="5" cy="3.6" r="2.5" ${SW}/><circle cx="5" cy="3.6" r=".5" fill="currentColor"/><rect x="1.4" y="6.2" width="9.6" height="7.4" rx="1.8" ${SW}/><path d="M11.2 9.9L15.8 7.2V13L11.2 10.9" ${SW}/>`,
+    light: bulb(8.5, 5.6, 4.1),
+    fill: bulb(8.5, 6.4, 3.3) + [[8.5, .9], [3.6, 2.6], [13.4, 2.6], [2, 6.6], [15, 6.6]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r=".75" fill="currentColor"/>`).join(''),
+    mesh: `<ellipse cx="8.5" cy="3" rx="6" ry="1.9" ${SW}/><path d="M2.6 3.4C3.4 5.4 5.6 6.2 8.5 6.2S13.6 5.4 14.4 3.4" ${SW}/><ellipse cx="8.5" cy="7.4" rx="6.3" ry="1.6" ${SW}/><path d="M3.2 12.2C3.6 10.4 5.6 9.7 8.5 9.7S13.4 10.4 13.8 12.2" ${SW}/><ellipse cx="8.5" cy="12.4" rx="6.4" ry="1.7" ${SW}/>`,
+    plane: `<path d="M1.4 12.6L4.6 8.4H12.4L15.6 12.6Z" ${SW}/>` };
   if (o.headLine) html += `<i style="position:absolute;left:0;right:0;top:${o.headLine}px;height:1px;background:var(--line)"></i>`;
   const items = data.items || [];
   if (o.guide != null && items.length > 1) { const y1 = (o.y0 ?? 44) + (o.rowH ?? 30) * .5, y2 = (o.y0 ?? 44) + (items.length - 1) * (o.rowH ?? 30) + (o.rowH ?? 30) / 2 - 2;
@@ -874,7 +889,7 @@ function tree({ spec, data, w, h }) {
   items.forEach((it, i) => {
     const y = (o.y0 ?? 44) + i * (o.rowH ?? 30);
     html += `<div style="position:absolute;left:${o.selL ?? 10}px;right:${o.selR ?? 10}px;top:${y}px;height:${(o.rowH ?? 30) - 4}px;display:flex;align-items:center;gap:${o.gap ?? 9}px;padding-left:${(o.padL ?? 10) + (it.d || 0) * 16}px;border-radius:${o.selRad ?? 4}px;${it.sel ? `background:${o.selBg ?? 'var(--raise2)'};` : ''}font-family:${o.font ?? 'var(--mono)'};font-size:${o.fs ?? 12}px">` +
-      `<svg width="${o.iconW ?? 14}" height="${(o.iconW ?? 14) * 12 / 14}" viewBox="0 0 14 12" style="color:${it.sel || o.iconCream ? 'var(--cream)' : 'var(--dim)'}">${ic[it.icon] || ''}</svg><span class="${it.sel ? 'cream' : 'text'}" style="color:${it.sel || o.textCream ? 'var(--cream)' : 'var(--text)'}">${E(it.name)}</span></div>`;
+      `<svg width="${o.iconW ?? 17}" height="${(o.iconW ?? 17) * 15 / 17}" viewBox="0 0 17 15" style="flex:none;color:${it.sel || o.iconCream ? 'var(--cream)' : 'var(--dim)'}">${ic[it.icon] || ''}</svg><span class="${it.sel ? 'cream' : 'text'}" style="color:${it.sel || o.textCream ? 'var(--cream)' : 'var(--text)'}">${E(it.name)}</span></div>`;
   });
   return html;
 }
