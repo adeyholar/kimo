@@ -13,7 +13,7 @@ Finally it checks the render loop goes idle again (0 rAF over 3 s).
 
     python3 crates/kimo-gui/tests/router_test.py      # exit 1 on failure
 """
-import asyncio, functools, http.server, json, socketserver, sys, threading
+import asyncio, functools, http.server, json, re, socketserver, sys, threading
 from pathlib import Path
 CRATE = Path(__file__).resolve().parents[1]
 
@@ -124,14 +124,16 @@ async def main():
         await call(9, 'frobnicate_widget', T(), {'error': 'unknown tool'})
         final = await pg2.evaluate("__kimo.state.liveTL.tracks.map(t => [t.label, t.clips.length])")
         fx = await pg2.evaluate("__kimo.state.liveTL.tracks.flatMap(t => t.clips.flatMap(c => c.fx || []))")
+        labels = await pg2.evaluate("__kimo.state.liveTL.tracks.flatMap(t => t.clips.map(c => c.label))")
         insp = await pg2.evaluate("[...document.querySelectorAll('[data-panel=insp] .row')].map(e => e.textContent)")
         bad2 = await pg2.evaluate(BAD)
         rail2 = await pg2.evaluate("__kimo.state.calls.map(c => [c.name, c.status, c.dur_ms, Object.entries(c.args || {}).map(([k, v]) => k + ': ' + v).join(', ')])")
         ok_cold = (len(before) == 1 and before[0][2] == 1 and len(after) == 2 and after[0][1] == before[0][1]   # V1 did not move when V2 arrived
                    and final[0][1] == 2 and final[1][1] == 1 and 'temperature' in fx and not bad2 and not errs2
+                   and not any(re.match(r'^clip\d+$', l or '') for l in labels) and 'KIMO' in labels
                    and any(c[0] == 'set_property' and 'scale: 100% → 125%' in str(c[3]) for c in rail2)
                    and [c[1] for c in rail2] == ['ok'] * 8 + ['error'] and [c[2] for c in rail2] == [10 + k for k in range(1, 10)])
-        print(f"{'PASS' if ok_cold else 'FAIL'}  cold engine session: tracks {final} fx {fx} rail {[c[1] for c in rail2]} V1 y {before[0][1] if before else None}->{after[0][1] if after else None}")
+        print(f"{'PASS' if ok_cold else 'FAIL'}  cold engine session: tracks {final} labels {labels} fx {fx} rail {[c[1] for c in rail2]} V1 y {before[0][1] if before else None}->{after[0][1] if after else None}")
         if bad2: print('   bad text:', bad2[:3])
         if not ok_cold: fails.append('cold-session')
         # ---- burst: 50 calls (start, 3 progress, complete) inside 100 ms ----

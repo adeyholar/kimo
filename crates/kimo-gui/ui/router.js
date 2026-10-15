@@ -137,6 +137,17 @@ function fitRuler(tl) {
   const t1 = Math.max(10, Math.ceil(e * 1.15));
   if (!tl.ruler || tl.ruler.t1 < t1) tl.ruler = { t0: 0, t1, step: t1 <= 12 ? 2 : t1 <= 30 ? 5 : t1 <= 90 ? 10 : 30, edge: true };
 }
+// Clip names a person reads: a file name when the call carried a path, the text of a text clip,
+// the engine's own label when it is a real name, else "V1 · Clip 02" (never a raw engine id).
+const RAW_ID = /^(clip|track|fx|effect|node)_?\d+$/i;
+function clipLabel(P, t, fam) {
+  const A = P.args || {};
+  if (fam === 'text' && P.text) return P.text;
+  if (P.label && !RAW_ID.test(String(P.label))) return String(P.label);
+  const path = P.path ?? P.file ?? P.src ?? A.path ?? A.file ?? A.source ?? A.src;
+  if (typeof path === 'string' && path) return path.split(/[\\/]/).pop();
+  return `${t.label} · Clip ${String((t.clips || []).length + 1).padStart(2, '0')}`;
+}
 function insertClip(tl, t, c) {
   const s = +c.s, e = +c.e;
   // overwrite edit: whatever sat under the new clip is trimmed back to it
@@ -172,19 +183,19 @@ function timelineOps1(tl, ev, fam) {
   // any insert the engine reports (clip + track + s/e): import, add_clip, add_text, add_audio...
   if (fam !== 'edit' && P.clip != null && P.s != null && (P.track != null || T.track_id != null)) {
     const t = ensureTrack(tl, P.track ?? T.track_id, P.kind || P.source_type || n);
-    insertClip(tl, t, { id: P.clip, label: P.text ?? P.label ?? P.clip, s: +P.s, e: +(P.e ?? +P.s + 4), thumb: P.thumb, ...(fam === 'text' ? { cls: 'cap' } : {}), _flash: now() });
+    insertClip(tl, t, { id: P.clip, label: clipLabel(P, t, fam), s: +P.s, e: +(P.e ?? +P.s + 4), thumb: P.thumb, ...(fam === 'text' ? { cls: 'cap' } : {}), _flash: now() });
     t._flash = now(); return true;
   }
   if (!tl.tracks) tl.tracks = [];
   if (fam === 'ingest' && P.s != null) {
     const t = ensureTrack(tl, T.track_id || P.track || 'V' + (tl.tracks.length + 1));
-    insertClip(tl, t, { id: T.clip_id || P.clip, label: P.label || T.clip_id || P.clip, s: +P.s, e: +(P.e ?? +P.s + 4), thumb: P.thumb, _flash: now() });
+    insertClip(tl, t, { id: T.clip_id || P.clip, label: clipLabel(P, t, fam), s: +P.s, e: +(P.e ?? +P.s + 4), thumb: P.thumb, _flash: now() });
     t._flash = now(); return true;
   }
   let [t, i] = findClip(tl, T);
   // a call on a clip this window has not seen yet (joined mid-session): the engine sent its bounds, so draw it first
   if (!t && T.clip_id && T.track_id && (fam === 'edit' || fam === 'effects') && P.s != null && P.e != null && !/^(split|cut|blade|razor)/.test(n)) {
-    t = ensureTrack(tl, T.track_id); insertClip(tl, t, { id: T.clip_id, label: T.clip_id, s: +P.s, e: +P.e }); i = t.clips.findIndex(c => c.id === T.clip_id);
+    t = ensureTrack(tl, T.track_id); insertClip(tl, t, { id: T.clip_id, label: clipLabel({}, t, fam), s: +P.s, e: +P.e }); i = t.clips.findIndex(c => c.id === T.clip_id);
   }
   if (fam === 'edit' && t) {
     const c = t.clips[i];
