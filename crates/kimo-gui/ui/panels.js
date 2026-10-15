@@ -1,7 +1,7 @@
 // Panel renderers. Each kind is a pure function of (spec, data, w, h) that
 // returns markup; geometry comes from the measured panel box and fixed row
 // heights, so a value changing never changes a box.
-import { flashing } from './router.js';
+import { flashing, METER_MS } from './router.js';
 const F = o => (o && flashing(o._flash) ? ' flash' : '');
 const E = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const px = n => Math.round(n * 10) / 10;
@@ -145,37 +145,46 @@ function block(b, w) {
 
 // ---------- small inspector widgets (SVG from data) ----------
 const WIDGETS = {
-  eq(b, w, h) { // b.bands: [{f,g,q,type}] ; draws response curve on log axis 20..20k
-    const fx = f => (Math.log10(f) - Math.log10(20)) / 3 * w, gy = g => h / 2 - g * (h / 2 - 10) / 18;
-    let grid = '';
-    for (const f of [100, 1000, 10000]) grid += `<line x1="${fx(f)}" x2="${fx(f)}" y1="0" y2="${h}" stroke="#1d1d1c"/>`;
-    for (const g of [-12, 0, 12]) grid += `<line x1="0" x2="${w}" y1="${gy(g)}" y2="${gy(g)}" stroke="#1d1d1c"/>`;
-    const resp = f => (b.bands || []).reduce((s, B) => {
+  eq(b, w, h) { // b.bands: [{f,g,q,type}] ; response on a log axis 20..20k inside a box, decade labels under it
+    const bh = h - (b.labH ?? 24), fx = f => (Math.log10(f) - Math.log10(20)) / 3 * w, gy = g => bh / 2 - g * (bh / 2) / 18;
+    let s = `<rect x=".5" y=".5" width="${w - 1}" height="${bh - 1}" rx="4" fill="#161615" stroke="#2c2b29"/>`;
+    for (let d = 10; d <= 10000; d *= 10) for (let k = 1; k <= 9; k++) { const f = d * k; if (f < 20 || f > 20000) continue; const x = px(fx(f)); s += `<line x1="${x}" x2="${x}" y1="1" y2="${bh - 1}" stroke="${k === 1 ? '#2e2d2a' : '#222120'}"/>`; }
+    for (let g = -18; g <= 18; g += 4.5) s += `<line x1="1" x2="${w - 1}" y1="${px(gy(g))}" y2="${px(gy(g))}" stroke="${g === 0 ? '#34322e' : '#222120'}"/>`;
+    const resp = f => (b.bands || []).reduce((sum, B) => {
       const x = Math.log2(f / B.f);
-      if (B.type === 'lowshelf') return s + B.g / (1 + Math.exp(x * 4));
-      if (B.type === 'highshelf') return s + B.g / (1 + Math.exp(-x * 4));
-      return s + B.g * Math.exp(-(x * x) * (B.q || 1) * 1.6);
+      if (B.type === 'highpass') return sum - 10 * Math.log10(1 + Math.pow(B.f / f, 2 * (B.n ?? 2)));   // Butterworth-shaped skirts
+      if (B.type === 'lowpass') return sum - 10 * Math.log10(1 + Math.pow(f / B.f, 2 * (B.n ?? 1)));
+      if (B.type === 'lowshelf') return sum + B.g / (1 + Math.exp(x * 4));
+      if (B.type === 'highshelf') return sum + B.g / (1 + Math.exp(-x * 4));
+      return sum + B.g * Math.exp(-(x * x) * (B.q || 1) * 1.6);
     }, 0);
-    const pts = []; for (let i = 0; i <= 120; i++) { const f = 20 * Math.pow(1000, i / 120); pts.push([fx(f), gy(resp(f))]); }
-    const d = pts.map((p, i) => (i ? 'L' : 'M') + px(p[0]) + ' ' + px(p[1])).join('');
-    let s = grid + `<path d="${d} L${w} ${h / 2} L0 ${h / 2}Z" fill="rgba(243,240,231,.06)"/><path d="${d}" fill="none" stroke="var(--cream)" stroke-width="1.4"/>`;
-    for (const B of (b.bands || [])) s += `<circle cx="${px(fx(B.f))}" cy="${px(gy(resp(B.f)))}" r="3.5" fill="${B.sel ? 'var(--ember)' : 'var(--cream)'}"/>`;
-    s += [100, 1000, 10000].map((f, i) => `<text x="${fx(f) + 3}" y="${h - 5}" font-size="9" fill="var(--dim)">${['100', '1k', '10k'][i]}</text>`).join('');
+    const pts = []; for (let i = 0; i <= 160; i++) { const f = 20 * Math.pow(1000, i / 160); pts.push([fx(f), Math.min(bh - 1, Math.max(1, gy(resp(f))))]); }
+    const d = pts.map((q, i) => (i ? 'L' : 'M') + px(q[0]) + ' ' + px(q[1])).join('');
+    s += `<path d="${d} L${w} ${px(gy(0))} L0 ${px(gy(0))}Z" fill="rgba(190,178,146,.22)"/><path d="${d}" fill="none" stroke="#e9e3d6" stroke-width="1.6"/>`;
+    for (const B of (b.bands || [])) if (B.g != null && !/pass/.test(B.type || '')) s += `<circle cx="${px(fx(B.f))}" cy="${px(gy(resp(B.f)))}" r="${B.sel ? 5.5 : 4.5}" fill="${B.sel ? '#efe9dc' : B.dim ? '#8d887e' : '#cfc9bd'}" stroke="#121211" stroke-width="1.5"${F(B).trim() ? ' class="flash"' : ''}/>`;
+    s += [100, 1000, 10000].map((f, i) => `<text x="${px(fx(f))}" y="${bh + (b.labY ?? 15)}" font-size="${b.labFs ?? 11}" fill="var(--dim)" text-anchor="middle" font-family="var(--mono)">${['100', '1k', '10k'][i]}</text>`).join('');
     return `<svg viewBox="0 0 ${w} ${h}">${s}</svg>`;
   },
-  comp(b, w, h) { // compressor transfer curve + text rows
-    const s = Math.min(h - 12, 64), x0 = 8, y0 = (h - s) / 2, th = b.threshold ?? -18, r = b.ratio ?? 3;
-    const map = db => (db + 60) / 60; const tx = map(th);
-    const knee = [x0 + tx * s, y0 + s - tx * s];
-    const end = [x0 + s, y0 + s - (tx + (1 - tx) / r) * s];
-    let g = `<rect x="${x0}" y="${y0}" width="${s}" height="${s}" fill="none" stroke="#242423"/>` +
-      `<line x1="${x0}" y1="${y0 + s}" x2="${x0 + s}" y2="${y0}" stroke="#242423" stroke-dasharray="2 3"/>` +
-      `<path d="M${x0} ${y0 + s} L${knee[0]} ${knee[1]} L${end[0]} ${end[1]}" fill="none" stroke="var(--cream)" stroke-width="1.4"/>` +
-      `<circle cx="${knee[0]}" cy="${knee[1]}" r="3" fill="var(--ember)"/>`;
-    const tx2 = x0 + s + 16;
-    g += `<text x="${tx2}" y="${h / 2 - 6}" font-size="11.5" fill="var(--dim)" style="font-family:var(--label-font)">Threshold</text><text x="${w - 8}" y="${h / 2 - 6}" font-size="11.5" fill="var(--cream)" text-anchor="end">${th} dB</text>` +
-      `<text x="${tx2}" y="${h / 2 + 16}" font-size="11.5" fill="var(--dim)" style="font-family:var(--label-font)">Ratio</text><text x="${w - 8}" y="${h / 2 + 16}" font-size="11.5" fill="var(--cream)" text-anchor="end">${r}:1</text>`;
-    return `<svg viewBox="0 0 ${w} ${h}">${g}</svg>`;
+  comp(b, w, h) { // compressor transfer curve in a box + Threshold / Ratio rows beside it
+    const bw = b.boxW ?? 76, bh = b.boxH ?? 67, x0 = .5, y0 = b.boxY ?? 7, th = b.threshold ?? -18, r = b.ratio ?? 3;
+    const X = db => x0 + (db + 60) / 60 * bw, outDb = db => db < th ? db : th + (db - th) / r, top = outDb(0);
+    const Y = db => y0 + bh - (db + 60) / (top + 60) * bh;   // output scaled so 0 dB in lands on the box's top edge
+    let g = `<rect x="${x0}" y="${y0}" width="${bw}" height="${bh}" rx="3" fill="#161615" stroke="#2c2b29"/>`;
+    for (let k = 1; k < 4; k++) g += `<line x1="${px(x0 + bw * k / 4)}" x2="${px(x0 + bw * k / 4)}" y1="${y0}" y2="${y0 + bh}" stroke="#222120"/><line x1="${x0}" x2="${x0 + bw}" y1="${px(y0 + bh * k / 4)}" y2="${px(y0 + bh * k / 4)}" stroke="#222120"/>`;
+    const curve = []; for (let db = -60; db <= 0; db += 1) curve.push([X(db), Y(outDb(db))]);
+    const kx = X(th), ky = Y(th);
+    g += `<path d="M${x0} ${y0 + bh} ${curve.filter(q => q[0] <= kx).map(q => 'L' + px(q[0]) + ' ' + px(q[1])).join(' ')} L${px(kx)} ${y0 + bh}Z" fill="rgba(190,178,146,.22)"/>` +
+      `<rect x="${px(kx)}" y="${px(ky)}" width="${px(Math.min(9, bw - kx))}" height="${px(y0 + bh - ky)}" fill="rgba(0,0,0,.28)"/>` +
+      `<path d="${curve.map((q, i) => (i ? 'L' : 'M') + px(q[0]) + ' ' + px(q[1])).join('')}" fill="none" stroke="#e9e3d6" stroke-width="1.6"/>`;
+    // live gain reduction while a compress call runs: ember dot at the input level, ember bar = reduction
+    if (b.inDb != null && b._grT != null && performance.now() - b._grT < 1600) {
+      const ix = X(b.inDb), iy = Y(outDb(b.inDb)), uy = Y(b.inDb);
+      g += `<line x1="${px(ix)}" x2="${px(ix)}" y1="${px(Math.max(y0, uy))}" y2="${px(iy)}" stroke="var(--ember)" stroke-width="3"/><circle cx="${px(ix)}" cy="${px(iy)}" r="3.5" fill="var(--ember)"/>`;
+    }
+    const tx = bw + (b.gap ?? 18), fs = b.fs ?? 17, ry = [y0 + bh * .21, y0 + bh * .81];
+    const row = (y, k, v, flash) => `<text x="${tx}" y="${px(y + fs * .35)}" font-size="${fs}" fill="var(--klabel,var(--text))" style="font-family:var(--label-font)">${E(k)}</text><text x="${w}" y="${px(y + fs * .35)}" font-size="${fs}" fill="${flash ? 'var(--ember-text)' : 'var(--cream)'}" text-anchor="end" font-family="var(--mono)">${E(v)}</text>`;
+    g += row(ry[0], 'Threshold', `${th} dB`, flashing(b._flashT)) + `<line x1="${tx}" x2="${w}" y1="${px((ry[0] + ry[1]) / 2)}" y2="${px((ry[0] + ry[1]) / 2)}" stroke="var(--line2)"/>` + row(ry[1], 'Ratio', `${r}:1`, flashing(b._flashR));
+    return `<svg viewBox="0 0 ${w} ${h}" style="overflow:visible">${g}</svg>`;
   },
   solve(b, w, h) { // camera solve: point cloud + frustum + dotted orbit
     const R = rng(b.seed || 5); let s = '';
@@ -221,6 +230,11 @@ function ruler(r, X, y, o = {}) {
   }
   return s + '</div>';
 }
+function peaksPath(w, h, s) { // s: base-36 peak string, one char per column (0..35)
+  const n = s.length, up = [], dn = [];
+  for (let i = 0; i < n; i++) { const a = DIG.indexOf(s[i]) / 35 * (h / 2 - 1), x = i / (n - 1) * w; up.push(`${px(x)},${px(h / 2 - a)}`); dn.push(`${px(x)},${px(h / 2 + a)}`); }
+  return `M${up.join(' L')} L${dn.reverse().join(' L')}Z`;
+}
 function wave(w, h, seed, amp = .8, dens = 1, sym = true) {
   const R = rng(seed); const n = Math.max(8, Math.floor(w / 2.2 * dens)); const up = [], dn = [];
   let env = .5;
@@ -256,9 +270,9 @@ function timeline({ spec, data, w, h }) {
     if (t.lane) { const li = t.laneInset ?? o.laneInset ?? 3; html += `<div class="lane" style="position:absolute;left:${x0}px;right:${w - x1}px;top:${li}px;bottom:${li}px;background:${t.lane}"></div>`; }
     if (t.wave) {
       const a = X(t.wave.s ?? r.t0), b = X(t.wave.e ?? r.t1), wh = th - 6;
-      html += `<svg style="position:absolute;left:${px(a)}px;top:3px;width:${px(b - a)}px;height:${wh}px" viewBox="0 0 ${px(b - a)} ${wh}"><path d="${wave(b - a, wh, t.wave.seed || 3, t.wave.amp ?? .8, t.wave.dens ?? 1)}" fill="${t.wave.color || '#5f5c56'}"/>` +
-        (t.wave.env ? `<path d="${t.wave.env.map((p, i) => (i ? 'L' : 'M') + px(X(p[0]) - a) + ' ' + px(wh * (1 - p[1]))).join('')}" fill="none" stroke="var(--ember)" stroke-width="1.5"/>` : '') +
-        (t.wave.beats ? t.wave.beats.map(bt => `<line x1="${px(X(bt) - a)}" x2="${px(X(bt) - a)}" y1="0" y2="5" stroke="var(--cream)" stroke-width="1.2"/>`).join('') : '') +
+      html += `<svg style="position:absolute;left:${px(a)}px;top:3px;width:${px(b - a)}px;height:${wh}px" viewBox="0 0 ${px(b - a)} ${wh}"><path d="${t.wave.peaks ? peaksPath(b - a, wh, t.wave.peaks) : wave(b - a, wh, t.wave.seed || 3, t.wave.amp ?? .8, t.wave.dens ?? 1)}" fill="${t.wave.color || '#5f5c56'}"/>` +
+        (t.wave.env ? `<path d="${catmull(t.wave.env.map(p => [X(p[0]) - a, wh * (1 - p[1])]))}" fill="none" stroke="var(--ember)" stroke-width="${o.envW ?? 1.5}"/>` : '') +
+        (t.wave.beats ? t.wave.beats.map(bt => `<line x1="${px(X(bt) - a)}" x2="${px(X(bt) - a)}" y1="${o.beatY0 ?? 0}" y2="${o.beatY1 ?? 5}" stroke="var(--cream)" stroke-width="${o.beatW ?? 1.2}"/>`).join('') : '') +
         `</svg>`;
     }
     for (const c of (t.clips || [])) {
@@ -612,16 +626,30 @@ function cieFill(w, h, ox, oy, scx, scy, dpr, op) {
 
 // ---------- loudness ----------
 function loudness({ spec, data, w, h }) {
+  // measured on m04: big integrated LUFS, a target line running into the meters, true peak / LRA rows,
+  // two meter ladders with L/R labels top and bottom, a peak-hold mark and a status tick under each top label
   const o = spec.opts || {};
+  const mx = o.mx ?? 178, mw = o.mw ?? 14, mg = o.mg ?? 9, my0 = o.my0 ?? 40, my1 = o.my1 ?? 234, H = my1 - my0, rx = mx - 12;
   let html = head(spec, data);
-  html += `<div style="position:absolute;left:15px;top:${o.bigY ?? 44}px;font-family:var(--mono);font-weight:600;font-size:${o.bigFs ?? 30}px;letter-spacing:-.02em" class="cream">${E(data.lufs)}<span style="font-size:13px;font-weight:400;margin-left:6px" class="dim">LUFS</span></div>`;
-  html += `<div style="position:absolute;left:15px;top:${(o.bigY ?? 44) + 44}px;font-family:var(--mono);font-size:11.5px" class="dim">target ${E(data.target)}</div>`;
-  html += `<div style="position:absolute;left:15px;right:${o.meterW ?? 70}px;top:${(o.bigY ?? 44) + 66}px;height:1px;background:var(--line)"></div>`;
-  (data.rows || []).forEach((r, i) => html += `<div style="position:absolute;left:15px;right:${(o.meterW ?? 70) + 4}px;top:${(o.bigY ?? 44) + 76 + i * 26}px;display:flex;justify-content:space-between;font-size:12px"><span class="dim">${E(r[0])}</span><span class="mono">${E(r[1])}</span></div>`);
-  const mx = w - (o.meterW ?? 70) + 10, my0 = o.my0 ?? 40, my1 = h - 30;
+  html += `<div class="cream${F(data)}" style="position:absolute;left:15px;top:${o.bigY ?? 64}px;line-height:1;white-space:nowrap"><span style="font-family:var(--mono);font-size:${o.bigFs ?? 33}px;letter-spacing:-.03em">${E(data.lufs)}</span><span style="font-family:var(--sans);font-size:${o.unitFs ?? 17}px;margin-left:7px">LUFS</span></div>`;
+  const ty = o.targetY ?? 115, tgt = data.target != null ? +data.target : null;
+  html += `<div style="position:absolute;left:15px;top:${ty - 10}px;height:20px;line-height:20px;font-size:${o.rowFs ?? 15}px;color:var(--text);white-space:nowrap">target&nbsp;&nbsp;<span style="font-family:var(--mono)">${E(data.target)}</span></div>`;
+  html += `<div style="position:absolute;left:${o.tlx ?? 96}px;width:${rx - (o.tlx ?? 96)}px;top:${ty}px;height:1px;background:#8d887e"></div>`;
+  html += `<div style="position:absolute;left:15px;width:${rx - 15}px;top:${o.divY ?? 178}px;height:1px;background:var(--line2)"></div>`;
+  (data.rows || []).forEach((r, i) => html += `<div style="position:absolute;left:15px;width:${rx - 18}px;top:${(o.rowY ?? 191) + i * (o.rowStep ?? 27)}px;height:20px;display:flex;justify-content:space-between;align-items:center;white-space:nowrap;letter-spacing:-.02em;font-size:${o.rowFs ?? 15}px"><span style="color:var(--text)">${E(r[0])}</span><span class="mono cream${F(r)}">${E(r[1])}</span></div>`);
   (data.meters || []).forEach((m, i) => {
-    const x = mx + i * 22, H = my1 - my0;
-    html += `<div style="position:absolute;left:${x}px;top:${my0}px;width:12px;height:${H}px;background:#161615;border-radius:2px;overflow:hidden"><div style="position:absolute;left:0;right:0;bottom:0;height:${m.v * 100}%;background:linear-gradient(#e8e3d6,#bdb8ae)"></div><div style="position:absolute;left:0;right:0;height:2px;bottom:${m.peak * 100}%;background:var(--ember)"></div></div><div class="mono dim" style="position:absolute;left:${x}px;width:12px;text-align:center;top:${my1 + 6}px;font-size:10.5px">${E(m.l)}</div>`;
+    const x = mx + i * (mw + mg), T = performance.now();
+    // ballistics: a hit jumps the bar, then it falls back like a VU (~300 ms); the peak mark holds 700 ms, then falls
+    let v = m.v ?? 0, pk = m.peak;
+    if (m.hit && T - m.hit.t < METER_MS) v = m.hit.base + (m.hit.lvl - m.hit.base) * Math.exp(-(T - m.hit.t) / 300);
+    if (m.peakHold && T - m.peakHold.t < METER_MS) { const a = T - m.peakHold.t; pk = a < 700 ? m.peakHold.lvl : m.peakHold.lvl + ((m.peak ?? v) - m.peakHold.lvl) * Math.min(1, (a - 700) / 800); }
+    v = Math.max(0, Math.min(1, v));
+    html += `<div class="meter" style="position:absolute;left:${x}px;top:${my0}px;width:${mw}px;height:${H}px;background:#2b2926;overflow:hidden">` +
+      `<div style="position:absolute;left:0;right:0;bottom:0;height:${px(v * H)}px;background:#e5dcc6"></div>` +
+      (pk != null ? `<div style="position:absolute;left:0;right:0;height:3px;bottom:${px(pk * H)}px;background:#e5dcc6;border-bottom:1.5px solid #3a3631"></div>` : '') + '</div>';
+    html += `<div class="dim" style="position:absolute;left:${x}px;width:${mw}px;text-align:center;top:${o.labT ?? 13}px;font-size:${o.labFs ?? 13}px;line-height:16px;color:var(--text)">${E(m.l)}</div>` +
+      `<div style="position:absolute;left:${x + 2}px;width:${mw - 4}px;top:${o.ledY ?? 33}px;height:2px;background:${m.led || '#8d887e'}"></div>` +
+      `<div style="position:absolute;left:${x}px;width:${mw}px;text-align:center;top:${my1 + (o.labB ?? 8)}px;font-size:${o.labFs ?? 13}px;line-height:16px;color:var(--text)">${E(m.l)}</div>`;
   });
   return html;
 }

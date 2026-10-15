@@ -153,7 +153,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .ruler i{position:absolute;bottom:0;width:1px;height:6px;background:#4a4844}
 .ruler i.mn{height:3px;background:#33312e}
 .trk{position:absolute;left:0;right:0}
-.trk .lab{position:absolute;left:var(--lab-x,10px);top:0;bottom:0;display:flex;align-items:center;font-size:var(--lab-fs,16px);color:var(--dim);font-family:var(--label-font)}
+.trk .lab{position:absolute;left:var(--lab-x,10px);top:0;bottom:0;display:flex;align-items:center;font-size:var(--lab-fs,16px);color:var(--lab-c,var(--dim));font-family:var(--label-font)}
 .trk .labchip,.labchip{position:absolute;top:50%;transform:translateY(-50%);height:var(--chip-h,24px);line-height:var(--chip-h,24px);padding:0 var(--chip-px,9px);border-radius:var(--chip-r,4px);background:var(--chip-bg,var(--raise));font-family:var(--mono);font-size:var(--chip-fs,11.5px);color:var(--chip-c,var(--text));overflow:hidden;white-space:nowrap}
 .clip{position:absolute;top:0;bottom:0;border-radius:var(--clip-r,7px);background:var(--clip);overflow:hidden;display:flex;align-items:center;font-size:var(--clip-fs,16px);color:var(--cream);white-space:nowrap}
 .clip .cl{position:relative;padding:0 10px;z-index:1}

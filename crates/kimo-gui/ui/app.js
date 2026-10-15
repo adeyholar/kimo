@@ -177,6 +177,8 @@ function frame() {
   if (queue.length > 1) metrics.coalesced += queue.length - 1;
   for (const ev of queue.splice(0)) for (const e of route(ev, state, MODES)) apply(e);
   if (dirty) { dirty = false; render(); metrics.renders++; }
+  // meter ballistics: frames only while a hit/decay window is open, then nothing
+  if (state.animUntil && performance.now() < state.animUntil) { dirty = true; requestFrame(); } else state.animUntil = 0;
   armTicker();
 }
 function setHidden(h) {

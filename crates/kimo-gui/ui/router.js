@@ -16,7 +16,7 @@ export const FAMILIES = [
   ['effects', /^(add_effect|apply_effect|set_effect|add_transition|remove_effect|add_speed|set_posterize|add_adjustment)/],
   ['transform', /^(set_property|set_clip_property|set_props?$|transform|set_transform|keyframe|set_keyframe|add_keyframe|scale|rotate|position|set_motion|add_null|set_parent|set_expression)/],
   ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut)/],
-  ['audio', /^(mix|audio|gain|fader|set_gain|set_fader|mute|solo|pan|compress|eq|limiter|loudness|duck|stem|bus|route_)/],
+  ['audio', /^(set_|add_|apply_|auto_|measure_|normalize_|analyze_)?(mix|audio|gain|fader|mute|solo|pan|compress|eq|limiter|limit|loudness|duck|stem|bus|route_)/],
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
   ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track)/],
   ['export', /^(export|render|queue_render|encode|deliver)/],
@@ -224,6 +224,56 @@ function timelineOps1(tl, ev, fam) {
   return false;
 }
 
+
+// Audio family on the mixing screen's own panels (m04): EQ nodes, compressor curve + gain
+// reduction, Pan row, loudness readout and meter ballistics. Nothing here adds a panel.
+const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+export function fmtPan(v) { const n = num(v); if (n == null) return String(v ?? ''); const p = Math.round(Math.abs(n) <= 1 ? n * 100 : n); return p === 0 ? 'C' : (p < 0 ? 'L' : 'R') + Math.abs(p); }
+function audioOps(state, MODES, ev) {
+  const P = ev.payload || {}, A = P.args || {}, n = String(ev.tool_name).toLowerCase(), t = now();
+  const V = views(state), M = MODES[state.mode]; let hit = false;
+  const get = k => P[k] ?? A[k];
+  const kvs = Object.entries(M.panels).filter(([, s]) => s.kind === 'kv').map(([k]) => V[k]).filter(Boolean);
+  const blocks = kvs.flatMap(k => k.blocks || []);
+  const eq = blocks.find(b => b.widget === 'eq'), comp = blocks.find(b => b.widget === 'comp');
+  if (eq && (/eq/.test(n) || /eq/.test(String(get('effect') ?? '')))) {
+    const f = num(get('freq') ?? get('f') ?? get('frequency')), g = num(get('gain') ?? get('g') ?? get('to')), q = num(get('q'));
+    const bands = (eq.bands || []).filter(B => B.g != null && !/pass/.test(B.type || ''));
+    let B = get('band') != null ? bands[+get('band')] : null;
+    if (!B && f != null) B = bands.reduce((best, x) => (!best || Math.abs(Math.log(x.f / f)) < Math.abs(Math.log(best.f / f)) ? x : best), null);
+    B = B || bands.find(x => x.sel) || bands[0];
+    if (B) { if (f != null) B.f = f; if (g != null) B.g = g; if (q != null) B.q = q; bands.forEach(x => { x.sel = x === B; }); B._flash = t; eq._flash = t; hit = true; }
+  }
+  if (comp && /compress|comp(?!ute)|limit/.test(n)) {
+    const th = num(get('threshold')), ra = num(get('ratio')), inp = num(get('input_db') ?? get('level'));
+    if (th != null && th !== comp.threshold) { comp.threshold = th; comp._flashT = t; }
+    if (ra != null && ra !== comp.ratio) { comp.ratio = ra; comp._flashR = t; }
+    comp.inDb = inp ?? Math.min(0, (comp.threshold ?? -18) + 8);   // where the signal sits on the curve while the call runs
+    comp._grT = t; hit = true;
+  }
+  if (/pan/.test(n)) {
+    const v = get('pan') ?? get('value') ?? get('to');
+    const row = blocks.find(b => b.k && /^pan$/i.test(b.k));
+    if (row && v != null) { const nv = fmtPan(v); if (nv !== row.v) { row.from = row.v; row.v = nv; } row._flash = t; hit = true; }
+  }
+  // loudness readout + meters: every audio call moves the meters (a hit then decay); loudness tools set the number
+  const L = Object.entries(M.panels).filter(([, s]) => s.kind === 'loudness').map(([k]) => V[k] || (V[k] = {}))[0];
+  if (L) {
+    const lufs = num(P.lufs ?? P.to ?? get('target_lufs') ?? get('lufs'));
+    if (/loud|normaliz|lufs/.test(n) && lufs != null) { L.lufs = lufs.toFixed(1); L._flash = t; }
+    const gain = num(get('gain') ?? get('gain_db')) ?? 0;
+    for (const m of (L.meters || [])) {
+      const base = m.v ?? .5, lvl = Math.max(0, Math.min(1, base + .12 + gain * .03));
+      m.hit = { t, lvl, base };
+      if (m.peak == null || lvl > m.peak) m.peakHold = { t, lvl };
+    }
+    state.animUntil = Math.max(state.animUntil || 0, t + METER_MS);
+    hit = true;
+  }
+  return hit;
+}
+export const METER_MS = 1600;   // hit + VU decay + peak-hold fall: frames run only inside this window
+
 // Unified event -> legacy rail events + family effects. Returns the legacy
 // events the reducer should apply (the rail), having already mutated views.
 export function route(ev, state, MODES) {
@@ -239,6 +289,7 @@ export function route(ev, state, MODES) {
   } else if (ev.phase === 'progress') {
     const pct = P.pct ?? (P.done != null && P.total ? 100 * P.done / P.total : null);
     out.push({ type: 'tool_progress', id, progress: P.done != null ? { done: P.done, total: P.total } : { pct } });
+    if (fam === 'audio' && /compress|comp(?!ute)|limit/.test(String(ev.tool_name).toLowerCase())) audioOps(state, MODES, ev);
     if (fam === 'color' && pct != null) { const v = views(state); v.viewer = v.viewer || {}; v.viewer.wipe = pct / 100; }
     hud(state, ev, fam, `${ev.tool_name} ${pct != null ? Math.round(pct) + '%' : ''}`.trim());
   } else if (ev.phase === 'complete' || ev.phase === 'error') {
@@ -250,7 +301,7 @@ export function route(ev, state, MODES) {
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
       if (/false_?colou?r/.test(String(ev.tool_name).toLowerCase())) { v.viewer = v.viewer || {}; v.viewer.falsecolor = { split: P.split ?? .5 }; }
-      const hit = timelineOps(state, MODES, ev, fam);
+      const hit = timelineOps(state, MODES, ev, fam) | (fam === 'audio' ? audioOps(state, MODES, ev) : false);
       const diff = inspectorDiff(state, MODES, ev, fam);
       if (!hit && !diff) hud(state, ev, fam, ev.tool_name + ' ✓'); else hud(state, ev, fam, ev.tool_name + ' ✓');
     } else hud(state, ev, fam, ev.tool_name + ' failed');

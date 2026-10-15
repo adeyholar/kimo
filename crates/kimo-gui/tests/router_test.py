@@ -147,6 +147,57 @@ async def main():
         ok_burst = m['qmax'] <= m['qmax_cap'] and m['raf'] - r0 <= 6 and all(s == 'ok' for s, _ in last) and [d for _, d in last] == [100 + k for k in range(50)]
         print(f"{'PASS' if ok_burst else 'FAIL'}  burst 250 events in {m['burst']:.1f} ms: {m['raf'] - r0} rAF, max queue {m['qmax']} (cap {m['qmax_cap']}), coalesced {m['coalesced']}, dropped {m['dropped']}, 50/50 settled with exact durations")
         if not ok_burst: fails.append('burst')
+
+        # ---- m04 audio family: EQ node, compressor + live gain reduction, Pan, loudness, meter ballistics ----
+        pg3 = await ctx.new_page(); errs3 = []; pg3.on('pageerror', lambda e: errs3.append(str(e)))
+        await pg3.goto(url.replace('scenario=m16', 'scenario=m04')); await pg3.wait_for_function('window.__kimo && __kimo.metrics.renders > 0'); await pg3.wait_for_timeout(400)
+        async def acall(k, name, args, done, mid=None):
+            cid = f'a{k}'; tg = {'track_id': 'Dialogue', 'clip_id': None, 'param': None}
+            await pg3.evaluate('e => __kimo.apply(e)', {'tool_name': name, 'call_id': cid, 'phase': 'start', 'target': tg, 'payload': {'args': args}})
+            await pg3.evaluate('e => __kimo.apply(e)', {'tool_name': name, 'call_id': cid, 'phase': 'progress', 'target': tg, 'payload': {'pct': 50, 'args': args}})
+            await pg3.wait_for_timeout(50)
+            if mid is not None: mid.append(await pg3.evaluate("[...document.querySelectorAll('[data-panel=audio] svg line')].some(l => l.getAttribute('stroke') === 'var(--ember)')"))
+            await pg3.evaluate('e => __kimo.apply(e)', {'tool_name': name, 'call_id': cid, 'phase': 'complete', 'target': tg, 'payload': {'dur_ms': 40 + k, 'args': args, **done}})
+            await pg3.wait_for_timeout(60)
+        snap = "() => ({eq: [...document.querySelectorAll('[data-panel=audio] svg circle')].map(c => c.getAttribute('cx') + ',' + c.getAttribute('cy')).join(' '), audio: document.querySelector('[data-panel=audio]').textContent, loud: document.querySelector('[data-panel=loud]').textContent, meter: [...document.querySelectorAll('[data-panel=loud] .meter > div')].map(d => d.style.height + d.style.bottom).join('|')})"
+        s0 = await pg3.evaluate(snap)
+        await acall(1, 'set_eq_band', {'band': 2, 'freq': 4200, 'gain': 6.5}, {})
+        s1 = await pg3.evaluate(snap)
+        gr = []
+        await acall(2, 'compress', {'threshold': -22, 'ratio': 4}, {}, gr)
+        s2 = await pg3.evaluate(snap)
+        await acall(3, 'set_pan', {'pan': -0.3}, {})
+        s3 = await pg3.evaluate(snap)
+        await acall(4, 'normalize_loudness', {'target_lufs': -16}, {'lufs': -16.0})
+        s4 = await pg3.evaluate(snap)
+        mid_meter = s4['meter']
+        await pg3.wait_for_timeout(2200)
+        s5 = await pg3.evaluate(snap)
+        ra = await pg3.evaluate('__kimo.metrics.raf'); await pg3.wait_for_timeout(1500); rb = await pg3.evaluate('__kimo.metrics.raf')
+        bad3 = await pg3.evaluate(BAD.replace('[data-panel=insp]', '[data-panel=audio]'))
+        checks = {'eq node moved': s1['eq'] != s0['eq'], 'gain reduction drawn mid-call': bool(gr and gr[0]),
+                  'threshold -22 / ratio 4:1': '-22 dB' in s2['audio'] and '4:1' in s2['audio'], 'pan C → L30': 'L30' in s3['audio'],
+                  'LUFS -16.0': '-16.0' in s4['loud'], 'meters moved then settled': mid_meter != s5['meter'], 'idle after decay': ra == rb,
+                  'no bad text': not bad3, 'no page errors': not errs3}
+        ok_a = all(checks.values())
+        print(f"{'PASS' if ok_a else 'FAIL'}  m04 audio: " + ', '.join(f"{k}={'ok' if v else 'NO'}" for k, v in checks.items()))
+        if not ok_a: fails.append('m04-audio')
+        # ---- frame latch: one engine frame, then 30 calls hopping modes; the viewer never blanks or changes ----
+        pg4 = await ctx.new_page(); await pg4.goto(url.replace('feed=sim&scenario=m16&still=1', 'feed=off')); await pg4.wait_for_timeout(300)
+        png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+        await pg4.evaluate('e => __kimo.apply(e)', {'type': 'frame_rendered', 'png_b64': png, 'call_id': 'f0'}); await pg4.wait_for_timeout(80)
+        src0 = await pg4.evaluate("(document.querySelector('[data-panel=viewer] .frame img') || {}).src || ''")
+        hop = ['add_clip', 'add_effect', 'grade', 'compress', 'set_property', 'add_caption', 'export_render', 'add_mesh', 'split_clip', 'normalize_loudness']
+        latched = bool(src0)
+        for k in range(30):
+            nm = hop[k % len(hop)]
+            await pg4.evaluate('e => __kimo.apply(e)', {'tool_name': nm, 'call_id': f'h{k}', 'phase': 'start', 'target': {}, 'payload': {'args': {}}})
+            await pg4.evaluate('e => __kimo.apply(e)', {'tool_name': nm, 'call_id': f'h{k}', 'phase': 'complete', 'target': {}, 'payload': {'dur_ms': 5}})
+            await pg4.wait_for_timeout(40)
+            s = await pg4.evaluate("(document.querySelector('[data-panel=viewer] .frame img') || {}).src || ''")
+            if s != src0: latched = False; print('   frame changed/blank after', nm, 'mode', await pg4.evaluate('__kimo.state.mode')); break
+        print(f"{'PASS' if latched else 'FAIL'}  frame latch: 1 engine frame, 30 calls across modes, viewer src unchanged after every frame")
+        if not latched: fails.append('frame-latch')
         await b.close()
     srv.shutdown()
     print('\nRESULT:', 'every tool call visible' if not fails else 'FAILED: ' + ', '.join(fails))
