@@ -119,6 +119,7 @@ get_transform 83826286de84a06e
 grade_node_tracking 1ffa2a4a07a2951e
 group_clips 39d53498853f9730
 history_list bb1a0f89a5fcc401
+import_gltf_surface b859a094e4817dbb
 import_media 71b2675a5298c594
 import_mesh_raw 333cadbf73de6f0d
 import_pixels 90496dc0f91defc9
@@ -230,6 +231,7 @@ render_mesh_cpu_reference 106df2b961354147
 render_ocio_display_view 413392dc0f5e7a7b
 render_offscreen_mesh_normal e5810f0e1140caa9
 render_scope 0ba759192f5e77dd
+render_textured_bvh ff1f91fde6db4cfa
 render_vertex_stream_pbr e257a7f88203a83d
 reorder_mask b182a28a665330c4
 restore dab5b50df493b4be
@@ -247,6 +249,7 @@ sample_pbr_raw 86bc792607aa9747
 sample_property 3994cff551e8910e
 sample_sdf_graph b9b932be852b16ac
 sample_sdf_raw b0e579f1cde1279c
+sample_texture_material 4a03308329ef702a
 save_project d51a7abb5be457b3
 session_stats 08b78ec5daffb184
 set_animator_keyframe 462777ee7d21e1fe
