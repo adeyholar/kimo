@@ -104,6 +104,7 @@ const RULES = [
   [/loudness|audio|duck|detect_beats|mix_audio|normalize/, 'mixing'],
   [/scope|exposure|ocio|gamut|hdr_|cie/, 'color'],
   [/effect|adjustment_layer|posterize|transition|speed_lines/, 'effects'],
+  [/^(add|remove|delete|move|rename|lock)_track/, 'edit'],          // timeline tracks, not camera tracking
   [/track|stabiliz|undistort|camera_solve/, 'tracking'],
   [/mesh|sdf|lathe/, 'modelling'],
   [/hud|detection_box|counter|prompt_box|path_shape|shape_modifier|layer_style/, 'graphics'],

@@ -147,14 +147,23 @@ function buildLayout() {
 // hidden or minimized: no rAF, no timers.
 const queue = [];
 let rafId = 0, dirty = true, hidden = document.visibilityState === 'hidden';
-export const metrics = { raf: 0, renders: 0, ticks: 0, events: 0, coalesced: 0 };
+export const QMAX = 2048;
+export const metrics = { raf: 0, renders: 0, ticks: 0, events: 0, coalesced: 0, dropped: 0, qmax: 0 };
 function enqueue(ev) {
   metrics.events++;
   // Hidden: fold the event into state right away (the reducer never touches
   // the DOM) so the queue cannot grow without bound; the one paint happens
   // when the window comes back.
   if (hidden) { for (const e of route(ev, state, MODES)) apply(e); return; }
-  queue.push(ev); requestFrame();
+  // Bursts: progress for a call already waiting in this frame replaces the older
+  // one (only the newest wipe position matters), and the queue is capped:
+  // past QMAX the oldest progress goes first, then the oldest event.
+  const pid = ev && (ev.phase === 'progress' ? ev.call_id : ev.type === 'tool_progress' ? ev.id : undefined);
+  if (pid !== undefined) {
+    for (let i = queue.length - 1; i >= 0; i--) { const q = queue[i]; if ((q.phase === 'progress' && q.call_id === pid) || (q.type === 'tool_progress' && q.id === pid)) { queue[i] = ev; metrics.coalesced++; requestFrame(); return; } }
+  }
+  if (queue.length >= QMAX) { const j = queue.findIndex(q => q.phase === 'progress' || q.type === 'tool_progress'); queue.splice(j >= 0 ? j : 0, 1); metrics.dropped++; }
+  queue.push(ev); if (queue.length > metrics.qmax) metrics.qmax = queue.length; requestFrame();
 }
 function schedule() { dirty = true; requestFrame(); }
 function requestFrame() { if (!rafId && !hidden) rafId = requestAnimationFrame(frame); }

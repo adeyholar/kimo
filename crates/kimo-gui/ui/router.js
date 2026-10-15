@@ -14,7 +14,7 @@ export const FAMILIES = [
   ['ingest', /^(import|ingest|add_media|relink|load_media|add_clip|add_track|insert)/],
   ['edit', /^(cut|split|blade|razor|trim|extend|ripple|slip|slide|move_clip|delete_clip|lift|roll)/],
   ['effects', /^(add_effect|apply_effect|set_effect|add_transition|remove_effect|add_speed|set_posterize|add_adjustment)/],
-  ['transform', /^(transform|set_transform|keyframe|set_keyframe|add_keyframe|scale|rotate|position|set_motion|add_null|set_parent|set_expression)/],
+  ['transform', /^(set_property|set_clip_property|set_props?$|transform|set_transform|keyframe|set_keyframe|add_keyframe|scale|rotate|position|set_motion|add_null|set_parent|set_expression)/],
   ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut)/],
   ['audio', /^(mix|audio|gain|fader|set_gain|set_fader|mute|solo|pan|compress|eq|limiter|loudness|duck|stem|bus|route_)/],
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
@@ -80,11 +80,18 @@ function inspectorDiff(state, MODES, ev, fam) {
   if (param != null && (P.to != null || P.value != null)) { if (set(param, P.to ?? P.value, P.from)) return true; }
   // Unknown or unmapped: a small section for the latest call's payload (replaces the previous one).
   const i = kv.blocks.findIndex(b => b._live); if (i >= 0) kv.blocks.splice(i);
-  const rows = Object.entries(P).filter(([k, v]) => v != null && typeof v !== 'object').slice(0, 3);
-  if (param != null && !rows.length && (P.to ?? P.value) != null) rows.push([param, P.to ?? P.value]);
-  if (!rows.length) return false;
+  // what changed first (param / from / to / effect / label / text), bookkeeping (timing, bounds, diffs) never
+  const FIRST = ['param', 'from', 'to', 'value', 'effect', 'label', 'text', 'on', 'at', 'clip', 'track'];
+  const HIDE = /^(dur_ms|duration_ms|duration|start|end|s|e|changed|mutated|result|images|ts|ts_ms|stage|elapsed_ms|progress|pct)$/;
+  const rank = k => { const i = FIRST.indexOf(k); return i < 0 ? FIRST.length : i; };
+  const rows = Object.entries(P).filter(([k, v]) => v != null && typeof v !== 'object' && !HIDE.test(k)).sort((a, b) => rank(a[0]) - rank(b[0])).slice(0, 4);
+  const val = P.to ?? P.value, head = param != null && val != null;
+  const rest = head ? rows.filter(([k]) => !['param', 'from', 'to', 'value'].includes(k)).slice(0, 3) : rows;
+  if (!head && !rest.length) return false;
   kv.blocks.push({ sec: ev.tool_name, _live: true });
-  for (const [k, v] of rows) kv.blocks.push({ k: label(k), v: fmtVal(v, k), _live: true, _flash: now() });
+  // the change itself leads: "Amount 0 → 0.35"
+  if (head) kv.blocks.push({ k: label(param), v: fmtVal(val, param), ...(P.from != null ? { from: fmtVal(P.from, param) } : {}), _live: true, _flash: now() });
+  for (const [k, v] of rest) kv.blocks.push({ k: label(k), v: fmtVal(v, k), _live: true, _flash: now() });
   return true;
 }
 
@@ -93,26 +100,96 @@ function hud(state, ev, fam, text) {
 }
 
 // Timeline effects of edit / ingest / effects / audio / text tools.
+// The timeline a call lands on: the current mode's, else the edit mode's
+// (so a real session that hops modes still builds one timeline).
+function timelineView(state, MODES) {
+  if (state.liveTL) return state.liveTL;
+  const here = panels(state, MODES, ['timeline'])[0];
+  if (here && here.tracks && here.tracks.length) return here;       // a scenario's own timeline
+  // cold (engine) session: ONE timeline object, installed in every mode that draws a timeline,
+  // so hopping modes as the tools change never shows a different or empty timeline
+  const tl = state.liveTL = here || {};
+  for (const [mode, M] of Object.entries(MODES)) for (const [name, spec] of Object.entries(M.panels)) {
+    if (spec.kind !== 'timeline') continue;
+    const V = state.views[mode] || (state.views[mode] = {});
+    if (!V[name] || !(V[name].tracks && V[name].tracks.length)) V[name] = tl;
+  }
+  return tl;
+}
+// A real session starts empty: tracks and clips are created when a call
+// first names them. New tracks append below existing ones (fixed row height
+// inside a fixed panel), so nothing already on screen moves.
+function ensureTrack(tl, id, hint) {
+  tl.tracks = tl.tracks || [];
+  let t = findTrack(tl, id);
+  if (!t && id != null) {
+    const audio = /audio|^a\d|music|dialog|sfx|stem/i.test(String(hint || id));
+    const n = tl.tracks.filter(x => (x.kind || 'v') === (audio ? 'a' : 'v')).length + 1;
+    t = { id, label: /^track\d+$/i.test(id) || !isNaN(id) ? (audio ? 'A' : 'V') + n : String(id), kind: audio ? 'a' : 'v', clips: [], _flash: now() };
+    tl.tracks.push(t); tl._auto = tl._auto ?? !tl.ruler;
+  }
+  return t;
+}
+// An auto (engine-built) timeline's ruler grows to fit its clips; a scenario's ruler is left alone.
+function fitRuler(tl) {
+  if (!tl._auto) return;
+  let e = 0; for (const t of tl.tracks || []) for (const c of t.clips || []) e = Math.max(e, +c.e || 0);
+  const t1 = Math.max(10, Math.ceil(e * 1.15));
+  if (!tl.ruler || tl.ruler.t1 < t1) tl.ruler = { t0: 0, t1, step: t1 <= 12 ? 2 : t1 <= 30 ? 5 : t1 <= 90 ? 10 : 30, edge: true };
+}
+function insertClip(tl, t, c) {
+  const s = +c.s, e = +c.e;
+  // overwrite edit: whatever sat under the new clip is trimmed back to it
+  t.clips = (t.clips || []).filter(k => !(k.s >= s && k.e <= e) || k.id === c.id);
+  for (const k of t.clips) { if (k.id === c.id) continue; if (k.s < s && k.e > s) k.e = s; else if (k.s < e && k.e > e) k.s = e; }
+  const i = t.clips.findIndex(k => k.id != null && k.id === c.id);
+  if (i >= 0) Object.assign(t.clips[i], c); else t.clips.push(c);
+  t.clips.sort((a, b) => a.s - b.s);
+}
+
 function timelineOps(state, MODES, ev, fam) {
-  const tl = panels(state, MODES, ['timeline'])[0]; if (!tl || !tl.tracks) return false;
+  const tl = timelineView(state, MODES); if (!tl) return false;
+  const hit = timelineOps1(tl, ev, fam);
+  if (hit) {
+    fitRuler(tl);
+    const P = ev.payload || {};
+    // playhead follows the engine's own offsets: a cut point, else the start of the clip just touched
+    const at = P.at ?? (fam === 'ingest' || fam === 'text' ? P.e : null);
+    if (at != null && Number.isFinite(+at)) tl.playhead = +at;
+  }
+  return hit;
+}
+function timelineOps1(tl, ev, fam) {
   const P = ev.payload || {}, T = ev.target || {}, n = String(ev.tool_name).toLowerCase();
   const ph = P.at ?? tl.playhead;
-  if (fam === 'ingest' && (P.s != null || P.clip || n.startsWith('add_track'))) {
-    let t = findTrack(tl, T.track_id || P.track);
-    if (!t) { t = { label: T.track_id || P.track || 'V' + (tl.tracks.length + 1), clips: [] }; tl.tracks.unshift(t); }
-    if (P.s != null) {
-      t.clips = t.clips || []; const s = +P.s, e = +(P.e ?? s + 4);
-      // overwrite edit: whatever sat under the new clip is trimmed back to it
-      t.clips = t.clips.filter(c => !(c.s >= s && c.e <= e));
-      for (const c of t.clips) { if (c.s < s && c.e > s) c.e = s; else if (c.s < e && c.e > e) c.s = e; }
-      t.clips.push({ id: T.clip_id || P.clip, label: P.label || T.clip_id || P.clip, s: +P.s, e: +(P.e ?? +P.s + 4), thumb: P.thumb, _flash: now() }); }
+  // add_track: an empty lane appears (engine reports it under changed.tracks_added)
+  const added = (P.changed && P.changed.tracks_added) || [];
+  if (/^add_track/.test(n) || (added.length && P.s == null)) {
+    const ids = added.length ? added.map(x => (x && typeof x === 'object') ? (x.track_id ?? x.id) : x) : [T.track_id || P.track || 'track' + ((tl.tracks || []).length + 1)];
+    for (const id of ids) ensureTrack(tl, id, P.kind || P.type);
+    return true;
+  }
+  // any insert the engine reports (clip + track + s/e): import, add_clip, add_text, add_audio...
+  if (fam !== 'edit' && P.clip != null && P.s != null && (P.track != null || T.track_id != null)) {
+    const t = ensureTrack(tl, P.track ?? T.track_id, P.kind || P.source_type || n);
+    insertClip(tl, t, { id: P.clip, label: P.text ?? P.label ?? P.clip, s: +P.s, e: +(P.e ?? +P.s + 4), thumb: P.thumb, ...(fam === 'text' ? { cls: 'cap' } : {}), _flash: now() });
     t._flash = now(); return true;
   }
-  const [t, i] = findClip(tl, T);
+  if (!tl.tracks) tl.tracks = [];
+  if (fam === 'ingest' && P.s != null) {
+    const t = ensureTrack(tl, T.track_id || P.track || 'V' + (tl.tracks.length + 1));
+    insertClip(tl, t, { id: T.clip_id || P.clip, label: P.label || T.clip_id || P.clip, s: +P.s, e: +(P.e ?? +P.s + 4), thumb: P.thumb, _flash: now() });
+    t._flash = now(); return true;
+  }
+  let [t, i] = findClip(tl, T);
+  // a call on a clip this window has not seen yet (joined mid-session): the engine sent its bounds, so draw it first
+  if (!t && T.clip_id && T.track_id && (fam === 'edit' || fam === 'effects') && P.s != null && P.e != null && !/^(split|cut|blade|razor)/.test(n)) {
+    t = ensureTrack(tl, T.track_id); insertClip(tl, t, { id: T.clip_id, label: T.clip_id, s: +P.s, e: +P.e }); i = t.clips.findIndex(c => c.id === T.clip_id);
+  }
   if (fam === 'edit' && t) {
     const c = t.clips[i];
     if (/^(cut|split|blade|razor)/.test(n) && ph > c.s && ph < c.e) {
-      const right = { ...c, id: (c.id || c.label) + '_b', s: ph, _flash: now() };
+      const right = { ...c, id: P.clip != null && P.clip !== c.id ? P.clip : (c.id || c.label) + '_b', label: c.label, s: ph, _flash: now() };
       delete right.thumb;
       c.e = ph; c._flash = now();
       t.clips.splice(i + 1, 0, right);
@@ -132,7 +209,7 @@ function timelineOps(state, MODES, ev, fam) {
     }
     if (/^(move|slide)/.test(n) && P.s != null) { const d = +P.s - c.s; c.s += d; c.e += d; c._flash = now(); return true; }
   }
-  if (fam === 'effects' && t) {
+  if (fam === 'effects' && t && /^(add|apply)_/.test(n)) {
     const c = t.clips[i]; const fx = P.effect || P.name || P.type || n.replace(/^(add|apply)_(effect_?)?/, '');
     c.fx = [...(c.fx || []).filter(x => x !== fx), fx]; c._flash = now(); return true;
   }

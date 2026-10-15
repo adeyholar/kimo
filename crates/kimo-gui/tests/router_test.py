@@ -99,6 +99,54 @@ async def main():
         print(f"{'PASS' if idle else 'FAIL'}  idle after the burst: {r1 - r0} rAF in 3 s")
         if not idle: fails.append('idle')
         if errs: print('page errors:', errs); fails.append('pageerror')
+
+        # ---- cold real-engine session (?feed=off): events shaped like kimo-mcp's (no `type`) ----
+        pg2 = await ctx.new_page(); errs2 = []; pg2.on('pageerror', lambda e: errs2.append(str(e)))
+        await pg2.goto(url.replace('feed=sim&scenario=m16&still=1', 'feed=off')); await pg2.wait_for_timeout(300)
+        async def call(k, name, target, done, start_args=None):
+            cid = f'c{k}'
+            await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': name, 'call_id': cid, 'phase': 'start', 'target': target, 'payload': {'args': start_args or {}}, 'ts': k})
+            ph = 'error' if 'error' in done else 'complete'
+            await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': name, 'call_id': cid, 'phase': ph, 'target': target, 'payload': {'dur_ms': 10 + k, **done}, 'duration_ms': 10 + k, 'ts': k})
+            await pg2.wait_for_timeout(60)
+        T = lambda tr=None, cl=None, pa=None: {'track_id': tr, 'clip_id': cl, 'param': pa}
+        tracks_js = "[...document.querySelectorAll('.tl .trk')].map(e => { const r = e.getBoundingClientRect(); return [e.querySelector('.lab') ? e.querySelector('.lab').textContent : '', Math.round(r.y), e.querySelectorAll('.clip').length]; })"
+        await call(1, 'add_track', T(), {'changed': {'tracks_added': ['track1']}, 'mutated': True})
+        await call(2, 'add_clip', T('track1'), {'clip': 'clip2', 'track': 'track1', 's': 0, 'e': 6, 'label': 'gradient', 'mutated': True})
+        before = await pg2.evaluate(tracks_js)
+        await call(3, 'add_track', T(), {'changed': {'tracks_added': ['track3']}})
+        after = await pg2.evaluate(tracks_js)
+        await call(4, 'add_text', T('track3'), {'clip': 'clip4', 'track': 'track3', 's': 0.5, 'e': 5.5, 'label': 'KIMO', 'text': 'KIMO'})
+        await call(5, 'add_effect', T('track1', 'clip2'), {'effect': 'temperature', 's': 0, 'e': 6})
+        await call(6, 'set_effect_param', T('track1', 'clip2', 'amount'), {'param': 'amount', 'from': 0.0, 'to': 0.35, 's': 0, 'e': 6})
+        await call(7, 'set_property', T('track3', 'clip4', 'scale'), {'from': 1, 'to': 1.25, 's': 0.5, 'e': 5.5})
+        await call(8, 'split_clip', T('track1', 'clip2'), {'clip': 'clip7', 'track': 'track1', 's': 3, 'e': 6, 'at': 3})
+        await call(9, 'frobnicate_widget', T(), {'error': 'unknown tool'})
+        final = await pg2.evaluate("__kimo.state.liveTL.tracks.map(t => [t.label, t.clips.length])")
+        fx = await pg2.evaluate("__kimo.state.liveTL.tracks.flatMap(t => t.clips.flatMap(c => c.fx || []))")
+        insp = await pg2.evaluate("[...document.querySelectorAll('[data-panel=insp] .row')].map(e => e.textContent)")
+        bad2 = await pg2.evaluate(BAD)
+        rail2 = await pg2.evaluate("__kimo.state.calls.map(c => [c.name, c.status, c.dur_ms, Object.entries(c.args || {}).map(([k, v]) => k + ': ' + v).join(', ')])")
+        ok_cold = (len(before) == 1 and before[0][2] == 1 and len(after) == 2 and after[0][1] == before[0][1]   # V1 did not move when V2 arrived
+                   and final[0][1] == 2 and final[1][1] == 1 and 'temperature' in fx and not bad2 and not errs2
+                   and any(c[0] == 'set_property' and 'scale: 100% → 125%' in str(c[3]) for c in rail2)
+                   and [c[1] for c in rail2] == ['ok'] * 8 + ['error'] and [c[2] for c in rail2] == [10 + k for k in range(1, 10)])
+        print(f"{'PASS' if ok_cold else 'FAIL'}  cold engine session: tracks {final} fx {fx} rail {[c[1] for c in rail2]} V1 y {before[0][1] if before else None}->{after[0][1] if after else None}")
+        if bad2: print('   bad text:', bad2[:3])
+        if not ok_cold: fails.append('cold-session')
+        # ---- burst: 50 calls (start, 3 progress, complete) inside 100 ms ----
+        r0 = await pg2.evaluate('__kimo.metrics.raf')
+        await pg2.evaluate("""() => { const t0 = performance.now(); for (let k = 0; k < 50; k++) { const id = 'b' + k, tg = {track_id: 'track1', clip_id: 'clip2', param: 'temperature'};
+            __kimo.apply({tool_name: 'grade', call_id: id, phase: 'start', target: tg, payload: {args: {k}}, ts: k});
+            for (const pct of [25, 50, 75]) __kimo.apply({tool_name: 'grade', call_id: id, phase: 'progress', target: tg, payload: {pct}, ts: k});
+            __kimo.apply({tool_name: 'grade', call_id: id, phase: 'complete', target: tg, payload: {dur_ms: 100 + k, from: 5600 + k, to: 5601 + k}, duration_ms: 100 + k, ts: k}); }
+            window.__burst_ms = performance.now() - t0; }""")
+        await pg2.wait_for_timeout(500)
+        m = await pg2.evaluate('({...__kimo.metrics, burst: window.__burst_ms, qmax_cap: 2048})')
+        last = await pg2.evaluate("__kimo.state.calls.slice(-50).map(c => [c.status, c.dur_ms])")
+        ok_burst = m['qmax'] <= m['qmax_cap'] and m['raf'] - r0 <= 6 and all(s == 'ok' for s, _ in last) and [d for _, d in last] == [100 + k for k in range(50)]
+        print(f"{'PASS' if ok_burst else 'FAIL'}  burst 250 events in {m['burst']:.1f} ms: {m['raf'] - r0} rAF, max queue {m['qmax']} (cap {m['qmax_cap']}), coalesced {m['coalesced']}, dropped {m['dropped']}, 50/50 settled with exact durations")
+        if not ok_burst: fails.append('burst')
         await b.close()
     srv.shutdown()
     print('\nRESULT:', 'every tool call visible' if not fails else 'FAILED: ' + ', '.join(fails))
