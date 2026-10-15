@@ -31,6 +31,21 @@ const now = () => performance.now();
 const FLASH_MS = 700;
 export const flashing = t => t != null && now() - t < FLASH_MS;
 
+// A value as the inspector shows it. Numbers and percent strings both parse:
+// "104%" stays 104%, a scale of 1.12 reads 112%, other numbers lose float noise.
+// Never returns "undefined" / "NaN" / "null".
+export function fmtVal(v, param = '') {
+  if (v == null) return '';
+  if (typeof v === 'boolean') return v ? 'on' : 'off';
+  const s = String(v).trim(), pct = /^(-?\d+(?:\.\d+)?)\s*%$/.exec(s);
+  const n = pct ? +pct[1] : (typeof v === 'number' || /^-?\d+(?:\.\d+)?$/.test(s) ? +s : NaN);
+  if (!Number.isFinite(n)) return Array.isArray(v) ? v.map(x => fmtVal(x)).join(', ') : (typeof v === 'object' ? '' : s);
+  const round = x => String(Math.round(x * 1000) / 1000);
+  if (pct) return round(n) + '%';
+  if (/scale|opacity|zoom/i.test(param) && Math.abs(n) <= 20) return round(n * 100) + '%';
+  return round(n);
+}
+
 function views(state) { return state.views[state.mode] || (state.views[state.mode] = {}); }
 function panels(state, MODES, kinds) {
   const M = MODES[state.mode]; const V = views(state); const out = [];
@@ -59,17 +74,17 @@ function inspectorDiff(state, MODES, ev, fam) {
   const label = k => String(k).replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
   const set = (k, to, from) => {
     const row = kv.blocks.find(b => b.k && b.k.toLowerCase() === String(k).toLowerCase().replace(/_/g, ' '));
-    if (row) { if (from != null || row.v != null) row.from = from ?? row.v; row.v = String(to); row._flash = now(); return true; }
+    if (row) { if (from != null || row.v != null) row.from = from != null ? fmtVal(from, k) : row.v; row.v = fmtVal(to, k); row._flash = now(); return true; }
     return false;
   };
   if (param != null && (P.to != null || P.value != null)) { if (set(param, P.to ?? P.value, P.from)) return true; }
   // Unknown or unmapped: a small section for the latest call's payload (replaces the previous one).
   const i = kv.blocks.findIndex(b => b._live); if (i >= 0) kv.blocks.splice(i);
-  const rows = Object.entries(P).filter(([k, v]) => v == null || typeof v !== 'object').slice(0, 3);
-  if (param != null && !rows.length) rows.push([param, P.to ?? P.value ?? '']);
+  const rows = Object.entries(P).filter(([k, v]) => v != null && typeof v !== 'object').slice(0, 3);
+  if (param != null && !rows.length && (P.to ?? P.value) != null) rows.push([param, P.to ?? P.value]);
   if (!rows.length) return false;
   kv.blocks.push({ sec: ev.tool_name, _live: true });
-  for (const [k, v] of rows) kv.blocks.push({ k: label(k), v: String(v), _live: true, _flash: now() });
+  for (const [k, v] of rows) kv.blocks.push({ k: label(k), v: fmtVal(v, k), _live: true, _flash: now() });
   return true;
 }
 
@@ -139,7 +154,8 @@ export function route(ev, state, MODES) {
   const fam = family(ev.tool_name), id = ev.call_id ?? ev.tool_name + '@' + (ev.ts ?? '');
   const out = [];
   const T = ev.target || {}, P = ev.payload || {};
-  const args = { ...(T.clip_id ? { clip: T.clip_id } : {}), ...(T.param ? { [T.param]: P.to ?? P.value } : {}), ...(P.args || {}) };
+  const param = T.param || P.param, val = P.to ?? P.value;
+  const args = { ...(T.clip_id ? { clip: T.clip_id } : {}), ...(param && val != null ? { [param]: fmtVal(val, param) } : {}) };
   if (ev.phase === 'start') {
     out.push({ type: 'tool_start', id, name: ev.tool_name, args: P.args ? P.args : (Object.keys(args).length ? args : undefined) });
     hud(state, ev, fam);
@@ -150,7 +166,10 @@ export function route(ev, state, MODES) {
     hud(state, ev, fam, `${ev.tool_name} ${pct != null ? Math.round(pct) + '%' : ''}`.trim());
   } else if (ev.phase === 'complete' || ev.phase === 'error') {
     const err = ev.phase === 'error';
-    out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: P.dur_ms, status: err ? 'error' : 'ok', error: P.error });
+    const dur = P.dur_ms ?? ev.duration_ms;
+    // the landed value replaces the rail's start-time args: "scale: 104% → 112%"
+    const landed = !err && param && val != null ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
+    out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(landed ? { args: landed } : {}) });
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
       const hit = timelineOps(state, MODES, ev, fam);

@@ -36,6 +36,8 @@ EVENTS = [
                "[...document.querySelectorAll('[data-panel=tl] .fxchip')].some(e => e.textContent === 'glow')"),
   ('transform', 'set_transform', {'param': 'Scale'}, {'from': '104%', 'to': '110%'},
                "[...document.querySelectorAll('[data-panel=insp] .row')].some(r => r.textContent.includes('110%') && r.textContent.includes('104%'))"),
+  ('transform', 'set_property',  {'clip_id': 'clip4', 'param': 'scale'}, {'from': 1.04, 'to': 1.12},
+               "[...document.querySelectorAll('[data-panel=agent] .call')].some(r => r.textContent.includes('scale: 104% → 112%'))"),
   ('color',     'grade',         {'clip_id': 'clip_04', 'param': 'Temperature'}, {'from': '6050K', 'to': '6200K'},
                "[...document.querySelectorAll('[data-panel=insp] .row')].some(r => r.textContent.includes('6200K'))"),
   ('audio',     'mute_track',    {'track_id': 'A2'}, {'on': True},
@@ -66,6 +68,7 @@ async def main():
         pg.on('pageerror', lambda e: errs.append(str(e)))
         await pg.goto(url); await pg.wait_for_function('window.__kimo && __kimo.metrics.renders > 0'); await pg.wait_for_timeout(400)
         frame = lambda: pg.wait_for_timeout(60)
+        BAD = r"""() => { const re = /\b(undefined|NaN|null)\b/; return [...document.querySelectorAll('[data-panel=agent] .call, [data-panel=insp] .row, [data-panel=insp] .sec')].map(e => e.textContent).filter(s => re.test(s)); }"""
         rail = "() => [...document.querySelectorAll('[data-panel=agent] .call .fn')].map(e => e.textContent)"
         for k, (fam, name, target, payload, check) in enumerate(EVENTS + [('error', 'blade_cut', {'track_id': 'V9', 'clip_id': 'nope'}, {'error': 'no such clip'}, None)]):
             cid = f't{k}'
@@ -84,7 +87,9 @@ async def main():
                 effect = await pg.evaluate("!!document.querySelector('[data-panel=agent] .call.err')")
             else:
                 effect = await pg.evaluate(check)
-            ok = on_start and on_end and effect and name in hud
+            bad = await pg.evaluate(BAD)
+            if bad: print('   bad text on rail/inspector:', bad[:3])
+            ok = on_start and on_end and effect and name in hud and not bad
             rows.append((fam, name, on_start, on_end, effect, hud))
             print(f"{'PASS' if ok else 'FAIL'}  {fam:<9} {name:<18} rail+DOM on start={on_start!s:<5} DOM on end={on_end!s:<5} effect={effect!s:<5} hud='{hud}'", flush=True)
             if not ok: fails.append(name)

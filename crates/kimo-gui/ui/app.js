@@ -59,7 +59,7 @@ export function apply(ev) {
     }
     case 'tool_end': {
       const c = [...state.calls].reverse().find(x => x.id === ev.id) || state.calls[state.calls.length - 1];
-      if (c) { c.dur_ms = ev.dur_ms ?? (performance.now() - c.t); c.status = ev.status || 'ok'; }
+      if (c) { c.dur_ms = ev.dur_ms ?? (performance.now() - c.t); c.status = ev.status || 'ok'; if (ev.args) c.args = ev.args; }
       break;
     }
     case 'tool_progress': {

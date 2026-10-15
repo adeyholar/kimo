@@ -9,8 +9,10 @@ const px = n => Math.round(n * 10) / 10;
 export function fmtArgs(a) {
   if (a == null) return '';
   if (typeof a === 'string') return a;
-  if (Array.isArray(a)) return a.map(x => (x && typeof x === 'object') ? Object.entries(x).map(([k, v]) => `${k}: ${v}`).join(', ') : String(x)).join(', ');
-  return Object.entries(a).map(([k, v]) => `${k}: ${v}`).join(', ');
+  const kv = o => Object.entries(o).filter(([, v]) => v != null && v !== '' && !(typeof v === 'number' && !Number.isFinite(v)))
+    .map(([k, v]) => `${k}: ${v && typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
+  if (Array.isArray(a)) return a.filter(x => x != null).map(x => (typeof x === 'object') ? kv(x) : String(x)).join(', ');
+  return kv(a);
 }
 const fmtDur = ms => (ms == null ? '' : (ms / 1000).toFixed(1) + 's');
 
