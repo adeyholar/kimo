@@ -21,6 +21,7 @@ export const FAMILIES = [
   ['audio', /^(set_|add_|apply_|auto_|measure_|normalize_|analyze_)?(mix|audio|gain|fader|mute|solo|pan|compress|eq|limiter|limit|loudness|duck|stem|bus|route_)|^track_beats$/],
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
   ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents|fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track|undistort_clip|stabilize|apply_camera_solve|pin_layer|set_corner_pin)/],
+  ['graphics', /^(add_shape|add_path_shape|set_path|add_path_key|clear_path_keys|add_shape_modifier|remove_shape_modifier|add_modifier|remove_modifier|set_layer_style|remove_layer_style|add_box_expand|add_detection_box|add_hud_frame|add_counter|add_prompt_box|add_glitch_confetti)$/],
   ['export', /^(export|render|queue_render|encode|deliver)/],
 ];
 export function family(name) {
@@ -152,26 +153,26 @@ function gradeOps(state, MODES, ev) {
       const nk = (A.node && (A.node.kind ?? A.node.effect)) ?? A.kind;
       const addNode = (id, label) => { if (id == null) return; let n = nodes.find(x => x.id === String(id)); if (!n) { n = { id: String(id) }; nodes.push(n); } n.label = label ?? n.label ?? String(id); return n; };
       let graphHit = true;
-      if (tn === 'set_grade_node' || tn === 'add_node') addNode(nid, nk ? `${nid} · ${nk}` : null);
-      else if (tn === 'generate_lut_node') addNode(nid ?? 'lut', `${nid ?? 'lut'} · lut ${numOf(A.size) ?? 33}³`);
+      if (tn === 'set_grade_node' || tn === 'add_node') addNode(nid ?? nk, String(nid ?? nk));
+      else if (tn === 'generate_lut_node') addNode(nid ?? 'lut', String(nid ?? 'lut'));
       else if (tn === 'remove_grade_node') { const k = nodes.findIndex(x => x.id === String(nid)); if (k >= 0) nodes.splice(k, 1); }
       else if (tn === 'set_grade_output') { for (const x of nodes) x.out = false; const n = addNode(nid ?? 'input'); n.out = true; }
-      else if (tn === 'set_node_param') { const n = addNode(nid); if (n) n.label = `${nid} · ${A.parameter ?? 'param'}`; }
-      else if (tn === 'set_node_mask') { const n = addNode(nid); if (n) n.label = `${nid} · ${A.mask ? 'mask' : 'no mask'}`; }
+      else if (tn === 'set_node_param') { addNode(nid); if (A.parameter != null) setRow(String(A.parameter).slice(0, 12), fmtVal(numOf(A.property && A.property.base) ?? A.property?.value ?? '')); }
+      else if (tn === 'set_node_mask') { addNode(nid); setRow('Mask', A.mask ? String(A.mask.kind ?? A.mask.type ?? 'on') : 'off'); }
       else if (tn === 'connect_nodes' || tn === 'disconnect_nodes') { const a = A.from ?? A.source ?? A.src, b = A.to ?? A.target ?? A.dst; if (a != null) addNode(a); if (b != null) addNode(b); if (a != null && b != null) setRow('Edge', `${a} ${tn === 'connect_nodes' ? '→' : '×'} ${b}`); }
       else if (tn === 'create_shared_grade_graph') addNode(`shared:${A.id}`, `shared · ${A.id}`);
       else if (tn === 'remove_shared_grade_graph') { const k = nodes.findIndex(x => x.id === `shared:${A.id}`); if (k >= 0) nodes.splice(k, 1); }
       else if (tn === 'bind_shared_grade_graphs' && Array.isArray(A.graphs)) setRow('Shared', A.graphs.length ? A.graphs.map(String).join(', ') : 'none');
-      else if (tn === 'apply_asc_cdl' && A.path) setRow('CDL', String(A.path).split(/[\\/]/).pop() + (A.encoding === 'ACEScct' ? ' · ACEScct' : ''));
+      else if (tn === 'apply_asc_cdl' && A.path) setRow('CDL', String(A.path).split(/[\\/]/).pop());
       else if (tn === 'set_color_curve' && Array.isArray(A.points)) { setRow(`Curve ${A.channel ?? 'm'}`, `${A.points.length} pts`); const pts = A.points.filter(q => Array.isArray(q) && numOf(q[0]) != null && numOf(q[1]) != null).map(q => [numOf(q[0]), numOf(q[1])]); if (pts.length >= 2) KV._curve = { pts, ch: String(A.channel ?? 'm') }; }
       else if (tn === 'set_grade_scopes' && A.scopes && typeof A.scopes === 'object') { const g = A.scopes.groups, r = A.scopes.graphs; setRow('Scopes', [Array.isArray(g) ? `${g.length} groups` : null, r && typeof r === 'object' ? `${Object.keys(r).length} graphs` : null].filter(Boolean).join(' · ') || 'set'); }
-      else if (tn === 'add_acescct_primaries') { const pr = A.params || {}; const v = ['lift', 'gamma', 'gain', 'offset'].filter(k => numOf(pr[k]) != null).map(k => `${k} ${fmtVal(pr[k])}`).join(' '); setRow('ACEScct', v || 'primaries'); }
+      else if (tn === 'add_acescct_primaries') { const pr = A.params || {}; for (const k of ['lift', 'gamma', 'gain', 'offset']) if (numOf(pr[k]) != null) setRow(k[0].toUpperCase() + k.slice(1), fmtVal(pr[k])); }
       else graphHit = false;
       if (graphHit) {
         hit = true;
         const last = nodes.find(x => x.id === String(nid));
         KV.blocks = KV.blocks.filter(b => !b._nodes);
-        if (nodes.length) KV.blocks.push({ sec: 'Nodes', _grade: true, _nodes: true }, { list: nodes.map((x, i) => `${String(i + 1).padStart(2, '0')}  ${x.label}${x.out ? '  ◂ out' : ''}`), sel: Math.max(0, nodes.indexOf(last ?? nodes.find(x => x.out) ?? nodes[nodes.length - 1])), _grade: true, _nodes: true });
+        if (nodes.length) KV.blocks.push({ sec: 'Nodes', _grade: true, _nodes: true }, { list: nodes.map((x, i) => `${String(i + 1).padStart(2, '0')}  ${x.label}`), sel: Math.max(0, nodes.indexOf(last ?? nodes.find(x => x.out) ?? nodes[nodes.length - 1])), _grade: true, _nodes: true });
         if (KV._curve) { KV.blocks = KV.blocks.filter(b => !b._curveBlk); KV.blocks.push({ curve: KV._curve.pts, ch: KV._curve.ch, _grade: true, _curveBlk: true }); }
       }
     }
@@ -197,6 +198,73 @@ function gradeOps(state, MODES, ev) {
   if (tn === 'match_grade' || tn === 'match_color') { const s1 = box(A.source_region, 'source'), s2 = box(A.ref_region, A.ref_clip_id ? `ref · ${A.ref_clip_id}` : 'ref'); if (s1) regs.push(s1); if (s2) regs.push(s2); }
   if (regs.length) { vw.overlay = (vw.overlay || []).filter(o => o._kind !== tn).concat(regs.filter(Boolean).map(o => ({ ...o, _call: ev.call_id, _kind: tn }))); hit = true; }
   if ((tn === 'match_grade' || tn === 'match_color' || tn === 'pick_white_balance') && !regs.length) { vw.wipe = 1; hit = true; }
+  return hit;
+}
+
+// Graphics (m09): HUD frames, detection boxes, counters, prompt boxes, shapes and paths land on the viewer
+// at the geometry the call carries (normalized rects top-left origin; pixel offsets mapped through the session
+// size), the layer joins the Inspector's Shape layers list, and layer styles write their own rows.
+function graphicsOps(state, MODES, ev) {
+  const P = ev.payload || {}, tn = String(ev.tool_name).toLowerCase();
+  if (ev.phase === 'start') { (state._gfxArgs || (state._gfxArgs = {}))[ev.call_id] = P.args || {}; return false; }
+  if (ev.phase !== 'complete') return false;
+  const A = P.args || (state._gfxArgs && state._gfxArgs[ev.call_id]) || {}; delete (state._gfxArgs || {})[ev.call_id];
+  const R = P.result && typeof P.result === 'object' ? P.result : {};
+  const [mode, V] = modeViews(state, MODES, ev);
+  const vw = V.viewer || (V.viewer = {});
+  const S = state.session || {}, W = S.width, H = S.height;
+  const rect4 = r => Array.isArray(r) && r.length === 4 && r.every(v => numOf(v) != null) ? r.map(numOf) : null;
+  const add = o => { vw.overlay = (vw.overlay || []).filter(x => x._call !== ev.call_id).concat([{ ...o, _call: ev.call_id, _kind: tn }]); };
+  let hit = false, layer = null;
+  if (tn === 'add_detection_box' && [A.x, A.y, A.w, A.h].every(v => numOf(v) != null)) {
+    layer = `det_${A.label ?? 'box'}`; add({ rect: [A.x, A.y, A.w, A.h].map(numOf), label: [A.label, numOf(A.confidence) != null ? numOf(A.confidence).toFixed(2) : null].filter(v => v != null).join(' '), em: true }); hit = true;
+  } else if (tn === 'add_box_expand') {
+    const a = rect4(A.from), b = rect4(A.to) || [0, 0, 1, 1];
+    if (a) { add({ rect: a, label: A.label ?? null, em: true, to: b }); hit = true; layer = 'box_expand'; }
+  } else if (tn === 'add_hud_frame') { add({ brackets: true, label: A.label ?? 'BOXES' }); hit = true; layer = 'hud'; }
+  else if (tn === 'add_counter' && (numOf(A.to) != null || numOf(A.from) != null)) {
+    const x = .5 + (W && numOf(A.x) != null ? numOf(A.x) / W : 0), y = .5 + (H && numOf(A.y) != null ? numOf(A.y) / H : 0);
+    const f = v => (A.prefix ?? '') + (numOf(v) ?? 0).toFixed(numOf(A.decimals) ?? 0) + (A.suffix ?? '');
+    add({ text: `${f(A.from ?? 0)} → ${f(A.to)}`, at: [x, y] }); hit = true; layer = 'counter';
+  } else if (tn === 'add_prompt_box' && A.text != null) {
+    const y = .5 + (numOf(A.y) != null ? numOf(A.y) / 720 : 0);   // engine: px offset from centre at 720p
+    add({ text: String(A.text).slice(0, 48), at: [.5, Math.min(.92, Math.max(.08, y))], box: true }); hit = true; layer = 'prompt';
+  } else if (tn === 'add_shape' && W && H) {
+    const w = (numOf(A.width) ?? 200) / W, h = (numOf(A.height) ?? 200) / H, sh = String(A.shape ?? 'rect');
+    add({ shape: sh, rect: [.5 - w / 2, .5 - h / 2, w, h] }); hit = true; layer = sh;
+  } else if ((tn === 'add_path_shape' || tn === 'set_path' || tn === 'add_path_key') && Array.isArray(A.points) && A.points.length >= 2) {
+    let pts = A.points.map(q => Array.isArray(q) ? [numOf(q[0]), numOf(q[1])] : (q && typeof q === 'object' ? [numOf(q.x), numOf(q.y)] : null)).filter(q => q && q[0] != null && q[1] != null);
+    if (pts.length >= 2) {
+      const norm = pts.every(([x, y]) => Math.abs(x) <= 1.5 && Math.abs(y) <= 1.5);
+      if (!norm && W && H) pts = pts.map(([x, y]) => [x / W, y / H]);
+      if (norm || (W && H)) { add({ path: pts, closed: !!A.closed }); hit = true; layer = 'path'; }
+    }
+  } else if (tn === 'add_glitch_confetti') {
+    const n = Math.min(60, numOf(A.squares) ?? 24), seed = numOf(A.seed) ?? 1;
+    add({ squares: n, seed }); hit = true; layer = 'confetti';
+  }
+  // Inspector: Shape layers list and Layer style rows
+  const kvp = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'kv');
+  if (kvp) {
+    const K = V[kvp[0]] || (V[kvp[0]] = {}); K.blocks = (K.blocks || []).filter(b => b._gfx);
+    const nm = String(R.clip_id ?? R.id ?? A.clip_id ?? layer ?? '');
+    if (layer && nm) {
+      let li = K.blocks.find(b => b._layers);
+      if (!li) { K.blocks.push({ sec: 'Shape layers', _gfx: true }); li = { list: [], sel: 0, _gfx: true, _layers: true }; K.blocks.push(li); }
+      if (!li.list.includes(nm)) li.list.push(nm); li.sel = li.list.indexOf(nm); if (li.list.length > 8) li.list.splice(0, li.list.length - 8);
+    }
+    if ((tn === 'set_layer_style' || tn === 'add_shape_modifier' || tn === 'add_modifier') && (A.params || A.style || A.kind)) {
+      const sec = tn === 'set_layer_style' ? 'Layer style' : 'Modifiers';
+      let at = K.blocks.findIndex(b => b.sec === sec); if (at < 0) { K.blocks.unshift({ sec, _gfx: true }); at = 0; }
+      const rows = Object.entries(A.params || {}).filter(([, v]) => numOf(v) != null).slice(0, 5).map(([k, v]) => ({ k: `${A.style ?? A.kind ?? ''} ${k}`.trim(), v: fmtVal(v, k), ch: true, _gfx: true, _flash: now() }));
+      if (!rows.length) rows.push({ k: String(A.style ?? A.kind), v: 'on', ch: true, _gfx: true, _flash: now() });
+      for (const b of K.blocks) b.ch = false;
+      K.blocks.splice(at + 1, 0, ...rows.filter(r => !K.blocks.some(b => b.k === r.k && (b.v = r.v, b.ch = true, b._flash = now()))));
+      if (A.clip_id != null) K.sub = `${A.clip_id} - shape layer`; hit = true;
+    }
+    if (tn === 'remove_layer_style' || tn === 'remove_shape_modifier' || tn === 'remove_modifier' || tn === 'clear_path_keys') { K.blocks.push({ k: tn.replace(/_/g, ' '), v: String(A.effect_id ?? A.clip_id ?? ''), ch: true, _gfx: true, _flash: now() }); hit = true; }
+  }
+  if (hit) ev._kvDone = true;
   return hit;
 }
 
@@ -457,6 +525,7 @@ export function route(ev, state, MODES) {
   if (fam === 'inspect') return inspectOps(state, MODES, ev, id);
   if (fam === 'transform' && (ev.phase === 'start' || ev.phase === 'complete')) xfOps(state, MODES, ev);
   if (fam === '3d') sceneOps(state, MODES, ev);
+  if (fam === 'graphics') graphicsOps(state, MODES, ev);
   if (ev.phase === 'start' && (fam === 'color' || fam === 'effects')) (state._gradeArgs || (state._gradeArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
   if ((fam === 'color' || fam === 'effects') && gradeOps(state, MODES, ev)) ev._kvDone = true;
   const T = ev.target || {}, P = ev.payload || {};

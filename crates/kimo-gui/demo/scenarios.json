@@ -5929,12 +5929,18 @@
   "views": {
    "viewer": {
     "src": "../demo/frames/m09.jpg",
-    "tag": "graphics \u00b7 V4",
+    "tags": [
+     {
+      "text": "graphics - V4",
+      "x": 25,
+      "y": 21
+     }
+    ],
     "tc": "01:00:06:03",
     "res": "1920 x 1080 30p"
    },
    "insp": {
-    "sub": "hud \u00b7 shape layer",
+    "sub": "hud - shape layer",
     "blocks": [
      {
       "sec": "Layer style"
@@ -5978,9 +5984,13 @@
    },
    "tl": {
     "ruler": {
-     "t0": 1.3,
-     "t1": 10.6,
-     "step": 2
+     "t0": 0.885,
+     "t1": 11.087,
+     "step": 2,
+     "first": 2,
+     "last": 10,
+     "minor": 0.5,
+     "minorFrom": 1.0
     },
     "playhead": 6.0,
     "tracks": [
@@ -5988,16 +5998,18 @@
       "label": "V4",
       "clips": [
        {
-        "s": 1.6,
-        "e": 5.4,
+        "s": 0.885,
+        "e": 5.553,
         "label": "hud",
-        "cls": "mauve sel"
+        "cls": "mauve sel",
+        "sw": true
        },
        {
-        "s": 5.5,
-        "e": 10.6,
+        "s": 5.609,
+        "e": 11.087,
         "label": "counter_speed",
-        "cls": "mauve"
+        "cls": "mauve",
+        "sw": true
        }
       ]
      },
@@ -6005,20 +6017,20 @@
       "label": "V3",
       "clips": [
        {
-        "s": 1.6,
-        "e": 3.9,
+        "s": 0.885,
+        "e": 4.447,
         "label": "det_car",
         "thumb": "../demo/frames/m09_t1.jpg"
        },
        {
-        "s": 4.0,
-        "e": 6.4,
+        "s": 4.502,
+        "e": 7.609,
         "label": "det_person",
         "thumb": "../demo/frames/m09_t2.jpg"
        },
        {
-        "s": 6.5,
-        "e": 10.6,
+        "s": 7.672,
+        "e": 11.087,
         "cls": "ghost"
        }
       ]
@@ -6027,16 +6039,16 @@
       "label": "V2",
       "clips": [
        {
-        "s": 1.6,
-        "e": 5.9,
+        "s": 0.885,
+        "e": 5.553,
         "label": "prompt_1",
-        "cls": "ghost"
+        "sw": true
        },
        {
-        "s": 6.0,
-        "e": 10.6,
+        "s": 5.617,
+        "e": 11.087,
         "label": "- - - -  route",
-        "cls": "ghost"
+        "sw": true
        }
       ]
      },
@@ -6044,10 +6056,11 @@
       "label": "V1",
       "clips": [
        {
-        "s": 1.6,
-        "e": 10.6,
+        "s": 0.885,
+        "e": 11.087,
         "label": "coast_drone",
-        "thumb": "../demo/frames/m09_t3.jpg"
+        "thumb": "../demo/frames/m09_t3.jpg",
+        "bg": "url(../demo/frames/m09_v1.jpg) center/100% 100%"
        }
       ]
      }

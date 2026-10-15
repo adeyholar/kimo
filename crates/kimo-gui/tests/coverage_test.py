@@ -50,6 +50,7 @@ async def main(strict):
              'audio': 'EQ / comp / pan / meters / M-S', 'color': 'grade wipe + false colour', 'export': 'job card: progress bar, settings, renders row',
              'transform': 'viewer gizmo: box + 8 handles + anchor, previous pose, move arrow, readout; keyframe diamonds on the clip; motion path, bezier ease, null, parent link',
              '3d': 'camera orbit ring + frustum + pan keys + axis triad, scene objects in the tree, track quad / ROI / mesh grid / point ring / matte seed on the viewer, light glyph + Lights row, mesh op on the Stack, physics bodies, solve RMS',
+             'graphics': 'viewer: detection box + label, HUD brackets, box expand, counter, prompt box, shape, path, confetti; Shape layers list + Layer style rows',
              'inspect': 'read-only: quiet HUD read state + result pill + peek ring on the target (no mutation, no mode hop)'}
     by = {}
     for n, fam, mode in res: by.setdefault(fam, []).append((n, mode))

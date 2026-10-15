@@ -155,14 +155,14 @@ scen("m08", "modelling", "amphora_study.kimo", "claude", hms("00:34:12"),
 scen("m09", "graphics", "drone_hud.kimo", "cursor", hms("00:27:40"),
   [["add_hud_frame", ["V4", "corners"], 200], ["add_detection_box", ["car", "0.94"], 100], ["add_detection_box", ["person"], 100], ["add_counter", ["speed", "0-72"], 200],
    ["add_prompt_box", ["V2"], 100], ["add_path_shape", ["route", "6 pts"], 100], ["add_shape_modifier", ["trim"], 100], ["set_layer_style", ["hud", "stroke"], 400]],
-  {"viewer": {"src": F("m09"), "tag": "graphics · V4", "tc": "01:00:06:03", "res": "1920 x 1080 30p"},
-   "insp": {"sub": "hud · shape layer", "blocks": [S("Layer style"), K("Stroke", "2 px", **{"from": "1"}), K("Stroke color", "cream"), K("Drop shadow", "off"), K("Inner glow", "off"), K("Opacity", "90%"),
+  {"viewer": {"src": F("m09"), "tags": [{"text": "graphics - V4", "x": 25, "y": 21}], "tc": "01:00:06:03", "res": "1920 x 1080 30p"},
+   "insp": {"sub": "hud - shape layer", "blocks": [S("Layer style"), K("Stroke", "2 px", **{"from": "1"}), K("Stroke color", "cream"), K("Drop shadow", "off"), K("Inner glow", "off"), K("Opacity", "90%"),
             S("Shape layers"), {"list": ["hud", "det_car", "det_person", "counter_speed", "prompt_1", "route"], "sel": 0}]},
-   "tl": {"ruler": {"t0": 1.3, "t1": 10.6, "step": 2}, "playhead": 6.0, "tracks": [
-      {"label": "V4", "clips": [{"s": 1.6, "e": 5.4, "label": "hud", "cls": "mauve sel"}, {"s": 5.5, "e": 10.6, "label": "counter_speed", "cls": "mauve"}]},
-      {"label": "V3", "clips": [{"s": 1.6, "e": 3.9, "label": "det_car", "thumb": F("m09_t1")}, {"s": 4.0, "e": 6.4, "label": "det_person", "thumb": F("m09_t2")}, {"s": 6.5, "e": 10.6, "cls": "ghost"}]},
-      {"label": "V2", "clips": [{"s": 1.6, "e": 5.9, "label": "prompt_1", "cls": "ghost"}, {"s": 6.0, "e": 10.6, "label": "- - - -  route", "cls": "ghost"}]},
-      {"label": "V1", "clips": [{"s": 1.6, "e": 10.6, "label": "coast_drone", "thumb": F("m09_t3")}]}]}},
+   "tl": {"ruler": {"t0": 0.885, "t1": 11.087, "step": 2, "first": 2, "last": 10, "minor": 0.5, "minorFrom": 1.0}, "playhead": 6.0, "tracks": [
+      {"label": "V4", "clips": [{"s": 0.885, "e": 5.553, "label": "hud", "cls": "mauve sel", "sw": True}, {"s": 5.609, "e": 11.087, "label": "counter_speed", "cls": "mauve", "sw": True}]},
+      {"label": "V3", "clips": [{"s": 0.885, "e": 4.447, "label": "det_car", "thumb": F("m09_t1")}, {"s": 4.502, "e": 7.609, "label": "det_person", "thumb": F("m09_t2")}, {"s": 7.672, "e": 11.087, "cls": "ghost"}]},
+      {"label": "V2", "clips": [{"s": 0.885, "e": 5.553, "label": "prompt_1", "sw": True}, {"s": 5.617, "e": 11.087, "label": "- - - -  route", "sw": True}]},
+      {"label": "V1", "clips": [{"s": 0.885, "e": 11.087, "label": "coast_drone", "thumb": F("m09_t3"), "bg": "url(" + F("m09_v1") + ") center/100% 100%"}]}]}},
   stats={"cpu": 54, "ffmpeg": "7.1", "saved_s": 1}, final={"count": 48})
 
 # ---------------------------------------------------------------- m10 particles
