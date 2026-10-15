@@ -25,3 +25,4 @@ pub mod vertex_stream;
 pub mod ingest;
 pub mod lighting_stage;
 pub mod lit_raster;
+pub mod subdivide;
