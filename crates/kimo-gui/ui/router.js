@@ -20,7 +20,7 @@ export const FAMILIES = [
   ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut)/],
   ['audio', /^(set_|add_|apply_|auto_|measure_|normalize_|analyze_)?(mix|audio|gain|fader|mute|solo|pan|compress|eq|limiter|limit|loudness|duck|stem|bus|route_)|^track_beats$/],
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
-  ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents)/],
+  ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents|fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track|undistort_clip|stabilize|apply_camera_solve|pin_layer|set_corner_pin)/],
   ['export', /^(export|render|queue_render|encode|deliver)/],
 ];
 export function family(name) {
@@ -514,6 +514,42 @@ function sceneOps(state, MODES, ev) {
     if (tn === 'track_matte' && Array.isArray(A.seeds) && A.seeds[0] && Array.isArray(A.seeds[0].points)) {
       const pts = A.seeds[0].points.map(p => Array.isArray(p) ? [numOf(p[0]), numOf(p[1])] : null).filter(p => p && p[0] != null && p[1] != null);
       if (pts.length >= 3) { const o = ov(); o.push({ poly: pts, _call: ev.call_id, _kind: tn }); hit = true; }
+    }
+    // homography fits / refinements / audits (m07): the quad they work on, from their own normalised corners / ROI,
+    // and on completion the numbers they report on the viewer's left meta line
+    if (/^(fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track)$/.test(tn)) {
+      const q = quad8(A.corners) || quad8(A.roi) || (Array.isArray(A.native_quads) && quad8(A.native_quads[0])) || quad8(R.corners) || quad8(R.roi);
+      if (q) { const o = ov(); o.push({ quad: q, roi: /ecc|lk_|corner_dis/.test(tn), _call: ev.call_id, _kind: tn }); hit = true; }
+      if (ev.phase === 'complete') {
+        const lab = { fit_track_homography: 'fit', ecc_refine_track: 'ecc', decompose_track_homography: 'decompose', corner_disagreement: 'corners', lk_residual_audit: 'lk audit', validate_planar_track: 'validate' }[tn];
+        const KEYS = [['rms_px', 'px RMS'], ['p95_px', 'px p95'], ['max_px', 'px max'], ['mean_px', 'px mean'], ['rotation_deg', '°'], ['correlation', 'ncc'], ['inliers', 'inliers'], ['failed', 'failed']];
+        const parts = KEYS.map(([k, u]) => numOf(R[k]) != null ? `${fmtVal(R[k])} ${u}` : null).filter(Boolean).slice(0, 2);
+        if (typeof R.ok === 'boolean') parts.push(R.ok ? 'ok' : 'failed');
+        if (parts.length) { vw.left = `${lab} ${parts.join(' · ')}`; hit = true; }
+      }
+    }
+    // lens / stabilize (m07): the Brown k1/k2 the call removes, drawn as the warped grid it straightens;
+    // the stabilizer's crop when the result reports its zoom
+    if (tn === 'undistort_clip' && (numOf(A.k1) != null || numOf(A.k2) != null)) {
+      const o = ov(); o.push({ lens: [numOf(A.k1) ?? 0, numOf(A.k2) ?? 0], c: [numOf(A.cx) ?? .5, numOf(A.cy) ?? .5].map(v => v > 1 && state.session && state.session.width ? null : v), _call: ev.call_id, _kind: tn });
+      vw.left = ['undistort', numOf(A.k1) != null ? `k1 ${fmtVal(A.k1)}` : null, numOf(A.k2) != null ? `k2 ${fmtVal(A.k2)}` : null].filter(Boolean).join(' · '); hit = true;
+    }
+    if (tn === 'stabilize') {
+      const z = numOf(R.zoom ?? R.scale ?? R.crop_scale);
+      if (z != null && z >= 1) { const o = ov(); o.push({ crop: 1 / z, _call: ev.call_id, _kind: tn }); }
+      vw.left = ['stabilize', numOf(A.smooth) != null ? `smooth ${fmtVal(A.smooth)}` : null, A.lock ? 'locked' : null, A.rotation === false ? 'no rotation' : null, z != null ? `zoom ${fmtVal(z)}×` : null].filter(Boolean).join(' · '); hit = true;
+    }
+    if (tn === 'apply_camera_solve' && ev.phase === 'complete') {
+      const n = numOf(R.keys ?? R.keyframes ?? R.count);
+      vw.left = ['camera solve → keys', A.solve_id != null ? String(A.solve_id) : null, n != null ? `${fmtVal(n)} keys` : null, A.fov === false ? 'no fov' : null].filter(Boolean).join(' · '); hit = true;
+    }
+    // corner pin / pin_layer: the pinned quad (pin_layer quads are project pixels; corner-pin offsets are pixels from the frame corners)
+    if ((tn === 'pin_layer' || tn === 'set_corner_pin') && state.session && state.session.width && state.session.height) {
+      const W = state.session.width, H = state.session.height;
+      let q = null;
+      if (tn === 'pin_layer') { const f = quad8(A.quad) || (Array.isArray(A.keys) && A.keys[0] && quad8(A.keys[0].quad)); q = f && f.map(([x, y]) => [x / W, y / H]); }
+      else if (Array.isArray(A.corners) && A.corners.length === 4) { const base = [[0, 0], [1, 0], [1, 1], [0, 1]]; q = A.corners.map((d, i) => Array.isArray(d) && numOf(d[0]) != null && numOf(d[1]) != null ? [base[i][0] + numOf(d[0]) / W, base[i][1] + numOf(d[1]) / H] : null); if (q.some(v => !v)) q = null; }
+      if (q) { const o = ov(); o.push({ quad: q, _call: ev.call_id, _kind: tn }); hit = true; }
     }
     // lights: glyph at its frame position, row in the Lights list
     if (tn === 'set_light' || tn === 'light_rig') {

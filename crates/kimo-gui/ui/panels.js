@@ -119,6 +119,14 @@ function overlay(ov, w, h) {
       s += `<polygon points="${p.map(q => q.join(',')).join(' ')}" fill="rgba(255,90,35,.08)" stroke="var(--ember)" stroke-width="1.5"${o.roi ? ' stroke-dasharray="6 4"' : ''}/>`;
       p.forEach(q => s += `<circle cx="${q[0]}" cy="${q[1]}" r="4" fill="var(--ember)"/>`);
     }
+    if (o.lens) {   // undistort: the k1/k2 grid it straightens (Brown radial model, normalised to the half-diagonal)
+      const [k1, k2] = o.lens, cx = (o.c && o.c[0] != null ? o.c[0] : .5) * w, cy = (o.c && o.c[1] != null ? o.c[1] : .5) * h, R0 = Math.hypot(w, h) / 2;
+      const D = (x, y) => { const u = (x - cx) / R0, v = (y - cy) / R0, r2 = u * u + v * v, f = 1 + k1 * r2 + k2 * r2 * r2; return [cx + u * f * R0, cy + v * f * R0]; };
+      const line = pts => `<polyline points="${pts.map(([x, y]) => D(x, y)).map(q => px(q[0]) + ',' + px(q[1])).join(' ')}" fill="none" stroke="var(--cream)" stroke-opacity=".55" stroke-width="1" stroke-dasharray="4 3"/>`;
+      for (let i = 1; i < 8; i++) { const x = w * i / 8; s += line(Array.from({ length: 21 }, (_, j) => [x, h * j / 20])); }
+      for (let i = 1; i < 6; i++) { const y = h * i / 6; s += line(Array.from({ length: 21 }, (_, j) => [w * j / 20, y])); }
+    }
+    if (o.crop) { const cw = w * o.crop, ch = h * o.crop; s += `<rect x="${px((w - cw) / 2)}" y="${px((h - ch) / 2)}" width="${px(cw)}" height="${px(ch)}" fill="none" stroke="var(--ember)" stroke-width="1.5" stroke-dasharray="6 4"/>`; }
     if (o.vline != null) s += `<line x1="${o.vline * w}" x2="${o.vline * w}" y1="0" y2="${h}" stroke="var(--ember)" stroke-width="2"/>`;
     if (o.quad && o.grid) {   // mesh tracker: the nx x ny lattice inside the quad (bilinear)
       const q = o.quad.map(([x, y]) => [x * w, y * h]), L = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
