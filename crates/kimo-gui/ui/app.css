@@ -46,8 +46,13 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 /* ---------- top bar ---------- */
 #topbar{position:relative;display:flex;align-items:center;padding:0 18px 0 18px;
   border-bottom:1px solid var(--tb-line,var(--line));height:var(--top,46px);white-space:nowrap}
-#topbar .logo{width:var(--logo,26px);height:var(--logo,26px);flex:none;fill:var(--cream);margin-left:-2px}
-#topbar .logo .ph{fill:var(--ember)}
+/* logo: the approved kimo-mark.svg, referenced (not copied); its fills read
+   these tokens, so the playhead is the same ember as everything else. */
+#topbar .logo{display:block;flex:none;width:var(--logo,28px);height:var(--logo,28px);margin-left:-2px;margin-bottom:1px; /* integer y: 45px bar, 29px box */
+  position:relative;border-radius:7px;overflow:hidden;
+  --kimo-tile:var(--ink-3);--kimo-cream:var(--cream)}
+#topbar .logo svg{display:block;width:100%;height:100%}
+#topbar .logo::after{content:'';position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 1px var(--line)}
 #topbar .brand{margin-left:11px;font-weight:600;font-size:var(--brand-fs,17px);letter-spacing:-.01em;color:var(--cream)}
 #topbar .slash{margin:0 8px;color:var(--faint);font-size:var(--brand-fs,17px)}
 #topbar .proj{font-size:var(--proj-fs,16px);color:var(--dim);font-family:var(--proj-font,var(--sans))}
