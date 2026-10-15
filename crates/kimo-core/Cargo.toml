@@ -18,6 +18,7 @@ tobj = { version = "=4.0.5", default-features = false, optional = true }
 bvh = { version = "=0.13.0", default-features = false, features = ["std"], optional = true }
 nalgebra = { version = "=0.35.0", optional = true }
 isosurface = { version = "=0.1.0-alpha.0", optional = true }
+mikktspace = { version = "=0.3.0", default-features = false, features = ["glam"], optional = true }
 
 [features]
 default = []
@@ -26,6 +27,7 @@ mesh-import = ["dep:gltf", "dep:tobj"]
 gpu3d = ["dep:wgpu"]
 flat-sah = ["dep:bvh", "dep:nalgebra"]
 surface-contour = ["dep:isosurface"]
+material-textures = ["dep:mikktspace"]
 
 [dev-dependencies]
 criterion = "=0.5.1"
