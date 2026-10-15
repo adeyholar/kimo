@@ -146,7 +146,7 @@ clip('#lane-v1','walk_ridge',0,28,13); clip('#lane-v1','dune_wide',30,34,14); cl
 $$('.wave').forEach(c=>{
   const g=c.getContext('2d'); const w=c.width=Math.max(640,c.clientWidth*2||1280), h=c.height=64;
   const rnd=mulberry32(+c.dataset.seed);
-  const comp=Array.from({length:3},(_,i)=>[[12+rnd()*12,5+rnd()*5,2+rnd()*3][i], 0.6+rnd()*1.6, rnd()*6.28]);  // amp, freq, phase
+  const comp=[[11,1.1,rnd()*6.28],[6,2.3,rnd()*6.28],[3,4.7,rnd()*6.28]];  // amp, freq, phase
   const env=Array.from({length:2},()=>[0.5+rnd()*0.5, 0.25+rnd()*0.3, rnd()*6.28]);
   const amp=x=>{ let a=0; for(const[A,f,p]of comp) a+=A*Math.sin(6.28*f*x/w+p);
     let e=0; for(const[A,f,p]of env) e+=A*Math.sin(6.28*f*x/w+p);
