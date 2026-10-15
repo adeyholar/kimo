@@ -10,7 +10,9 @@
 //! smooth blends here). Domain warps or non-uniform scales can violate that bound and
 //! would need a scaled circumradius; the graph currently has neither.
 //! Leaves carry Hermite edge-crossing samples (analytic normals, FD fallback counted)
-//! for the QEF vertex placement in CP2. No mesh extraction here yet.
+//! for the QEF vertex placement (CP2). extract_mesh runs adaptive Dual Contouring over the
+//! leaves: QEF placement with mass-point fallback, crack-free LOD-transition stitching
+//! (census on AdaptiveMesh asserts closed+manifold), sharp-feature recovery.
 use super::sdf_graph::Graph;use serde::Serialize;use std::collections::{HashMap,HashSet};
 #[derive(Clone,Debug,Serialize,serde::Deserialize)]#[serde(deny_unknown_fields)]pub struct OctreeConfig{pub bounds:[[f64;3];2],pub min_depth:u32,pub max_depth:u32,pub error_tolerance:f64,pub normal_angle_degrees:f64,pub normal_epsilon:f64}
 #[derive(Clone,Debug,Serialize)]pub struct Hermite{pub point:[f64;3],pub normal:[f64;3]}
@@ -231,7 +233,7 @@ fn qef_vertex(her:&[Hermite],min:[f64;3],size:[f64;3])->([f64;3],bool,bool){
  let mut clamped=false;for j in 0..3{let q=p[j].clamp(min[j],min[j]+size[j]);if q!=p[j]{clamped=true;}p[j]=q;}
  (p,fallback,clamped)
 }
-#[derive(Clone,Debug,Default,Serialize)]pub struct MeshStats{pub balance_splits:usize,pub repair_splits:usize,pub vertices:usize,pub quads:usize,pub triangles:usize,pub boundary_edges_skipped:usize,pub degenerate_edges:usize,pub qef_fallbacks:usize,pub qef_clamped:usize,pub hermite_normal_dropped:usize,pub normal_fd_fallbacks:usize,pub transition_quads:usize,pub max_depth_span_in_quad:u32,pub residual_max:f64}
+#[derive(Clone,Debug,Default,Serialize)]pub struct MeshStats{pub balance_splits:usize,pub repair_splits:usize,pub vertices:usize,pub quads:usize,pub triangles:usize,pub boundary_edges_skipped:usize,pub degenerate_edges:usize,pub qef_fallbacks:usize,pub qef_clamped:usize,pub hermite_normal_dropped:usize,pub normal_fd_fallbacks:usize,pub normal_face_weighted:usize,pub transition_quads:usize,pub max_depth_span_in_quad:u32,pub residual_max:f64}
 #[derive(Serialize)]pub struct AdaptiveMesh{pub stream:super::vertex_stream::Stream,pub stats:MeshStats,pub leaves:usize,pub empty:bool,pub algorithm:&'static str,pub boundary_edges:usize,pub nonmanifold_edges:usize,pub euler_characteristic:i64,pub signed_volume:f64,pub winding_consistent:bool}
 /// Crack-free adaptive mesh: balance -> repair -> QEF vertices -> minimal-edge quads.
 pub fn extract_mesh(g:&Graph,c:&OctreeConfig)->Result<AdaptiveMesh,String>{
@@ -286,9 +288,23 @@ pub fn extract_mesh(g:&Graph,c:&OctreeConfig)->Result<AdaptiveMesh,String>{
    if w.len()==4{ms.quads+=1;emit([w[0],w[1],w[3]],&mut tris);emit([w[1],w[2],w[3]],&mut tris);}else{ms.triangles+=1;for k in 1..w.len()-1{emit([w[0],w[k],w[k+1]],&mut tris);}}
   }}}
  }
- // Stream with analytic vertex normals (FD fallback counted), UV/tangent contract as contour_wrapped
+ // Stream vertex normals (CP3 contract): analytic SDF gradient where defined, else smooth
+ // angle-weighted face normal (sharp creases / CSG ties), then FD counted, then counted axis
+ // placeholder - never NaN. UV/tangent contract as contour_wrapped.
  let mut vertices=Vec::with_capacity(positions.len());
- for p in &positions{let n=match g.normal_analytic(*p).or_else(|_|{ms.normal_fd_fallbacks+=1;g.normal(*p,c.normal_epsilon)}){Ok(n)if n.iter().all(|v|v.is_finite())=>n,_=>{ms.hermite_normal_dropped+=1;[1.,0.,0.]}};
+ let mut fan=vec![[0.;3];positions.len()];
+ for t in &tris{let ids=[t[0] as usize,t[1] as usize,t[2] as usize];let p=[positions[ids[0]],positions[ids[1]],positions[ids[2]]];
+  let u=[p[1][0]-p[0][0],p[1][1]-p[0][1],p[1][2]-p[0][2]];let v=[p[2][0]-p[0][0],p[2][1]-p[0][1],p[2][2]-p[0][2]];
+  let cr=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];let l=(cr[0]*cr[0]+cr[1]*cr[1]+cr[2]*cr[2]).sqrt();if !(l>1e-18)||!l.is_finite(){continue;}
+  let n=[cr[0]/l,cr[1]/l,cr[2]/l];
+  for k in 0..3{let a=[p[(k+1)%3][0]-p[k][0],p[(k+1)%3][1]-p[k][1],p[(k+1)%3][2]-p[k][2]];let b=[p[(k+2)%3][0]-p[k][0],p[(k+2)%3][1]-p[k][1],p[(k+2)%3][2]-p[k][2]];
+   let cx=a[1]*b[2]-a[2]*b[1];let cy=a[2]*b[0]-a[0]*b[2];let cz=a[0]*b[1]-a[1]*b[0];
+   let ang=(cx*cx+cy*cy+cz*cz).sqrt().atan2(a[0]*b[0]+a[1]*b[1]+a[2]*b[2]);if !ang.is_finite(){continue;}
+   for j in 0..3{fan[ids[k]][j]+=ang*n[j];}}}
+ for (vi,p) in positions.iter().enumerate(){let n=match g.normal_analytic(*p){Ok(n)if n.iter().all(|v|v.is_finite())=>n,_=>{
+  let f=fan[vi];let l=(f[0]*f[0]+f[1]*f[1]+f[2]*f[2]).sqrt();
+  if l.is_finite()&&l>1e-12{ms.normal_face_weighted+=1;[f[0]/l,f[1]/l,f[2]/l]}
+  else{match g.normal(*p,c.normal_epsilon){Ok(n)if n.iter().all(|v|v.is_finite())=>{ms.normal_fd_fallbacks+=1;n},_=>{ms.hermite_normal_dropped+=1;[1.,0.,0.]}}}}};
   let axis=if n[0].abs()<0.8{[1.,0.,0.]}else{[0.,1.,0.]};let t=super::vertex_stream::unit([n[1]*axis[2]-n[2]*axis[1],n[2]*axis[0]-n[0]*axis[2],n[0]*axis[1]-n[1]*axis[0]])?;
   vertices.push(super::primitives::Vertex{position:p.map(|v|v as f32),normal:n.map(|v|v as f32),uv:[0.,0.],tangent:[t[0] as f32,t[1] as f32,t[2] as f32,1.]});}
  let cen=super::topo::census(&positions,&tris);
@@ -301,7 +317,7 @@ fn sphere()->Graph{Graph{nodes:vec![Field::Sphere{center:[0.;3],radius:1.}],outp
 fn union_scene()->Graph{Graph{nodes:vec![Field::Sphere{center:[0.35,0.,0.],radius:0.8},Field::Box{center:[-0.35,0.,0.],half_size:[0.6;3]},Field::SmoothUnion{a:0,b:1,k:0.25}],output:2}}
 fn cfg(min_d:u32,max_d:u32)->OctreeConfig{OctreeConfig{bounds:[[-2.2;3],[2.2;3]],min_depth:min_d,max_depth:max_d,error_tolerance:0.02,normal_angle_degrees:20.,normal_epsilon:0.001}}
 #[test]fn jacobi3_known_eigenpairs(){
- let(ev,v)=jacobi3([[2.,0.,0.],[0.,3.,0.],[0.,0.,5.]]);let mut srt=ev.to_vec();srt.sort_by(|a,b|a.partial_cmp(b).unwrap());assert!((srt[0]-2.).abs()<1e-12&&(srt[1]-3.).abs()<1e-12&&(srt[2]-5.).abs()<1e-12,"diag eigenvalues {ev:?}");
+ let(ev,_v)=jacobi3([[2.,0.,0.],[0.,3.,0.],[0.,0.,5.]]);let mut srt=ev.to_vec();srt.sort_by(|a,b|a.partial_cmp(b).unwrap());assert!((srt[0]-2.).abs()<1e-12&&(srt[1]-3.).abs()<1e-12&&(srt[2]-5.).abs()<1e-12,"diag eigenvalues {ev:?}");
  // rotation-invariant: eigenvalues of a known 2x2 block [[1,2],[2,1]] are 3,-1; embedded in 3x3 with 4 on z
  let(ev,_)=jacobi3([[1.,2.,0.],[2.,1.,0.],[0.,0.,4.]]);let mut srt=ev.to_vec();srt.sort_by(|a,b|a.partial_cmp(b).unwrap());assert!((srt[0]+1.).abs()<1e-10&&(srt[1]-3.).abs()<1e-10&&(srt[2]-4.).abs()<1e-10,"block eigenvalues {srt:?}");
  // eigenvectors orthonormal and diagonalize: V^T A V = D
@@ -337,6 +353,17 @@ fn cfg(min_d:u32,max_d:u32)->OctreeConfig{OctreeConfig{bounds:[[-2.2;3],[2.2;3]]
  assert_eq!(m.euler_characteristic,0,"torus euler {}",m.euler_characteristic);
  let expect=2.*std::f64::consts::PI*std::f64::consts::PI*1.*0.4*0.4;assert!((m.signed_volume-expect).abs()<0.1*expect,"torus volume {} vs {}",m.signed_volume,expect);
 }
+#[test]fn vertex_normals_and_tangents_finite_unit_orthogonal_on_sharp_creases(){
+ for g in [union_scene(),Graph{nodes:vec![Field::Box{center:[0.;3],half_size:[0.6;3]}],output:0}]{
+  let m=extract_mesh(&g,&cfg(2,7)).unwrap();
+  assert!(m.stats.normal_face_weighted>0,"crease/edge vertices must route to face-weighted normals: {:?}",m.stats);
+  for(i,v)in m.stream.vertices.iter().enumerate(){
+   let n=v.normal.map(|x|x as f64);let t=[v.tangent[0] as f64,v.tangent[1] as f64,v.tangent[2] as f64];
+   assert!(n.iter().chain(t.iter()).all(|x|x.is_finite()),"vertex {i} NaN normal/tangent: {n:?} {t:?}");
+   let ln=(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]).sqrt();let lt=(t[0]*t[0]+t[1]*t[1]+t[2]*t[2]).sqrt();
+   assert!((ln-1.).abs()<1e-3,"vertex {i} normal len {ln}");assert!((lt-1.).abs()<1e-3,"vertex {i} tangent len {lt}");
+   let d=(n[0]*t[0]+n[1]*t[1]+n[2]*t[2]).abs();assert!(d<1e-3,"vertex {i} tangent not orthogonal to normal: {d}");}
+ }}
 #[test]fn crease_benchmark_sharp_drop_vs_pinned_uniform(){
  let m=extract_mesh(&union_scene(),&cfg(2,8)).unwrap();
  assert_eq!((m.boundary_edges,m.nonmanifold_edges),(0,0),"union crack-free: bnd={} nm={}",m.boundary_edges,m.nonmanifold_edges);
