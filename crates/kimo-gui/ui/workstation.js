@@ -22,12 +22,10 @@ let manualUntil = 0;
 function setView(v, manual=false){
   if (PINNED) v = PINNED;
   if (!VIEWS.includes(v)) return;
-  $$('#view-tabs button').forEach(b => b.classList.toggle('on', b.dataset.view===v));
-  VIEWS.forEach(n => $('#view-'+n).classList.toggle('on', n===v));
+    VIEWS.forEach(n => $('#view-'+n).classList.toggle('on', n===v));
   $('#proj-name').textContent = PROJ[v];
   if (manual) manualUntil = performance.now()+12000;
 }
-$$('#view-tabs button').forEach(b => b.addEventListener('click', () => setView(b.dataset.view, true)));
 if (PINNED && VIEWS.includes(PINNED)) setView(PINNED);
 
 /* ---------- procedural dune poster (labeled simulated) ---------- */
@@ -48,6 +46,22 @@ function drawDune(cv, seed=3, tone='warm'){
     for(let x=0;x<=w;x+=8){ const y=h*base - amp*Math.sin(x*f1+p1) - amp*0.4*Math.sin(x*f2+p2) + bi*6; g.lineTo(x,y); }
     g.lineTo(w,h); g.closePath(); g.fillStyle=col; g.fill();
   });
+  // horizon haze
+  const hz=g.createLinearGradient(0,h*0.38,0,h*0.56);
+  hz.addColorStop(0,'rgba(244,232,207,0)'); hz.addColorStop(0.55,'rgba(244,232,207,.35)'); hz.addColorStop(1,'rgba(244,232,207,0)');
+  g.fillStyle=hz; g.fillRect(0,h*0.38,w,h*0.18);
+  // slope shading: darken right faces per band for depth
+  const sh=g.createLinearGradient(0,0,w,0);
+  sh.addColorStop(0,'rgba(40,20,8,0)'); sh.addColorStop(1,'rgba(40,20,8,.22)');
+  g.fillStyle=sh; g.fillRect(0,h*0.42,w,h*0.58);
+  // grain
+  const gr=g.getImageData(0,0,w,h), gd=gr.data, grnd=mulberry32(seed*13+5);
+  for(let i=0;i<gd.length;i+=4){ const n=(grnd()-0.5)*14; gd[i]+=n; gd[i+1]+=n; gd[i+2]+=n; }
+  g.putImageData(gr,0,0);
+  // vignette
+  const vg=g.createRadialGradient(w/2,h/2,h*0.35,w/2,h/2,h*0.95);
+  vg.addColorStop(0,'rgba(10,6,4,0)'); vg.addColorStop(1,'rgba(10,6,4,.38)');
+  g.fillStyle=vg; g.fillRect(0,0,w,h);
   g.fillStyle='rgba(20,12,8,.85)';           // walker silhouette
   const wx=w*0.56, wy=h*0.62;
   g.beginPath(); g.arc(wx,wy-10,2.4,0,6.29); g.fill();
@@ -176,23 +190,24 @@ $$('.kf-lane').forEach(l=>{
   const canvas=$('#gl');
   const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
   renderer.setPixelRatio(Math.min(devicePixelRatio,2));
-  const sc=new THREE.Scene(); sc.background=new THREE.Color(0x17151a);
-  sc.fog=new THREE.Fog(0x17151a,8,18);
+  const sc=new THREE.Scene(); sc.background=new THREE.Color(0x100f14);
+  sc.fog=new THREE.Fog(0x100f14,9,20);
   const cam=new THREE.PerspectiveCamera(35,1,0.1,100);
   cam.position.set(4.2,3.0,5.2); cam.lookAt(0,1.9,0);
   const plateG=new THREE.BoxGeometry(1.9,0.05,0.5);
-  const plateM=new THREE.MeshStandardMaterial({color:0xd9d2c4,roughness:0.42,metalness:0.25});
+  const plateM=new THREE.MeshStandardMaterial({color:0xded6c6,roughness:0.38,metalness:0.3});
   const helix=new THREE.Group();
   for(let i=0;i<56;i++){ const m=new THREE.Mesh(plateG,plateM);
     const a=i*0.22; m.position.set(Math.cos(a)*0.55, i*0.075, Math.sin(a)*0.55); m.rotation.y=-a;
     helix.add(m); }
   sc.add(helix);
   const floor=new THREE.Mesh(new THREE.CircleGeometry(6,48),
-    new THREE.MeshStandardMaterial({color:0x1c1a20,roughness:0.9}));
+    new THREE.MeshStandardMaterial({color:0x121016,roughness:0.55,metalness:0.35}));
   floor.rotation.x=-Math.PI/2; sc.add(floor);
-  const key=new THREE.DirectionalLight(0xfff0dd,2.1); key.position.set(3,4,2); sc.add(key);
-  const rim=new THREE.DirectionalLight(0xbcd2ff,0.9); window.__rim=rim; rim.position.set(-4,2,-3); sc.add(rim);
-  sc.add(new THREE.AmbientLight(0xf4f0e8,0.35));
+  const key=new THREE.DirectionalLight(0xffe8c8,2.8); key.position.set(3,4,2); sc.add(key);
+  const pool=new THREE.SpotLight(0xffe2b8,60,14,0.7,0.5); pool.position.set(1.5,5,1.5); pool.target=helix; sc.add(pool);
+  const rim=new THREE.DirectionalLight(0xaac4ff,1.5); window.__rim=rim; rim.position.set(-4,2,-3); sc.add(rim);
+  sc.add(new THREE.AmbientLight(0xf4f0e8,0.13));
   let dirty=true, raf=0, last=0;
   const spinUntil = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : performance.now()+4000;
   function frame(t){ raf=0;
@@ -214,7 +229,7 @@ $$('.kf-lane').forEach(l=>{
 (function curveLabels(){
   const wrap=$('#curve-wrap'); if(!wrap) return;
   const row=document.createElement('div'); row.id='curve-labels';
-  for(let s=0;s<=6;s++){ const l=document.createElement('span'); l.style.left=(s/6*100)+'%'; l.textContent=s+'s'; row.appendChild(l); }
+  for(let s=0;s<=6;s++){ const l=document.createElement('span'); if(s===6){ l.style.right='0'; l.style.transform='none'; } else l.style.left=(s/6*100)+'%'; l.textContent=s+'s'; row.appendChild(l); }
   wrap.after(row);
 })();
 

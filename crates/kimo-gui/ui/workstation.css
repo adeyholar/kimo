@@ -202,3 +202,15 @@ body { background:var(--base); color:var(--cream); font-family:var(--sans); font
 #view-timeline .stage-meta span:first-child, #view-grade .stage-meta span:first-child { position:static; transform:none; }
 
 .wave { opacity:.85; }
+
+/* ---- mockup-geometry pass: author to 1376x768 artboard, zoom to viewport (Chromium-only) ---- */
+body { zoom:1.177; }
+#topbar { padding:9px 20px; gap:14px; }
+.wordmark { font-size:17px; font-weight:700; letter-spacing:-.4px; color:#f3ebd8; }
+.proj { font-size:13px; color:#929088; }
+#live-badge { font-size:10px; padding:5px 14px; gap:8px; }
+#live-badge .bdot { width:7px; height:7px; }
+.right-note { font-size:10px; gap:16px; }
+#elapsed { font-size:12px; }
+#view-tabs { margin-left:26px; }
+#view-tabs button { font-size:11.5px; padding:5px 12px; }
