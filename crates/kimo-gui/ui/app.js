@@ -82,6 +82,7 @@ export function apply(ev) {
       }
       // a render job still running takes each new engine frame as its Renders thumbnail
       if (src) for (const r of state.views.export?.renders?.rows || []) if (r._live) r._thumb = src;
+      if (src && (ev.png_b64 || ev.jpg_b64)) computeParade(src);
       break;
     }
     case 'project_changed':
@@ -173,6 +174,33 @@ function enqueue(ev) {
   }
   if (queue.length >= QMAX) { const j = queue.findIndex(q => q.phase === 'progress' || q.type === 'tool_progress'); queue.splice(j >= 0 ? j : 0, 1); metrics.dropped++; }
   queue.push(ev); if (queue.length > metrics.qmax) metrics.qmax = queue.length; requestFrame();
+}
+// RGB parade of the engine's latest frame for the grading screen: computed once per new frame from the
+// decoded image (column x value histogram per channel, log-scaled), handed to the wheels panel as an image.
+// Runs only when a frame arrives; nothing ticks while the session is idle.
+let paradeSeq = 0;
+function computeParade(src) {
+  const seq = ++paradeSeq, img = new Image();
+  img.onload = () => {
+    if (seq !== paradeSeq) return;   // a newer frame superseded this one
+    const W = 96, H = Math.max(1, Math.round(W * img.naturalHeight / Math.max(1, img.naturalWidth)));
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, W, H);
+    const px = g.getImageData(0, 0, W, H).data, BINS = 128, hist = [0, 1, 2].map(() => new Float32Array(W * BINS));
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = (y * W + x) * 4; for (let k = 0; k < 3; k++) hist[k][x * BINS + (px[i + k] >> 1)]++; }
+    const OW = W * 3 + 8, out = document.createElement('canvas'); out.width = OW; out.height = BINS;
+    const o = out.getContext('2d'), id = o.createImageData(OW, BINS), d = id.data, norm = Math.log1p(H * .35);
+    const COL = [[255, 96, 72], [110, 214, 120], [92, 140, 255]];
+    for (let k = 0; k < 3; k++) for (let x = 0; x < W; x++) for (let b = 0; b < BINS; b++) {
+      const v = hist[k][x * BINS + b]; if (!v) continue;
+      const a = Math.min(1, Math.log1p(v) / norm), j = ((BINS - 1 - b) * OW + k * (W + 4) + x) * 4;
+      d[j] = COL[k][0]; d[j + 1] = COL[k][1]; d[j + 2] = COL[k][2]; d[j + 3] = Math.round(40 + 215 * a);
+    }
+    o.putImageData(id, 0, 0);
+    for (const [mode, M] of Object.entries(MODES)) for (const [name, spec] of Object.entries(M.panels)) if (spec.kind === 'wheels') { const V = view(mode); (V[name] || (V[name] = {})).parade = { src: out.toDataURL('image/png'), live: true }; }
+    schedule();
+  };
+  img.src = src;
 }
 function schedule() { dirty = true; requestFrame(); }
 function requestFrame() { if (!rafId && !hidden) rafId = requestAnimationFrame(frame); }

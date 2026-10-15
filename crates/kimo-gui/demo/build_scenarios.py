@@ -135,7 +135,7 @@ res = [0.73, 0.73, 0.73, 0.73, 0.8, 0.73, 0.77, 0.91, 0.73, 0.91, 1.1, 1.28, 1.1
 scen("m07", "tracking", "city_billboard.kimo", "claude", hms("00:44:51"),
   [["undistort_clip", ["clip_05", {"k1": "-0.08"}], 3200], ["stabilize", ["clip_05", {"smooth": "0.5"}], 4100], ["camera_solve", ["clip_05", {"pan": "false"}], 9800],
    ["track_planar", ["clip_05", "screen_quad"], 6300], ["track_mesh", ["clip_05", "flag", "8x6"], 5000], ["validate_planar_track", ["screen_quad"], 2100]],
-  {"viewer": {"src": F("m07"), "tag": "track · screen_quad", "left": "solve 0.70 px RMS", "tc": "01:00:02:21", "res": "1920 x 1080 24p"},
+  {"viewer": {"src": F("m07"), "tag": "track - screen_quad", "left": "solve 0.70 px RMS", "tc": "01:00:02:21", "res": "1920 x 1080 24p"},
    "insp": {"sub": "screen_quad · planar", "blocks": [K("Confidence", "0.85"), K("Lost frames", "0"), K("Corner p95", "1.8 px"), K("Corner max", "2.6 px", **{"from": "3.4"}), K("Anchors", "4"),
             S("Camera solve"), {"widget": "solve", "h": 133, "src": F("m07_solve")}, {"html": "<div class=\"cap\"><span>focal <b>28.4 mm</b></span><b>96/96 frames</b></div>"}]},
    "res": {"ruler": {"t0": 0, "t1": 72, "step": 12, "fmt": "n"}, "playhead": 41, "graph": {"pts": res, "max": 11.8, "thr": 2, "thrLabel": "2 px"},

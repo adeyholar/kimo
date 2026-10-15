@@ -89,7 +89,7 @@ function viewer({ spec, data, w, h, state }) {
     html += `<span class="tag" style="${pos};top:${t.y ?? 10}px">${E(t.text)}</span>`;
   }
   const hd = state && state.hud;
-  if (hd && performance.now() - hd.t < 1600) html += `<span class="hud${hd.phase === 'error' ? ' err' : hd.fam === 'inspect' ? ' read' : ''}" style="right:${o.hudX ?? 10}px;top:${o.hudY ?? 10}px"><i></i>${E(hd.fam)} · ${E(hd.text)}</span>`;
+  if (hd && performance.now() - hd.t < 1600) html += `<span class="hud${hd.phase === 'error' ? ' err' : hd.fam === 'inspect' ? ' read' : ''}" style="right:${o.hudX ?? 10}px;top:${o.hudY ?? 10}px"><i></i>${E(hd.fam)} - ${E(hd.text)}</span>`;
   html += '</div>';
   if (data.progress) {
     const p = data.progress, y = pt + fh + (o.progY ?? 14);
@@ -216,6 +216,11 @@ function block(b, w) {
   if (b.sec !== undefined) return `<div class="sec" ${b.h ? `style="height:${b.h}px"` : ''}>${E(b.sec)}</div>`;
   if (b.gap) return `<div style="height:${b.gap}px"></div>`;
   if (b.list) return `<div class="list">${b.list.map((x, i) => { const m = /^(\d+)\s+(.*)$/.exec(String(x)); return `<div class="${i === b.sel ? 'sel' : ''}">${m ? `<span class="n">${E(m[1])}</span>${E(m[2])}` : E(x)}</div>`; }).join('')}</div>`;
+  if (b.curve) {   // a colour curve as the call gave it (PCHIP points), drawn on a unit box
+    const W2 = Math.max(60, w), H2 = 64, col = { r: '#e2553f', g: '#5fbf6a', b: '#4f7fe0' }[b.ch] || 'var(--cream)';
+    const P = b.curve.map(([x, y]) => [px(6 + x * (W2 - 12)), px(H2 - 6 - y * (H2 - 12))]);
+    return `<div class="widget" style="height:${H2}px;margin:6px 0"><svg viewBox="0 0 ${W2} ${H2}" width="100%" height="100%"><path d="M6 ${H2 - 6}L${W2 - 6} 6" stroke="#2a2a28" stroke-dasharray="3 3"/><path d="${catmull(P)}" fill="none" stroke="${col}" stroke-width="1.5"/>${P.map(([x, y]) => `<circle cx="${x}" cy="${y}" r="2.6" fill="var(--cream)"/>`).join('')}</svg></div>`;
+  }
   if (b.code) return `<div class="code">${E(b.code)}</div>`;
   if (b.cap) return `<div class="cap"><span>${E(b.cap[0])}</span><span>${E(b.cap[1] || '')}</span></div>`;
   if (b.widget) return `<div class="widget${b.src ? ' img' : ''}" style="height:${b.h || 90}px${b.style ? ';' + b.style : ''}">${b.src ? `<img src="${E(b.src)}" alt="">` : (WIDGETS[b.widget] || (() => ''))(b, w, b.h || 90)}</div>`;
@@ -770,8 +775,9 @@ function wheels({ spec, data, w, h }) {
   // parade: the engine's scope image when the data carries one, else the drawn luma traces
   const x0 = o.px0 ?? (ww + 34), x1 = w - (o.pxr ?? 12), y0 = o.py0 ?? 22, y1 = h - (o.pyb ?? 22);
   if (!o.noSep) s += `<line x1="${ww}" x2="${ww}" y1="14" y2="${h - 14}" stroke="var(--line)"/>`;
-  if (data.parade && data.parade.src) s += `<image href="${E(data.parade.src)}" x="${x0}" y="${y0 - (o.imgPadT ?? 0)}" width="${x1 - x0}" height="${y1 - y0 + (o.imgPadT ?? 0) + (o.imgPadB ?? 0)}" preserveAspectRatio="none"/>`;
-  s += [1023, 768, 512, 256, 0].map((v, i) => `<text x="${x0 - (o.plabGap ?? 6)}" y="${px(y0 + i * (y1 - y0) / 4 + (o.plabDy ?? 3))}" font-size="${o.plabFs ?? 9.5}" fill="var(--dim)" text-anchor="end" style="font-family:var(--plab-font,inherit)">${v}</text>` + (data.parade && data.parade.src ? '' : `<line x1="${x0}" x2="${x1}" y1="${px(y0 + i * (y1 - y0) / 4)}" y2="${px(y0 + i * (y1 - y0) / 4)}" stroke="#1a1a19"/>`)).join('');
+  const PL = data.parade && data.parade.live, pT = PL ? 0 : (o.imgPadT ?? 0), pB = PL ? 0 : (o.imgPadB ?? 0);
+  if (data.parade && data.parade.src) s += `<image href="${E(data.parade.src)}" x="${x0}" y="${y0 - pT}" width="${x1 - x0}" height="${y1 - y0 + pT + pB}" preserveAspectRatio="none"${PL ? ' style="image-rendering:auto;opacity:.92"' : ''}/>`;
+  s += [1023, 768, 512, 256, 0].map((v, i) => `<text x="${x0 - (o.plabGap ?? 6)}" y="${px(y0 + i * (y1 - y0) / 4 + (o.plabDy ?? 3))}" font-size="${o.plabFs ?? 9.5}" fill="var(--dim)" text-anchor="end" style="font-family:var(--plab-font,inherit)">${v}</text>` + (data.parade && data.parade.src && !PL ? '' : `<line x1="${x0}" x2="${x1}" y1="${px(y0 + i * (y1 - y0) / 4)}" y2="${px(y0 + i * (y1 - y0) / 4)}" stroke="#1a1a19"/>`)).join('');
   if (!(data.parade && data.parade.src)) {
     const cw = (x1 - x0) / 3;
     const cols = ['#e2553f', '#5fbf6a', '#4f7fe0'], lifts = [.05, 0, -.04];

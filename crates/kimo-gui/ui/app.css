@@ -291,3 +291,4 @@ body.calls-sans{--call-font:var(--sans)}
 .kv .row.ch .k{color:var(--ch-label,var(--klabel,var(--text)))} .kv .row.dim .k{color:var(--dim)}
 .kv .widget{position:relative}
 [data-panel=grade] .ph .t{font-family:var(--grade-title-font,var(--title-font,var(--sans)))}
+.kv .list div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;line-height:var(--li-h,26px)}

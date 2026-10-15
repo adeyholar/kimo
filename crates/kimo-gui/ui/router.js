@@ -17,7 +17,7 @@ export const FAMILIES = [
   ['edit', /^(cut|split|blade|razor|trim|extend|ripple|slip|slide|move_clip|delete_clip|lift|roll)/],
   ['effects', /^(add_effect|apply_effect|set_effect|add_transition|remove_effect|add_speed|set_posterize|add_adjustment)/],
   ['transform', /^(set_property|set_clip_property|set_props?$|transform|set_transform|keyframe|set_keyframe|add_keyframe|scale|rotate|position|set_motion|add_null|set_parent|set_expression)/],
-  ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut|set_grade_node|set_grade_graph|pick_white_balance|match_grade|match_color|set_white_balance)/],
+  ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut|set_grade_node|set_grade_graph|pick_white_balance|match_grade|match_color|set_white_balance|set_grade_output|remove_grade_node|generate_lut_node|add_acescct_primaries|create_shared_grade_graph|bind_shared_grade_graphs|remove_shared_grade_graph|set_node_param|set_node_mask|apply_asc_cdl|set_color_curve|set_grade_scopes|add_node$|connect_nodes|disconnect_nodes)/],
   ['audio', /^(set_|add_|apply_|auto_|measure_|normalize_|analyze_)?(mix|audio|gain|fader|mute|solo|pan|compress|eq|limiter|limit|loudness|duck|stem|bus|route_)|^track_beats$/],
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
   ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents|fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track|undistort_clip|stabilize|apply_camera_solve|pin_layer|set_corner_pin)/],
@@ -121,16 +121,58 @@ function gradeOps(state, MODES, ev) {
     const key = Object.entries(MODES[wheelMode[0]].panels).find(([, sp]) => sp.kind === 'wheels')[0];
     const B = V[key] || (V[key] = {});
     const G = B._g || (B._g = { lift: { r: 0, g: 0, b: 0 }, gamma: { r: 1, g: 1, b: 1 }, gain: { r: 1, g: 1, b: 1 } });
-    let changed = null;
+    let changed = null; const touched = new Set();
     for (const w of ['lift', 'gamma', 'gain']) {
       for (const c of ['r', 'g', 'b']) {
         const v = numOf(prm[`${w}_${c}`]);
-        if (v != null) { G[w][c] = v; changed = w; }
+        if (v != null) { G[w][c] = v; changed = w; touched.add(w); }
       }
       const m = numOf(prm[w]);   // a master value: same delta on all three channels
       if (m != null && (kind === '' || /grade|wheel|lgg|primar/.test(kind) || tn === 'grade')) {
         const base = String(prm[w]).trim().match(/^[+-]/) ? WHEEL_DEF[w] + m : m;
-        for (const c of ['r', 'g', 'b']) G[w][c] = base; changed = w;
+        for (const c of ['r', 'g', 'b']) G[w][c] = base; changed = w; touched.add(w);
+      }
+    }
+    // the Grade list: one row per adjusted control, updated in place, the latest change in ember
+    const kvKey = Object.entries(MODES[wheelMode[0]].panels).find(([, sp]) => sp.kind === 'kv');
+    if (kvKey) {
+      const KV = V[kvKey[0]] || (V[kvKey[0]] = {}); KV.blocks = (KV.blocks || []).filter(b => b._grade);
+      const setRow = (k, v) => { let b = KV.blocks.find(x => x.k === k); if (!b) { b = { k, _grade: true }; KV.blocks.push(b); } b.v = v; b.ch = true; b._flash = now(); for (const x of KV.blocks) if (x !== b && x._row !== ev.call_id) x.ch = false; b._row = ev.call_id; };
+      const one = numOf(prm.amount ?? prm.value);
+      const NAMES = { temperature: 'Temperature', tint: 'Tint', contrast: 'Contrast', saturation: 'Saturation', exposure: 'Exposure' };
+      if (NAMES[kind] && one != null) { setRow(NAMES[kind], fmtVal(one)); hit = true; }
+      if (A.clip_id != null && !KV.sub) KV.sub = String(A.clip_id);
+    }
+    // grade graph (m15 Nodes): node ids/kinds from the call, the output selected; plus rows for CDL / curve / scopes
+    if (kvKey) {
+      const KV = V[kvKey[0]]; KV.blocks = KV.blocks || [];
+      const setRow = (k, v) => { let b = KV.blocks.find(x => x.k === k); if (!b) { b = { k, _grade: true }; KV.blocks.push(b); } b.v = v; b.ch = true; b._flash = now(); for (const x of KV.blocks) if (x !== b) x.ch = false; };
+      const nodes = KV._nodes || (KV._nodes = []);
+      const nid = A.node_id ?? (A.node && (A.node.id ?? A.node.node_id)) ?? A.id;
+      const nk = (A.node && (A.node.kind ?? A.node.effect)) ?? A.kind;
+      const addNode = (id, label) => { if (id == null) return; let n = nodes.find(x => x.id === String(id)); if (!n) { n = { id: String(id) }; nodes.push(n); } n.label = label ?? n.label ?? String(id); return n; };
+      let graphHit = true;
+      if (tn === 'set_grade_node' || tn === 'add_node') addNode(nid, nk ? `${nid} · ${nk}` : null);
+      else if (tn === 'generate_lut_node') addNode(nid ?? 'lut', `${nid ?? 'lut'} · lut ${numOf(A.size) ?? 33}³`);
+      else if (tn === 'remove_grade_node') { const k = nodes.findIndex(x => x.id === String(nid)); if (k >= 0) nodes.splice(k, 1); }
+      else if (tn === 'set_grade_output') { for (const x of nodes) x.out = false; const n = addNode(nid ?? 'input'); n.out = true; }
+      else if (tn === 'set_node_param') { const n = addNode(nid); if (n) n.label = `${nid} · ${A.parameter ?? 'param'}`; }
+      else if (tn === 'set_node_mask') { const n = addNode(nid); if (n) n.label = `${nid} · ${A.mask ? 'mask' : 'no mask'}`; }
+      else if (tn === 'connect_nodes' || tn === 'disconnect_nodes') { const a = A.from ?? A.source ?? A.src, b = A.to ?? A.target ?? A.dst; if (a != null) addNode(a); if (b != null) addNode(b); if (a != null && b != null) setRow('Edge', `${a} ${tn === 'connect_nodes' ? '→' : '×'} ${b}`); }
+      else if (tn === 'create_shared_grade_graph') addNode(`shared:${A.id}`, `shared · ${A.id}`);
+      else if (tn === 'remove_shared_grade_graph') { const k = nodes.findIndex(x => x.id === `shared:${A.id}`); if (k >= 0) nodes.splice(k, 1); }
+      else if (tn === 'bind_shared_grade_graphs' && Array.isArray(A.graphs)) setRow('Shared', A.graphs.length ? A.graphs.map(String).join(', ') : 'none');
+      else if (tn === 'apply_asc_cdl' && A.path) setRow('CDL', String(A.path).split(/[\\/]/).pop() + (A.encoding === 'ACEScct' ? ' · ACEScct' : ''));
+      else if (tn === 'set_color_curve' && Array.isArray(A.points)) { setRow(`Curve ${A.channel ?? 'm'}`, `${A.points.length} pts`); const pts = A.points.filter(q => Array.isArray(q) && numOf(q[0]) != null && numOf(q[1]) != null).map(q => [numOf(q[0]), numOf(q[1])]); if (pts.length >= 2) KV._curve = { pts, ch: String(A.channel ?? 'm') }; }
+      else if (tn === 'set_grade_scopes' && A.scopes && typeof A.scopes === 'object') { const g = A.scopes.groups, r = A.scopes.graphs; setRow('Scopes', [Array.isArray(g) ? `${g.length} groups` : null, r && typeof r === 'object' ? `${Object.keys(r).length} graphs` : null].filter(Boolean).join(' · ') || 'set'); }
+      else if (tn === 'add_acescct_primaries') { const pr = A.params || {}; const v = ['lift', 'gamma', 'gain', 'offset'].filter(k => numOf(pr[k]) != null).map(k => `${k} ${fmtVal(pr[k])}`).join(' '); setRow('ACEScct', v || 'primaries'); }
+      else graphHit = false;
+      if (graphHit) {
+        hit = true;
+        const last = nodes.find(x => x.id === String(nid));
+        KV.blocks = KV.blocks.filter(b => !b._nodes);
+        if (nodes.length) KV.blocks.push({ sec: 'Nodes', _grade: true, _nodes: true }, { list: nodes.map((x, i) => `${String(i + 1).padStart(2, '0')}  ${x.label}${x.out ? '  ◂ out' : ''}`), sel: Math.max(0, nodes.indexOf(last ?? nodes.find(x => x.out) ?? nodes[nodes.length - 1])), _grade: true, _nodes: true });
+        if (KV._curve) { KV.blocks = KV.blocks.filter(b => !b._curveBlk); KV.blocks.push({ curve: KV._curve.pts, ch: KV._curve.ch, _grade: true, _curveBlk: true }); }
       }
     }
     if (changed) {
@@ -143,6 +185,7 @@ function gradeOps(state, MODES, ev) {
         return { name: w[0].toUpperCase() + w.slice(1), dot: [x * k, y * k], em, ring: em && Math.abs(mean) > 1e-6 ? (mean > 0 ? 70 : 250) : null, vals: d.map(fmt) };
       });
       B._flash = now(); hit = true;
+      if (kvKey) { const KV = V[kvKey[0]]; for (const W of B.wheels) if (touched.has(W.name.toLowerCase())) { let b = KV.blocks.find(x => x.k === W.name); if (!b) { b = { k: W.name, _grade: true }; KV.blocks.push(b); } b.v = W.vals.join(' '); b.ch = W.em; b._flash = now(); } for (const x of KV.blocks) if (!touched.has(String(x.k).toLowerCase())) x.ch = false; }
     }
   }
   // regions the call sampled: the neutral patch of a white-balance pick, the source/reference of a match
@@ -159,7 +202,8 @@ function gradeOps(state, MODES, ev) {
 
 function hud(state, ev, fam, text) {
   const shown = fam === 'inspect' ? fam : ((state.explicitMode ? null : inferMode(String(ev.tool_name))) || state.mode || fam);   // the tag names the screen, not the router family
-  state.hud = { fam: shown, family: fam, tool: ev.tool_name, text: text || ev.tool_name, phase: ev.phase, t: now() };
+  const SHORT = { tracking: 'track', grading: 'grade', modelling: 'model', lighting: 'light', scene3d: 'scene', mixing: 'mix', effects: 'fx', particles: 'particles', captions: 'captions', graphics: 'graphics' };
+  state.hud = { fam: SHORT[shown] || shown, family: fam, tool: ev.tool_name, text: text || ev.tool_name, phase: ev.phase, t: now() };
 }
 
 // Timeline effects of edit / ingest / effects / audio / text tools.
@@ -414,7 +458,7 @@ export function route(ev, state, MODES) {
   if (fam === 'transform' && (ev.phase === 'start' || ev.phase === 'complete')) xfOps(state, MODES, ev);
   if (fam === '3d') sceneOps(state, MODES, ev);
   if (ev.phase === 'start' && (fam === 'color' || fam === 'effects')) (state._gradeArgs || (state._gradeArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
-  if ((fam === 'color' || fam === 'effects') && gradeOps(state, MODES, ev)) ev._gradeDone = true;
+  if ((fam === 'color' || fam === 'effects') && gradeOps(state, MODES, ev)) ev._kvDone = true;
   const T = ev.target || {}, P = ev.payload || {};
   const param = T.param || P.param, val = P.to ?? P.value;
   const args = { ...(T.clip_id ? { clip: T.clip_id } : {}), ...(param && val != null ? { [param]: fmtVal(val, param) } : {}) };

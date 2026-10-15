@@ -111,6 +111,7 @@ const RULES = [
   [/batch|history|checkpoint|recipe|template_apply|project_diff|relink|undo|redo|collect_project/, 'batch'],
   [/keyframe_bezier|set_motion_path|bind_beats|set_expression|add_null|set_parent/, 'graph'],
   [/loudness|audio|duck|detect_beats|mix_audio|normalize|^(set_)?(gain|pan|eq|compress|limit)|_eq$|compressor|limiter|stem/, 'mixing'],
+  [/grade|white_balance|match_shot|match_color|cdl|color_curve|acescct|lut_node|^(add|connect|disconnect)_nodes?$|^set_node_(param|mask)$/, 'grading'],   // grade graph / balance tools before scopes
   [/scope|exposure|ocio|gamut|hdr_|cie/, 'color'],
   [/effect|adjustment_layer|posterize|transition|speed_lines/, 'effects'],
   [/^(add|remove|delete|move|rename|lock)_track|^set_track$/, 'edit'],          // timeline tracks, not camera tracking
@@ -127,7 +128,7 @@ const RULES = [
 ];
 // Read-only tools (queries, probes, samples, listings, descriptions): they change nothing, so they
 // never move the workspace; the router gives them the "inspect" HUD state instead.
-export const READONLY = /^(get_|list_|inspect_|probe_|sample_|query|describe_|read_|find$|search_tools$|job_status$|session_stats$|cache_stats$|kimo_info$|kimo_describe$|history_list$|ext_list$|recipe_list$|template_list$|path_info$|fit_info$|explain_|transform_ocio_|transform_vertex_stream$|camera_project_points$|camera_clip_triangle$|track_long_gap$)|_describe$|_info$|_metrics$|_residuals$/;
+export const READONLY = /^(get_|list_|inspect_|probe_|sample_|query|describe_|read_|find$|search_tools$|job_status$|session_stats$|cache_stats$|kimo_info$|kimo_describe$|history_list$|ext_list$|recipe_list$|template_list$|path_info$|fit_info$|explain_|transform_ocio_|transform_vertex_stream$|camera_project_points$|camera_clip_triangle$|track_long_gap$|analyze_color$|audit_color_output$|compare_aces2_reference$|compare_linear_exposure$|evaluate_grade_graph_samples$|evaluate_hlg_reference_display$|validate_hdr_transfer_math$|effect_uv_sample$)|_describe$|_info$|_metrics$|_residuals$/;
 export function inferMode(name) {
   if (!name) return null;
   if (READONLY.test(String(name).toLowerCase())) return null;
