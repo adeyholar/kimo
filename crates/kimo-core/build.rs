@@ -2,7 +2,7 @@
 // and its `pub fn commands() -> Vec<Command>` is added to the registry. New tools never need to edit an existing file.
 use std::{env, fs, path::PathBuf};
 fn main() {
-    build_ocio(); embed_git_commit();
+    build_ocio(); build_manifold(); embed_git_commit();
     let dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("src/ext"); println!("cargo:rerun-if-changed=src/ext");
     let mut names: Vec<(String, PathBuf)> = vec![];
     if let Ok(rd) = fs::read_dir(&dir) { for e in rd.flatten() { let p = e.path(); let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
@@ -38,4 +38,27 @@ fn embed_git_commit() {
     };
     if let Some(gd) = git(&["rev-parse", "--absolute-git-dir"]) { println!("cargo:rerun-if-changed={gd}/logs/HEAD"); println!("cargo:rerun-if-changed={gd}/HEAD"); }
     println!("cargo:rustc-env=KIMO_GIT_COMMIT={commit}");
+}
+
+/// Builds vendored Manifold 3.5.3 (Apache-2.0, vendor/manifold-3.5.3) as a static lib with
+/// cross-sections/TBB/bindings/tests OFF, serial (-j1, 2GB box), then compiles the C ABI shim
+/// (src/threed/manifold_shim.cpp) with the existing `cc` build-dep. No new dependencies.
+fn build_manifold() {
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let src = manifest.join("../../vendor/manifold-3.5.3").canonicalize().expect("vendor/manifold-3.5.3");
+    println!("cargo:rerun-if-changed={}", src.display());
+    println!("cargo:rerun-if-changed=src/threed/manifold_shim.cpp");
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("manifold-build");
+    let cfg = std::process::Command::new("cmake")
+        .args(["-S"]).arg(&src).args(["-B"]).arg(&out)
+        .args(["-DCMAKE_BUILD_TYPE=Release","-DBUILD_SHARED_LIBS=OFF","-DMANIFOLD_CROSS_SECTION=OFF","-DMANIFOLD_PAR=OFF","-DMANIFOLD_PYBIND=OFF","-DMANIFOLD_JSBIND=OFF","-DMANIFOLD_CBIND=OFF","-DMANIFOLD_TEST=OFF","-DMANIFOLD_DOWNLOADS=OFF","-DCMAKE_POSITION_INDEPENDENT_CODE=ON"])
+        .status().expect("cmake not found (required for vendored manifold)");
+    assert!(cfg.success(), "manifold cmake configure failed");
+    let build = std::process::Command::new("cmake").args(["--build"]).arg(&out).args(["--","-j1"]).status().expect("manifold build failed to start");
+    assert!(build.success(), "manifold build failed");
+    cc::Build::new().cpp(true).std("c++17").include(src.join("include")).include(out.join("include"))
+        .file("src/threed/manifold_shim.cpp").compile("kimo_manifold_shim");
+    println!("cargo:rustc-link-search=native={}", out.join("src").display());
+    println!("cargo:rustc-link-lib=static=manifold");
+    println!("cargo:rustc-link-lib=dylib=stdc++");
 }
