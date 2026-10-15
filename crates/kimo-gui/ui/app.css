@@ -128,6 +128,8 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .kv{position:absolute;inset:0;padding:0 15px;overflow:hidden}
 .kv .sec{height:var(--sec-h,48px);display:flex;align-items:flex-end;padding-bottom:var(--sec-pb,9px);font-weight:600;font-size:var(--sec-fs,17px);color:var(--cream);font-family:var(--title-font,var(--sans))}
 .kv .row{height:var(--kv-row,37px);display:flex;align-items:center;justify-content:space-between;white-space:nowrap;font-size:var(--kv-fs,16px)}
+/* a long value ("960 x 540 → 1080 x 1080", an output path) keeps a gap to its label and ellipsizes only at the panel edge */
+.kv .row{gap:14px} .kv .row .k{flex:none} .kv .row .v{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .kv.lines .row,.kv.lines .sec{border-bottom:1px solid var(--line2)}
 .kv .row .k{color:var(--klabel,var(--text));font-family:var(--label-font);font-size:var(--klabel-fs,inherit)}
 .kv .row .v{font-family:var(--kv-vfont,var(--mono));color:var(--cream);text-align:right}

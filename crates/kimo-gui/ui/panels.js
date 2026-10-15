@@ -116,10 +116,25 @@ function overlay(ov, w, h) {
   for (const o of ov) {
     if (o.quad) {
       const p = o.quad.map(([x, y]) => [x * w, y * h]);
-      s += `<polygon points="${p.map(q => q.join(',')).join(' ')}" fill="rgba(255,90,35,.08)" stroke="var(--ember)" stroke-width="1.5"/>`;
+      s += `<polygon points="${p.map(q => q.join(',')).join(' ')}" fill="rgba(255,90,35,.08)" stroke="var(--ember)" stroke-width="1.5"${o.roi ? ' stroke-dasharray="6 4"' : ''}/>`;
       p.forEach(q => s += `<circle cx="${q[0]}" cy="${q[1]}" r="4" fill="var(--ember)"/>`);
     }
     if (o.vline != null) s += `<line x1="${o.vline * w}" x2="${o.vline * w}" y1="0" y2="${h}" stroke="var(--ember)" stroke-width="2"/>`;
+    if (o.quad && o.grid) {   // mesh tracker: the nx x ny lattice inside the quad (bilinear)
+      const q = o.quad.map(([x, y]) => [x * w, y * h]), L = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const [nx, ny] = o.grid;
+      for (let i = 1; i < nx; i++) { const t = i / nx, a = L(q[0], q[1], t), b = L(q[3], q[2], t); s += `<line x1="${px(a[0])}" y1="${px(a[1])}" x2="${px(b[0])}" y2="${px(b[1])}" stroke="rgba(255,90,35,.55)" stroke-width="1"/>`; }
+      for (let j = 1; j < ny; j++) { const t = j / ny, a = L(q[0], q[3], t), b = L(q[1], q[2], t); s += `<line x1="${px(a[0])}" y1="${px(a[1])}" x2="${px(b[0])}" y2="${px(b[1])}" stroke="rgba(255,90,35,.55)" stroke-width="1"/>`; }
+    }
+    if (o.pt) { const [x, y] = [o.pt[0] * w, o.pt[1] * h], r = (o.r ?? .12) * Math.min(w, h); s += `<circle cx="${px(x)}" cy="${px(y)}" r="${px(r)}" fill="none" stroke="var(--ember)" stroke-width="1.5"/><circle cx="${px(x)}" cy="${px(y)}" r="3.5" fill="var(--ember)"/><path d="M${px(x - r - 6)} ${px(y)}h8M${px(x + r - 2)} ${px(y)}h8M${px(x)} ${px(y - r - 6)}v8M${px(x)} ${px(y + r - 2)}v8" stroke="var(--cream)" stroke-width="1"/>`; }
+    if (o.poly) s += `<polygon points="${o.poly.map(([x, y]) => px(x * w) + ',' + px(y * h)).join(' ')}" fill="rgba(245,241,231,.07)" stroke="var(--cream)" stroke-width="1.25" stroke-dasharray="5 3"/>`;
+    if (o.light) {
+      const [x, y] = [o.light[0] * w, o.light[1] * h], c = o.color && o.color.every(v => v != null) ? `rgb(${o.color.map(v => Math.round(Math.min(1, Math.max(0, v)) * 255)).join(',')})` : 'var(--cream)';
+      if (o.kind === 'subject') s += `<circle cx="${px(x)}" cy="${px(y)}" r="9" fill="none" stroke="var(--cream)" stroke-width="1" stroke-dasharray="3 3"/><path d="M${px(x - 4)} ${px(y)}h8M${px(x)} ${px(y - 4)}v8" stroke="var(--cream)"/>`;
+      else { s += `<circle cx="${px(x)}" cy="${px(y)}" r="7" fill="${c}" stroke="#141412" stroke-width="1.5"/>`; for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4; s += `<line x1="${px(x + 11 * Math.cos(a))}" y1="${px(y + 11 * Math.sin(a))}" x2="${px(x + 16 * Math.cos(a))}" y2="${px(y + 16 * Math.sin(a))}" stroke="var(--ember)" stroke-width="1.4"/>`; } }
+      if (o.label) s += `<text x="${px(x + 20)}" y="${px(y + 4)}" style="fill:var(--cream);font-family:var(--mono);font-size:11.5px">${E(o.label)}</text>`;
+    }
+    if (o.body) { const [x, y] = [o.body[0] * w, o.body[1] * h], r = Math.max(4, (o.r ?? .01) * w); s += `<circle cx="${px(x)}" cy="${px(y)}" r="${px(r)}" fill="rgba(255,90,35,.08)" stroke="var(--ember)" stroke-width="1.25"/><path d="M${px(x)} ${px(y)}v${px(r * .9)}" stroke="var(--ember)" stroke-width="1.25"/>${o.label ? `<text x="${px(x + r + 5)}" y="${px(y + 4)}" style="fill:var(--cream);font-family:var(--mono);font-size:11px">${E(o.label)}</text>` : ''}`; }
   }
   return s;
 }
@@ -331,7 +346,7 @@ function timeline({ spec, data, w, h }) {
 function keys({ spec, data, w, h }) {
   const o = spec.opts || {};
   const x0 = o.x0 ?? 190, x1 = w - (o.xr ?? 14);
-  const r = data.ruler; const X = rulerX(r, x0, x1);
+  const r = data.ruler || { t0: 0, t1: 20, step: 5 }; const X = rulerX(r, x0, x1);   // a live session hops here before any key exists
   let html = head(spec, data, data.metaChip ? `<span class="chip" style="padding:3px 8px;border-radius:4px;background:var(--raise);color:var(--text)">${E(data.metaChip)}</span>` : '');
   html += '<div class="tl">';
   if (data.strip) { // mini curve strip above ruler
@@ -381,7 +396,7 @@ function catmull(P) { // smooth path through points (uniform Catmull-Rom as cubi
 function curves({ spec, data, w, h }) {
   const o = spec.opts || {};
   const x0 = o.x0 ?? 196, x1 = w - (o.xr ?? 12);
-  const r = data.ruler; const X = rulerX(r, x0, x1);
+  const r = data.ruler || { t0: 0, t1: 20, step: 5 }; const X = rulerX(r, x0, x1);   // a live session hops here before any key exists
   const gy0 = o.gy0 ?? 72, gy1 = h - (o.gyb ?? 10);
   let html = head(spec, data) + '<div class="tl">';
   let s = '';

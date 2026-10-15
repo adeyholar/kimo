@@ -130,7 +130,7 @@ async def main():
         tgx = {'track_id': 'V1', 'clip_id': 'dune_ridge', 'param': 'x'}
         await X('set_property', 'g2', 'start', tgx, {'args': {'clip_id': 'dune_ridge', 'property': 'x', 'value': 480}})
         await X('set_property', 'g2', 'complete', tgx, {'dur_ms': 2, 'from': 0, 'to': 480, 'param': 'x'}); await frame()
-        g2 = await pg.evaluate("(() => { const v = document.querySelector('[data-panel=viewer]'); const r = v.querySelector('.gzread'); return [v.querySelectorAll('svg.gz rect[stroke-dasharray]').length, v.querySelectorAll('svg.gz path').length, r ? r.textContent : '']; })()")
+        g2 = await pg.evaluate("(() => { const v = document.querySelector('[data-panel=viewer]'); const r = v.querySelector('.gzread'); return [v.querySelectorAll('svg.gz rect[stroke-dasharray]').length, v.querySelectorAll('svg.gz path').length, r ? r.textContent : '', [...document.querySelectorAll('[data-panel=insp] .row')].map(e => e.textContent).find(s => s.startsWith('Position')) || '']; })()")
         tk = {'track_id': 'V1', 'clip_id': 'dune_ridge', 'param': 'opacity'}
         await X('set_keyframes', 'g3', 'start', tk, {'args': {'clip_id': 'dune_ridge', 'property': 'opacity', 'keys': [{'time': 0.5, 'value': 0}, {'time': 1.5, 'value': 1}]}})
         await X('set_keyframes', 'g3', 'complete', tk, {'dur_ms': 1})
@@ -142,10 +142,30 @@ async def main():
         g5 = await pg.evaluate("(() => { const r = document.querySelector('[data-panel=viewer] .gzread'); return [r ? r.textContent : '', document.querySelectorAll('[data-panel=viewer] svg.gz path[fill=\"var(--cream)\"]').length]; })()")
         bad = await pg.evaluate(BAD)
         rr0 = await pg.evaluate('__raf'); await pg.wait_for_timeout(3000); rr1 = await pg.evaluate('__raf')
-        ok_g = (g1[0] >= 9 and 'scale 100% → 125%' in g1[1] and g1[2] == 1 and g2[0] == 1 and g2[1] >= 3 and 'x 0 → 480' in g2[2]
+        ok_g = (g1[0] >= 9 and 'scale 100% → 125%' in g1[1] and g1[2] == 1 and g2[0] == 1 and g2[1] >= 3 and 'x 0 → 480' in g2[2] and '480, 0' in g2[3] and '0, 0' in g2[3]
                 and g3[0] >= 2 and g3[1] >= 1 and 'ease [0.34, 1.56, 0.64, 1]' in g3[2] and g3[3] >= 3 and 'motion path · 3 points' in g5[0] and g5[1] >= 3 and not bad and rr1 == rr0)
         print(f"{'PASS' if ok_g else 'FAIL'}  transform gizmo: scale {g1} move {g2} keys {g3} path {g5} rAF after {rr1 - rr0}")
         if not ok_g: fails.append('transform-gizmo')
+
+        # ---- 3D / tracking / lighting / mesh: drawn from the call's own args on the screen it opens ----
+        pg5 = await ctx.new_page(); errs5 = []; pg5.on('pageerror', lambda e: errs5.append(str(e)))
+        await pg5.goto(url.replace('feed=sim&scenario=m16&still=1', 'feed=off')); await pg5.wait_for_timeout(300)
+        async def run3(name, cid, args, result=None):
+            await pg5.evaluate('e => __kimo.apply(e)', {'tool_name': name, 'call_id': cid, 'phase': 'start', 'target': {}, 'payload': {'args': args}})
+            await pg5.evaluate('e => __kimo.apply(e)', {'tool_name': name, 'call_id': cid, 'phase': 'complete', 'target': {}, 'payload': {'dur_ms': 5, 'result': result or {}}})
+            await pg5.wait_for_timeout(60)
+            return await pg5.evaluate("(() => { const v = document.querySelector('[data-panel=viewer]'); return [__kimo.state.mode, v.querySelectorAll('svg.ov polygon').length, v.querySelectorAll('svg.ov line').length, v.querySelectorAll('svg.ov circle').length, v.textContent]; })()")
+        t1 = await run3('track_planar', 'd1', {'clip_id': 'clip_02', 'corners': [.3, .3, .7, .32, .68, .7, .32, .66]}, {'rms_px': 0.7})
+        t2 = await run3('track_mesh', 'd2', {'clip_id': 'clip_02', 'corners': [.2, .2, .8, .2, .8, .8, .2, .8], 'nx': 4, 'ny': 3})
+        l1 = await run3('set_light', 'd3', {'id': 'key', 'kind': 'point', 'pos': [.3, .25, 1], 'color': [1, .8, .6], 'intensity': 2.4})
+        lrows = await pg5.evaluate("[...document.querySelectorAll('[data-panel=lights] *')].map(e => e.textContent).filter(s => s.includes('key')).length")
+        m1 = await run3('mesh_lathe', 'd4', {'profile': [[0, 0], [1, 1]], 'segments': 96})
+        nodes = await pg5.evaluate("document.querySelector('[data-panel=stack]') ? document.querySelector('[data-panel=stack]').textContent : ''")
+        bad = await pg.evaluate(BAD)
+        ok_3 = (t1[0] == 'tracking' and t1[1] >= 1 and 'solve' not in t1[4] and 'track 0.70 px RMS' in t1[4] and t2[2] >= 5 and l1[0] == 'lighting' and l1[3] >= 1 and lrows >= 1
+                and m1[0] == 'modelling' and 'lathe' in nodes and not bad and not errs5)
+        print(f"{'PASS' if ok_3 else 'FAIL'}  3d/tracking: planar {t1[:4]} '{t1[4][-30:]}' mesh grid lines {t2[2]} light {l1[:4]} rows {lrows} stack '{nodes[-40:]}' m1 {m1[0]} bad {bad[:2]} errs {errs5[:2]}")
+        if not ok_3: fails.append('3d')
 
         # ---- cold real-engine session (?feed=off): events shaped like kimo-mcp's (no `type`) ----
         pg2 = await ctx.new_page(); errs2 = []; pg2.on('pageerror', lambda e: errs2.append(str(e)))
@@ -202,11 +222,14 @@ async def main():
         await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': 'export', 'call_id': 'x2', 'phase': 'complete', 'target': {}, 'payload': {'dur_ms': 900, 'result': {'path': '/tmp/k/out2.mp4', 'duration': 2.5}}, 'duration_ms': 900})
         await pg2.wait_for_timeout(80)
         row2 = await pg2.evaluate("document.querySelector('[data-panel=renders] .tr:not(.h)').textContent")
+        await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': 'export', 'call_id': 'x3', 'phase': 'start', 'target': {}, 'payload': {'args': {'path': '/home/naman/films/deliveries/kimo_live_square_master.mp4', 'width': 1080, 'height': 1080}}})
+        await pg2.wait_for_timeout(80)
+        kvfit = await pg2.evaluate("[...document.querySelectorAll('[data-panel=exp] .row')].map(r => { const k = r.querySelector('.k').getBoundingClientRect(), v = r.querySelector('.v').getBoundingClientRect(), p = r.getBoundingClientRect(); return [r.querySelector('.k').textContent, Math.round(v.left - k.right), v.right <= p.right + 0.5]; })")
         ok_x = (all(s in mid_txt for s in ['frame 72 / 144', '42 fps', 'eta 00:02', 'out.mp4', 'rendering 50%']) and '✓ done' in end_txt and 'MP4' in end_txt and 'out.mp4' in end_txt
                 and row1[1] == 'data:image/png;base64,' and '/tmp/k/out.mp4' in row1[2] and '00:06' in row1[2] and '4.2 MB' in row1[2] and abs(row1[0] - h_mid) < 0.5
-                and 'out2.mp4' in row2 and '00:03' in row2 and '✓ done' in row2 and ' · ' not in row2 and not re.search(r'undefined|NaN|null|-- ?MB|\? ?MB', row2))
+                and all(g >= 12 and inside for _, g, inside in kvfit) and 'out2.mp4' in row2 and '00:03' in row2 and '✓ done' in row2 and ' · ' not in row2 and not re.search(r'undefined|NaN|null|-- ?MB|\? ?MB', row2))
         if not ok_x: print('   checks:', [s in mid_txt for s in ['frame 72 / 144', '42 fps', 'eta 00:02', 'out.mp4', 'rendering 50%']], ['✓ done' in end_txt, 'MP4' in end_txt, 'out.mp4' in end_txt], end_txt[-200:])
-        print(f"{'PASS' if ok_x else 'FAIL'}  export job card + history row: mid '{mid_txt[-120:]}' row1 {row1[0]}px (mid {h_mid}) thumb {row1[1]} '{row1[2][:90]}' row2 '{row2[:80]}'")
+        print(f"{'PASS' if ok_x else 'FAIL'}  export job card + history row: mid '{mid_txt[-120:]}' row1 {row1[0]}px (mid {h_mid}) thumb {row1[1]} '{row1[2][:90]}' row2 '{row2[:80]}' kv gaps {[(k, g) for k, g, _ in kvfit]}")
         if not ok_x: fails.append('export-card')
         # ---- burst: 50 calls (start, 3 progress, complete) inside 100 ms ----
         r0 = await pg2.evaluate('__kimo.metrics.raf')

@@ -106,11 +106,11 @@ const RULES = [
   [/scope|exposure|ocio|gamut|hdr_|cie/, 'color'],
   [/effect|adjustment_layer|posterize|transition|speed_lines/, 'effects'],
   [/^(add|remove|delete|move|rename|lock)_track/, 'edit'],          // timeline tracks, not camera tracking
-  [/track|stabiliz|undistort|camera_solve/, 'tracking'],
+  [/track|stabiliz|undistort|camera_solve|solve_camera/, 'tracking'],
   [/mesh|sdf|lathe/, 'modelling'],
   [/hud|detection_box|counter|prompt_box|path_shape|shape_modifier|layer_style/, 'graphics'],
   [/emitter|advection|shard|simulate|particle/, 'particles'],
-  [/light_rig|material|relight|pbr/, 'lighting'],
+  [/light_rig|set_light|material|relight|pbr/, 'lighting'],
   [/key|spill|mask|roto|matte/, 'roto'],
   [/scene_add|light_add|camera_set|keyframe/, 'scene3d'],
   [/grade|white_balance|match_shot|analyze_frame/, 'grading'],
