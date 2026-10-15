@@ -761,7 +761,7 @@ function renders({ spec, data, w, h }) {
   let html = head(spec, data);
   html += `<div class="tbl" style="top:${o.top ?? 42}px">` + `<div class="tr h" style="${cols}">${(data.head || []).map(x => `<span>${E(x)}</span>`).join('')}</div>` +
     (data.rows || []).map(r => `<div class="tr" style="${cols};height:${o.rowH ?? 30}px">` + r.map((c, i) => {
-      if (i === 3) { const st = String(c); const em = st.startsWith('●'); return `<span class="mono ${em ? 'em' : 'dim'}">${E(st)}</span>`; }
+      if (i === 3) { const st = String(c); const em = st.startsWith('●'); return `<span class="mono ${em ? 'em' : st.startsWith('✕') ? 'err' : 'dim'}">${E(st)}</span>`; }
       return `<span class="${i ? 'mono dim' : 'mono cream'}">${E(c)}</span>`;
     }).join('') + '</div>').join('') + '</div>';
   if (data.foot) html += `<div class="pfoot" style="left:auto;right:15px">${E(data.foot)}</div>`;

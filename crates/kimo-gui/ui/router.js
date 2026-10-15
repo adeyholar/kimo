@@ -285,6 +285,50 @@ function audioOps(state, MODES, ev) {
 }
 export const METER_MS = 1600;   // hit + VU decay + peak-hold fall: frames run only inside this window
 
+
+// Export family on the export screen's own panels (m14): the viewer's progress bar (frame a / b,
+// fps, ETA), the Export settings rows the call actually carried, and a job row in Renders that
+// counts up while rendering and stays in the list (history) when it lands.
+const mmss = ms => { const s = Math.max(0, Math.round(ms / 1000)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+const shortPath = p => { let s = String(p).replace(/^\/(home|Users)\/[^/]+/, '~'); const seg = s.split('/'); return s.length > 24 && seg.length > 3 ? '…/' + seg.slice(-2).join('/') : s; };
+function exportOps(state, MODES, ev) {
+  const M = MODES.export; if (!M) return false;
+  const V = state.views.export || (state.views.export = {});
+  const P = ev.payload || {}, A = P.args || {}, id = ev.call_id ?? ev.tool_name;
+  const name = Object.keys(M.panels), kvName = name.find(k => M.panels[k].kind === 'kv'), rName = name.find(k => M.panels[k].kind === 'renders'), vName = name.find(k => M.panels[k].kind === 'viewer');
+  const exp = V[kvName] || (V[kvName] = {}), ren = V[rName] || (V[rName] = {}), vw = V[vName] || (V[vName] = {});
+  ren.head = ren.head || ['name', 'preset', 'length', 'status', 'started'];
+  ren.rows = ren.rows || [];
+  let row = ren.rows.find(r => r._call === id);
+  if (ev.phase === 'start') {
+    const path = A.path ?? A.output ?? A.file ?? '';
+    const base = String(path).split(/[\\/]/).pop() || ev.tool_name;
+    const ext = (base.match(/\.([a-z0-9]+)$/i) || [])[1];
+    const res = A.resolution ?? (A.width && A.height ? `${A.width} x ${A.height}` : null);
+    const codec = A.codec ?? A.video_codec ?? null;   // only what the call carried: nothing is guessed
+    const set = [['Format', A.container ?? A.format ?? (ext ? ext.toUpperCase() : null)], ['Video', codec], ['Resolution', res], ['Frame rate', A.fps], ['Quality', A.crf != null ? 'CRF ' + A.crf : A.quality], ['Audio', A.audio === false ? 'off' : A.audio_codec], ['Output', path ? shortPath(path) : null]];
+    exp.blocks = exp.blocks || [];
+    for (const [k, v] of set) { if (v == null || v === '') continue; const b = exp.blocks.find(x => x.k === k); if (b) { if (b.v !== String(v)) { b.from = b.v; b.v = String(v); } b._flash = now(); } else exp.blocks.push({ k, v: String(v), _flash: now() }); }
+    const preset = [res && String(res).replace(/\s*x\s*/, 'x'), codec].filter(Boolean).join(' ') || A.preset || '';
+    if (!row) { row = [base, preset, '', '● rendering 0%', 'now']; row._call = id; row._t0 = now(); ren.rows.unshift(row); }
+    vw.progress = { pct: 0, left: 'starting', right: '' };
+    return true;
+  }
+  if (ev.phase === 'progress') {
+    const pct = P.pct ?? (P.current_frame != null && P.total_frames ? 100 * P.current_frame / P.total_frames : null);
+    if (pct == null) return false;
+    const left = P.current_frame != null && P.total_frames ? `frame ${P.current_frame} / ${P.total_frames}` : `${Math.round(pct)}%`;
+    const right = [P.fps != null ? `${Math.round(P.fps)} fps` : '', P.elapsed_ms != null ? `${mmss(P.elapsed_ms)} elapsed` : '', P.eta_ms != null ? `eta ${mmss(P.eta_ms)}` : ''].filter(Boolean).join('\u2003');
+    vw.progress = { pct: Math.round(pct), left, right };
+    if (row) row[3] = `● rendering ${Math.round(pct)}%`;
+    return true;
+  }
+  const ok = ev.phase === 'complete', dur = P.dur_ms ?? ev.duration_ms;
+  if (row) { row[3] = ok ? '✓ done' : '✕ failed'; if (dur != null) row[4] = mmss(dur); row._flash = now(); }
+  if (vw.progress) vw.progress = ok ? { ...vw.progress, pct: 100, right: (dur != null ? `done in ${mmss(dur)}` : 'done') } : { ...vw.progress, right: 'failed' };
+  return true;
+}
+
 // Unified event -> legacy rail events + family effects. Returns the legacy
 // events the reducer should apply (the rail), having already mutated views.
 export function route(ev, state, MODES) {
@@ -296,11 +340,13 @@ export function route(ev, state, MODES) {
   const args = { ...(T.clip_id ? { clip: T.clip_id } : {}), ...(param && val != null ? { [param]: fmtVal(val, param) } : {}) };
   if (ev.phase === 'start') {
     out.push({ type: 'tool_start', id, name: ev.tool_name, args: P.args ? P.args : (Object.keys(args).length ? args : undefined) });
+    if (fam === 'export') exportOps(state, MODES, ev);
     hud(state, ev, fam);
   } else if (ev.phase === 'progress') {
     const pct = P.pct ?? (P.done != null && P.total ? 100 * P.done / P.total : null);
     out.push({ type: 'tool_progress', id, progress: P.done != null ? { done: P.done, total: P.total } : { pct } });
     if (fam === 'audio' && /compress|comp(?!ute)|limit/.test(String(ev.tool_name).toLowerCase())) audioOps(state, MODES, ev);
+    if (fam === 'export') exportOps(state, MODES, ev);
     if (fam === 'color' && pct != null) { const v = views(state); v.viewer = v.viewer || {}; v.viewer.wipe = pct / 100; }
     hud(state, ev, fam, `${ev.tool_name} ${pct != null ? Math.round(pct) + '%' : ''}`.trim());
   } else if (ev.phase === 'complete' || ev.phase === 'error') {
@@ -312,10 +358,10 @@ export function route(ev, state, MODES) {
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
       if (/false_?colou?r/.test(String(ev.tool_name).toLowerCase())) { v.viewer = v.viewer || {}; v.viewer.falsecolor = { split: P.split ?? .5 }; }
-      const hit = timelineOps(state, MODES, ev, fam) | (fam === 'audio' ? audioOps(state, MODES, ev) : false);
+      const hit = timelineOps(state, MODES, ev, fam) | (fam === 'audio' ? audioOps(state, MODES, ev) : false) | (fam === 'export' ? exportOps(state, MODES, ev) : false);
       const diff = inspectorDiff(state, MODES, ev, fam);
       if (!hit && !diff) hud(state, ev, fam, ev.tool_name + ' ✓'); else hud(state, ev, fam, ev.tool_name + ' ✓');
-    } else hud(state, ev, fam, ev.tool_name + ' failed');
+    } else { if (fam === 'export') exportOps(state, MODES, ev); hud(state, ev, fam, ev.tool_name + ' failed'); }
   }
   return out;
 }

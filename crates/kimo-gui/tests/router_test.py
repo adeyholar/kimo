@@ -136,6 +136,18 @@ async def main():
         print(f"{'PASS' if ok_cold else 'FAIL'}  cold engine session: tracks {final} labels {labels} fx {fx} rail {[c[1] for c in rail2]} V1 y {before[0][1] if before else None}->{after[0][1] if after else None}")
         if bad2: print('   bad text:', bad2[:3])
         if not ok_cold: fails.append('cold-session')
+
+        # export job card: progress (frame / total, fps, elapsed, ETA) then a settled history row
+        await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': 'export', 'call_id': 'x1', 'phase': 'start', 'target': {}, 'payload': {'args': {'path': '/tmp/k/out.mp4', 'audio': False, 'codec': 'h264'}}})
+        await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': 'export', 'call_id': 'x1', 'phase': 'progress', 'target': {}, 'payload': {'current_frame': 72, 'total_frames': 144, 'fps': 41.7, 'pct': 50, 'elapsed_ms': 1700, 'eta_ms': 1700}})
+        await pg2.wait_for_timeout(80)
+        mid_txt = await pg2.evaluate("document.querySelector('[data-panel=viewer]').textContent + ' | ' + document.querySelector('[data-panel=renders]').textContent")
+        await pg2.evaluate('e => __kimo.apply(e)', {'tool_name': 'export', 'call_id': 'x1', 'phase': 'complete', 'target': {}, 'payload': {'dur_ms': 3400}, 'duration_ms': 3400})
+        await pg2.wait_for_timeout(80)
+        end_txt = await pg2.evaluate("document.querySelector('[data-panel=renders]').textContent + ' | ' + document.querySelector('[data-panel=exp]').textContent")
+        ok_x = all(s in mid_txt for s in ['frame 72 / 144', '42 fps', 'eta 00:02', 'out.mp4', 'rendering 50%']) and '✓ done' in end_txt and 'MP4' in end_txt and 'out.mp4' in end_txt
+        print(f"{'PASS' if ok_x else 'FAIL'}  export job card: mid '{mid_txt[-120:]}' end '{end_txt[:90]}'")
+        if not ok_x: fails.append('export-card')
         # ---- burst: 50 calls (start, 3 progress, complete) inside 100 ms ----
         r0 = await pg2.evaluate('__kimo.metrics.raf')
         await pg2.evaluate("""() => { const t0 = performance.now(); for (let k = 0; k < 50; k++) { const id = 'b' + k, tg = {track_id: 'track1', clip_id: 'clip2', param: 'temperature'};
