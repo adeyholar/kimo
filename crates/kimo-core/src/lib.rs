@@ -79,4 +79,5 @@ pub mod camera_projection;
 pub mod uv_math;
 pub mod transition_raw;
 pub mod particle_fields;
+pub mod particle_advect;
 pub mod threed;
