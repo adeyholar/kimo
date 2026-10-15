@@ -17,7 +17,7 @@ export const FAMILIES = [
   ['edit', /^(cut|split|blade|razor|trim|extend|ripple|slip|slide|move_clip|delete_clip|lift|roll)/],
   ['effects', /^(add_effect|apply_effect|set_effect|add_transition|remove_effect|add_speed|set_posterize|add_adjustment)/],
   ['transform', /^(set_property|set_clip_property|set_props?$|transform|set_transform|keyframe|set_keyframe|add_keyframe|scale|rotate|position|set_motion|add_null|set_parent|set_expression)/],
-  ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut)/],
+  ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut|set_grade_node|set_grade_graph|pick_white_balance|match_grade|match_color|set_white_balance)/],
   ['audio', /^(set_|add_|apply_|auto_|measure_|normalize_|analyze_)?(mix|audio|gain|fader|mute|solo|pan|compress|eq|limiter|limit|loudness|duck|stem|bus|route_)|^track_beats$/],
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
   ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents|fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track|undistort_clip|stabilize|apply_camera_solve|pin_layer|set_corner_pin)/],
@@ -99,8 +99,67 @@ function inspectorDiff(state, MODES, ev, fam) {
   return true;
 }
 
+
+// Grading (m15): the 3-way balance follows the call's own lift/gamma/gain numbers — color_wheels / grade
+// effects (lift_r…gain_b), grade-graph nodes carrying the same params, and engines that send lift/gamma/gain
+// directly. Each wheel's dot is its colour balance (channel deltas around the hue ring), the values are the
+// R/G/B deltas from neutral, and the wheel the call changed turns ember. White-balance picks and shot matches
+// draw the regions they sampled on the viewer.
+const WHEEL_DEF = { lift: 0, gamma: 1, gain: 1 };
+const HUE = { r: 100, g: 220, b: 340 };   // where each channel pulls on the ring (degrees, ccw from 3 o'clock)
+function gradeOps(state, MODES, ev) {
+  if (ev.phase !== 'complete') return false;
+  const P = ev.payload || {}, tn = String(ev.tool_name).toLowerCase();
+  const A = P.args || (state._gradeArgs && state._gradeArgs[ev.call_id]) || {};
+  const R = P.result && typeof P.result === 'object' ? P.result : {};
+  const prm = (A.params && typeof A.params === 'object' ? A.params : null) || (A.node && A.node.params) || A;
+  const kind = String(A.kind ?? (A.node && A.node.kind) ?? '').toLowerCase();
+  let hit = false;
+  const wheelMode = Object.entries(MODES).find(([, M]) => Object.values(M.panels).some(sp => sp.kind === 'wheels'));
+  if (wheelMode) {
+    const V = state.views[wheelMode[0]] || (state.views[wheelMode[0]] = {});
+    const key = Object.entries(MODES[wheelMode[0]].panels).find(([, sp]) => sp.kind === 'wheels')[0];
+    const B = V[key] || (V[key] = {});
+    const G = B._g || (B._g = { lift: { r: 0, g: 0, b: 0 }, gamma: { r: 1, g: 1, b: 1 }, gain: { r: 1, g: 1, b: 1 } });
+    let changed = null;
+    for (const w of ['lift', 'gamma', 'gain']) {
+      for (const c of ['r', 'g', 'b']) {
+        const v = numOf(prm[`${w}_${c}`]);
+        if (v != null) { G[w][c] = v; changed = w; }
+      }
+      const m = numOf(prm[w]);   // a master value: same delta on all three channels
+      if (m != null && (kind === '' || /grade|wheel|lgg|primar/.test(kind) || tn === 'grade')) {
+        const base = String(prm[w]).trim().match(/^[+-]/) ? WHEEL_DEF[w] + m : m;
+        for (const c of ['r', 'g', 'b']) G[w][c] = base; changed = w;
+      }
+    }
+    if (changed) {
+      const fmt = d => (d > 0.0049 ? '+' : d < -0.0049 ? '-' : '') + Math.abs(d).toFixed(2);
+      B.wheels = ['lift', 'gamma', 'gain'].map(w => {
+        const d = ['r', 'g', 'b'].map(c => G[w][c] - WHEEL_DEF[w]), mean = (d[0] + d[1] + d[2]) / 3;
+        let x = 0, y = 0; ['r', 'g', 'b'].forEach((c, k) => { const a = HUE[c] * Math.PI / 180; x += (d[k] - mean) * Math.cos(a); y += (d[k] - mean) * Math.sin(a); });
+        const mag = Math.hypot(x, y), k = Math.min(.82, mag * 6) / (mag || 1);
+        const em = w === changed;
+        return { name: w[0].toUpperCase() + w.slice(1), dot: [x * k, y * k], em, ring: em && Math.abs(mean) > 1e-6 ? (mean > 0 ? 70 : 250) : null, vals: d.map(fmt) };
+      });
+      B._flash = now(); hit = true;
+    }
+  }
+  // regions the call sampled: the neutral patch of a white-balance pick, the source/reference of a match
+  const [mode, V2] = modeViews(state, MODES, ev);
+  const vw = V2.viewer || (V2.viewer = {});
+  const box = (r, label) => Array.isArray(r) && r.length === 4 && r.every(v => numOf(v) != null) ? { rect: r.map(numOf), label } : null;
+  const regs = [];
+  if (tn === 'pick_white_balance' && [A.x, A.y, A.w, A.h].every(v => numOf(v) != null)) regs.push(box([A.x, A.y, A.w, A.h], 'neutral'));
+  if (tn === 'match_grade' || tn === 'match_color') { const s1 = box(A.source_region, 'source'), s2 = box(A.ref_region, A.ref_clip_id ? `ref · ${A.ref_clip_id}` : 'ref'); if (s1) regs.push(s1); if (s2) regs.push(s2); }
+  if (regs.length) { vw.overlay = (vw.overlay || []).filter(o => o._kind !== tn).concat(regs.filter(Boolean).map(o => ({ ...o, _call: ev.call_id, _kind: tn }))); hit = true; }
+  if ((tn === 'match_grade' || tn === 'match_color' || tn === 'pick_white_balance') && !regs.length) { vw.wipe = 1; hit = true; }
+  return hit;
+}
+
 function hud(state, ev, fam, text) {
-  state.hud = { fam, tool: ev.tool_name, text: text || ev.tool_name, phase: ev.phase, t: now() };
+  const shown = fam === 'inspect' ? fam : ((state.explicitMode ? null : inferMode(String(ev.tool_name))) || state.mode || fam);   // the tag names the screen, not the router family
+  state.hud = { fam: shown, family: fam, tool: ev.tool_name, text: text || ev.tool_name, phase: ev.phase, t: now() };
 }
 
 // Timeline effects of edit / ingest / effects / audio / text tools.
@@ -354,6 +413,8 @@ export function route(ev, state, MODES) {
   if (fam === 'inspect') return inspectOps(state, MODES, ev, id);
   if (fam === 'transform' && (ev.phase === 'start' || ev.phase === 'complete')) xfOps(state, MODES, ev);
   if (fam === '3d') sceneOps(state, MODES, ev);
+  if (ev.phase === 'start' && (fam === 'color' || fam === 'effects')) (state._gradeArgs || (state._gradeArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
+  if ((fam === 'color' || fam === 'effects') && gradeOps(state, MODES, ev)) ev._gradeDone = true;
   const T = ev.target || {}, P = ev.payload || {};
   const param = T.param || P.param, val = P.to ?? P.value;
   const args = { ...(T.clip_id ? { clip: T.clip_id } : {}), ...(param && val != null ? { [param]: fmtVal(val, param) } : {}) };

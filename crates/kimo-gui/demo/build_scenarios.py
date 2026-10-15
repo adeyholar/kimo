@@ -234,11 +234,11 @@ scen("m15", "grading", "dune_film.kimo", "codex", hms("00:14:02"),
   [["import_media", ["neon_walk.mov"], 400], ["trim", ["clip_07", {"out": "00:04.20"}], 100], ["analyze_frame", ["clip_07"], 600], ["match_shot", ["clip_07", {"ref": "clip_06"}], 900],
    ["set_white_balance", ["clip_07", "5600K"], 100], ["grade", ["clip_07", {"lift": "-0.02"}], 100], ["grade", ["clip_07", {"gamma": "+0.01"}], 100], ["grade", ["clip_07", {"sat": "1.10"}], 100], ["grade", ["clip_07", {"gain": "+0.06"}], 1200]],
   {"agent": {"footer": "following grade"},
-   "viewer": {"src": F("m15"), "tags": [{"text": "source"}, {"text": "kimo grade", "pos": "tr"}], "tc": "01:00:42:19"},
-   "grade": {"sub": "clip_07  neon_walk", "blocks": [K("Temperature", "5600K"), K("Tint", "-3"), K("Contrast", "1.14"), K("Pivot", "0.435"), K("Saturation", "1.10"), K("Gain", "+0.06", ch=True), K("Highlights", "-12"), K("Shadows", "+6"),
-             S("Nodes"), {"list": ["01  balance", "02  contrast", "03  look"], "sel": 2}, {"widget": "thumbs", "h": 70, "style": "border:none;background:none", "items": [{"src": F("m15_t1")}, {"src": F("m15_t2"), "sel": True, "label": "clip_07"}, {"src": F("m15_t3")}]}]},
-   "bottom": {"wheels": [{"name": "Lift", "dot": [-.12, .05], "vals": ["-0.02", "0.00", "+0.03"]}, {"name": "Gamma", "dot": [.05, .02], "vals": ["+0.01", "0.00", "-0.01"], "cols": [None, None, "#6f8fe0"]},
-                         {"name": "Gain", "em": True, "dot": [0, 0], "ring": 45, "vals": ["+0.06", "+0.04", "+0.02"]}]}})
+   "viewer": {"src": F("m15"), "tags": [{"text": "source", "x": 8, "y": 8}, {"text": "kimo grade", "pos": "tr", "x": 8, "y": 8}], "tc": "01:00:42:19"},
+   "grade": {"sub": "clip_07  neon_walk", "blocks": [K("Temperature", "5600K"), K("Tint", "-3", dim=True), K("Contrast", "1.14"), K("Pivot", "0.435"), K("Saturation", "1.10"), K("Gain", "+0.06", ch=True), K("Highlights", "-12"), K("Shadows", "+6"),
+             S("Nodes", h=58), {"list": ["01  balance", "02  contrast", "03  look"], "sel": 2}, {"widget": "thumbs", "h": 104, "tgap": 9.5, "labH": 24, "style": "border:none;border-top:1px solid var(--line);border-radius:0;background:none;margin:12px -15px 0;padding:13px 0 0 10px", "items": [{"src": F("m15_t1"), "w": 69, "h": 56.4}, {"src": F("m15_t2"), "sel": True, "label": "clip_07", "w": 99.2, "h": 57.4}, {"src": F("m15_t3"), "w": 64, "h": 56.4}]}]},
+   "bottom": {"parade": {"src": F("m15_parade")}, "wheels": [{"name": "Lift", "dot": [0, 0], "vals": ["-0.02", "0.00", "+0.03"]}, {"name": "Gamma", "dot": [0, 0], "vals": ["+0.01", "0.00", "-0.01"], "cols": [None, None, "#6f8fe0"]},
+                         {"name": "Gain", "em": True, "dot": [0, 0], "ring": 70, "vals": ["+0.06", "+0.04", "+0.02"]}]}})
 
 for s in SC:
     s["order"] = int(s["id"][1:])

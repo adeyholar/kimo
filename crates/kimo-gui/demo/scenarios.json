@@ -7249,11 +7249,15 @@
     "src": "../demo/frames/m15.jpg",
     "tags": [
      {
-      "text": "source"
+      "text": "source",
+      "x": 8,
+      "y": 8
      },
      {
       "text": "kimo grade",
-      "pos": "tr"
+      "pos": "tr",
+      "x": 8,
+      "y": 8
      }
     ],
     "tc": "01:00:42:19"
@@ -7267,7 +7271,8 @@
      },
      {
       "k": "Tint",
-      "v": "-3"
+      "v": "-3",
+      "dim": true
      },
      {
       "k": "Contrast",
@@ -7295,7 +7300,8 @@
       "v": "+6"
      },
      {
-      "sec": "Nodes"
+      "sec": "Nodes",
+      "h": 58
      },
      {
       "list": [
@@ -7307,31 +7313,42 @@
      },
      {
       "widget": "thumbs",
-      "h": 70,
-      "style": "border:none;background:none",
+      "h": 104,
+      "tgap": 9.5,
+      "labH": 24,
+      "style": "border:none;border-top:1px solid var(--line);border-radius:0;background:none;margin:12px -15px 0;padding:13px 0 0 10px",
       "items": [
        {
-        "src": "../demo/frames/m15_t1.jpg"
+        "src": "../demo/frames/m15_t1.jpg",
+        "w": 69,
+        "h": 56.4
        },
        {
         "src": "../demo/frames/m15_t2.jpg",
         "sel": true,
-        "label": "clip_07"
+        "label": "clip_07",
+        "w": 99.2,
+        "h": 57.4
        },
        {
-        "src": "../demo/frames/m15_t3.jpg"
+        "src": "../demo/frames/m15_t3.jpg",
+        "w": 64,
+        "h": 56.4
        }
       ]
      }
     ]
    },
    "bottom": {
+    "parade": {
+     "src": "../demo/frames/m15_parade.jpg"
+    },
     "wheels": [
      {
       "name": "Lift",
       "dot": [
-       -0.12,
-       0.05
+       0,
+       0
       ],
       "vals": [
        "-0.02",
@@ -7342,8 +7359,8 @@
      {
       "name": "Gamma",
       "dot": [
-       0.05,
-       0.02
+       0,
+       0
       ],
       "vals": [
        "+0.01",
@@ -7363,7 +7380,7 @@
        0,
        0
       ],
-      "ring": 45,
+      "ring": 70,
       "vals": [
        "+0.06",
        "+0.04",

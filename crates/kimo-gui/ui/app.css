@@ -112,7 +112,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .frame img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
 .frame .ph-frame{position:absolute;inset:0;background:repeating-linear-gradient(135deg,#121211 0 8px,#0f0f0e 8px 16px)}
 .frame svg.ov{position:absolute;inset:0;width:100%;height:100%}
-.tag{position:absolute;padding:0 11px;height:30px;line-height:30px;border-radius:6px;background:rgba(78,74,68,.86);
+.tag{position:absolute;padding:0 var(--tag-px,11px);height:var(--tag-h,30px);line-height:var(--tag-h,30px);border-radius:var(--tag-r,6px);background:var(--tag-bg,rgba(78,74,68,.86));
   color:var(--cream);font-family:var(--tag-font,var(--sans));font-size:var(--tag-fs,16px);white-space:nowrap}
 .vmeta{position:absolute;left:14px;right:14px;height:22px;display:flex;align-items:center;font-size:var(--vmeta-fs,var(--fs-s));color:var(--dim);font-family:var(--vmeta-font,var(--mono))}
 .vmeta .tc{position:absolute;left:50%;transform:translateX(-50%);font-family:var(--mono);font-weight:var(--tc-w,600);color:var(--tc-c,var(--cream));font-size:var(--tc-fs,17px)}
@@ -126,7 +126,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 
 /* ---------- inspector key/value ---------- */
 .kv{position:absolute;inset:0;padding:0 15px;overflow:hidden}
-.kv .sec{height:var(--sec-h,48px);display:flex;align-items:flex-end;padding-bottom:var(--sec-pb,9px);font-weight:600;font-size:var(--sec-fs,17px);color:var(--cream);font-family:var(--title-font,var(--sans))}
+.kv .sec{height:var(--sec-h,48px);display:flex;align-items:flex-end;padding-bottom:var(--sec-pb,9px);font-weight:600;font-size:var(--sec-fs,17px);color:var(--cream);font-family:var(--sec-font,var(--title-font,var(--sans)))}
 .kv .row{height:var(--kv-row,37px);display:flex;align-items:center;justify-content:space-between;white-space:nowrap;font-size:var(--kv-fs,16px)}
 /* a long value ("960 x 540 → 1080 x 1080", an output path) keeps a gap to its label and ellipsizes only at the panel edge */
 .kv .row{gap:14px} .kv .row .k{flex:none} .kv .row .v{min-width:0;overflow:hidden;text-overflow:ellipsis}
@@ -140,7 +140,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .kv .row.emb .v{color:var(--ember-text)}
 .kv .row.bar{position:relative}
 .kv .row.bar::before{content:"";position:absolute;left:-15px;top:4px;bottom:4px;width:3px;background:var(--ember)}
-.kv .list{border:1px solid var(--line);border-radius:5px;overflow:hidden;margin:4px 0}
+.kv .list{border:var(--list-border,1px solid var(--line));border-radius:5px;overflow:hidden;margin:4px 0}
 .kv .list div{height:var(--li-h,26px);display:flex;align-items:center;padding:0 10px;font-family:var(--li-font,var(--mono));font-size:var(--li-fs,12px);color:var(--li-c,var(--text))}
 .kv .list div.sel{background:var(--raise2);color:var(--cream)}
 .kv .code{background:var(--raise);border-radius:5px;padding:var(--code-pad,9px 11px);font-family:var(--mono);font-size:var(--code-fs,12px);line-height:var(--code-lh,18px);color:var(--cream);white-space:pre;margin:2px 0 4px}
@@ -286,3 +286,8 @@ body.calls-sans{--call-font:var(--sans)}
 .sig.noargs .pp{display:var(--empty-pp,inline)}
 .kv .widget.img{border:0;background:none;margin:var(--wimg-m,4px 0)} .kv .widget.img img{display:block;width:100%;height:100%;object-fit:cover}
 .kv .cap b{color:var(--cream);font-weight:400}
+.kv .list div+div{box-shadow:inset 0 1px 0 var(--list-sep,transparent)} .kv .list div.sel{border-radius:var(--li-sel-r,0);box-shadow:none} .kv .list div.sel+div{box-shadow:none}
+.kv .list .n{color:var(--dim);margin-right:12px}
+.kv .row.ch .k{color:var(--ch-label,var(--klabel,var(--text)))} .kv .row.dim .k{color:var(--dim)}
+.kv .widget{position:relative}
+[data-panel=grade] .ph .t{font-family:var(--grade-title-font,var(--title-font,var(--sans)))}

@@ -126,6 +126,7 @@ function overlay(ov, w, h) {
       for (let i = 1; i < 8; i++) { const x = w * i / 8; s += line(Array.from({ length: 21 }, (_, j) => [x, h * j / 20])); }
       for (let i = 1; i < 6; i++) { const y = h * i / 6; s += line(Array.from({ length: 21 }, (_, j) => [w * j / 20, y])); }
     }
+    if (o.rect) { const [x, y, rw, rh] = o.rect; s += `<rect x="${px(x * w)}" y="${px(y * h)}" width="${px(rw * w)}" height="${px(rh * h)}" fill="none" stroke="var(--cream)" stroke-width="1.25" stroke-dasharray="5 3"/>` + (o.label ? `<text x="${px(x * w + 4)}" y="${px(y * h - 5)}" style="fill:var(--cream);font-family:var(--mono);font-size:11px">${E(o.label)}</text>` : ''); }
     if (o.crop) { const cw = w * o.crop, ch = h * o.crop; s += `<rect x="${px((w - cw) / 2)}" y="${px((h - ch) / 2)}" width="${px(cw)}" height="${px(ch)}" fill="none" stroke="var(--ember)" stroke-width="1.5" stroke-dasharray="6 4"/>`; }
     if (o.vline != null) s += `<line x1="${o.vline * w}" x2="${o.vline * w}" y1="0" y2="${h}" stroke="var(--ember)" stroke-width="2"/>`;
     if (o.quad && o.grid) {   // mesh tracker: the nx x ny lattice inside the quad (bilinear)
@@ -214,12 +215,12 @@ function kv({ spec, data, w, h }) {
 function block(b, w) {
   if (b.sec !== undefined) return `<div class="sec" ${b.h ? `style="height:${b.h}px"` : ''}>${E(b.sec)}</div>`;
   if (b.gap) return `<div style="height:${b.gap}px"></div>`;
-  if (b.list) return `<div class="list">${b.list.map((x, i) => `<div class="${i === b.sel ? 'sel' : ''}">${E(x)}</div>`).join('')}</div>`;
+  if (b.list) return `<div class="list">${b.list.map((x, i) => { const m = /^(\d+)\s+(.*)$/.exec(String(x)); return `<div class="${i === b.sel ? 'sel' : ''}">${m ? `<span class="n">${E(m[1])}</span>${E(m[2])}` : E(x)}</div>`; }).join('')}</div>`;
   if (b.code) return `<div class="code">${E(b.code)}</div>`;
   if (b.cap) return `<div class="cap"><span>${E(b.cap[0])}</span><span>${E(b.cap[1] || '')}</span></div>`;
   if (b.widget) return `<div class="widget${b.src ? ' img' : ''}" style="height:${b.h || 90}px${b.style ? ';' + b.style : ''}">${b.src ? `<img src="${E(b.src)}" alt="">` : (WIDGETS[b.widget] || (() => ''))(b, w, b.h || 90)}</div>`;
   if (b.html) return b.html;
-  const cls = ['row', b.from != null || b.ch ? 'ch' : '', b.chip ? 'chip' : '', b.emb ? 'emb' : '', b.bar ? 'bar' : ''].join(' ');
+  const cls = ['row', b.from != null || b.ch ? 'ch' : '', b.chip ? 'chip' : '', b.emb ? 'emb' : '', b.bar ? 'bar' : '', b.dim ? 'dim' : ''].join(' ');
   const v = b.from != null ? `<span class="from">${E(b.from)}</span><span class="arr">→</span>${E(b.v)}` : E(b.v);
   return `<div class="${cls}${F(b)}"${b.h ? ` style="height:${b.h}px"` : ''}><span class="k"${b.kStyle ? ` style="${b.kStyle}"` : ''}>${E(b.k)}</span><span class="v"${b.vStyle ? ` style="${b.vStyle}"` : ''}>${v}</span></div>`;
 }
@@ -285,9 +286,10 @@ const WIDGETS = {
     return `<svg viewBox="0 0 ${w} ${h}">${s}</svg>`;
   },
   thumbs(b, w, h) {
-    const n = b.items.length, gap = b.gap ?? 8, tw = (w - gap * (n - 1)) / n;
-    return `<div style="display:flex;gap:${gap}px;height:100%">` + b.items.map(t => `<div class="thumb ${t.sel ? 'sel' : ''}" style="flex:1;height:${t.label ? h - 18 : h}px">${t.src ? `<img src="${E(t.src)}">` : ''}</div>`).join('') + '</div>' +
-      (b.items.some(t => t.label) ? `<div style="display:flex;gap:${gap}px;margin-top:3px">${b.items.map(t => `<span style="flex:1;text-align:center;font-family:var(--mono);font-size:10.5px;color:var(--dim)">${E(t.label || '')}</span>`).join('')}</div>` : '');
+    const n = b.items.length, gap = b.tgap ?? 8, lh = b.labH ?? 18;   // items may carry their own width (m15: the selected clip is wider)
+    const W = t => t.w ? `flex:none;width:${t.w}px` : 'flex:1';
+    return `<div style="display:flex;gap:${gap}px;height:100%;align-items:flex-start">` + b.items.map(t => `<div class="thumb ${t.sel ? 'sel' : ''}" style="${W(t)};height:${t.h ?? (b.items.some(x => x.label) ? h - lh : h)}px">${t.src ? `<img src="${E(t.src)}">` : ''}</div>`).join('') + '</div>' +
+      (b.items.some(t => t.label) ? `<div style="display:flex;gap:${gap}px;position:absolute;left:0;right:0;bottom:0;height:${lh}px;align-items:center">${b.items.map(t => `<span style="${W(t)};text-align:center;font-family:var(--mono);font-size:var(--thl-fs,10.5px);color:var(--thl-c,var(--dim))">${E(t.label || '')}</span>`).join('')}</div>` : '');
   },
 };
 
@@ -741,27 +743,40 @@ function wheels({ spec, data, w, h }) {
   const o = spec.opts || {};
   const pw = o.paradeW ?? Math.round(w * .36);
   const ww = w - pw, n = (data.wheels || []).length || 3;
-  const r = o.r ?? Math.min(ww / n / 2 - 22, (h - 70) / 2);
+  const r = o.r ?? Math.min(ww / n / 2 - 22, (h - 70) / 2), sw = o.ringW ?? 3;
+  // ring: a conic sweep drawn as short arcs (SVG has no conic gradient); stops are [angle°, colour] counter-clockwise from 3 o'clock
+  const RING = [[0, '#bcbcde'], [45, '#cea8db'], [90, '#d8a9cd'], [135, '#e3c4c1'], [180, '#dbd4b8'], [225, '#c5e1bb'], [270, '#b6d8bf'], [315, '#abd0d6'], [360, '#bcbcde']];
+  const RINGE = [[0, '#dca98c'], [45, '#f99271'], [90, '#f3743d'], [135, '#f2ac7b'], [180, '#d8ca99'], [225, '#c1d397'], [270, '#bad09f'], [315, '#c7be9f'], [360, '#dca98c']];
+  const hex = c => [1, 3, 5].map(k => parseInt(c.slice(k, k + 2), 16));
+  const at = (st, a) => { let k = 0; while (k < st.length - 2 && st[k + 1][0] <= a) k++; const [a0, c0] = st[k], [a1, c1] = st[k + 1], t = (a - a0) / (a1 - a0), A = hex(c0), B = hex(c1); return `rgb(${A.map((v, j) => Math.round(v + (B[j] - v) * t)).join(',')})`; };
+  const conic = (cx, cy, st) => { let s = ''; const N = 72; for (let k = 0; k < N; k++) { const a0 = k * 360 / N, a1 = (k + 1.15) * 360 / N, P = a => [px(cx + Math.cos(a * Math.PI / 180) * r), px(cy - Math.sin(a * Math.PI / 180) * r)]; const [x0, y0] = P(a0), [x1, y1] = P(a1); s += `<path d="M${x0} ${y0}A${r} ${r} 0 0 0 ${x1} ${y1}" stroke="${at(st, (k + .5) * 360 / N)}"/>`; } return `<g fill="none" stroke-width="${sw}">${s}</g>`; };
   let s = `<defs><radialGradient id="whc" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#1b1a19"/><stop offset="1" stop-color="#121211"/></radialGradient>
    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7a5ad8"/><stop offset=".35" stop-color="#3fa3a0"/><stop offset=".7" stop-color="#9fbf6a"/><stop offset="1" stop-color="#e8c79a"/></linearGradient>
    <linearGradient id="ringE" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#e8c79a"/><stop offset="1" stop-color="#ff5a23"/></linearGradient></defs>`;
-  (data.wheels || []).forEach((W, i) => {
-    const cx = ww / n * (i + .5), cy = (o.cy ?? (r + 34));
-    s += `<text x="${cx}" y="${o.labY ?? 18}" font-size="12" fill="var(--text)" text-anchor="middle">${E(W.name)}</text>`;
-    s += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#whc)" stroke="url(#${W.em ? 'ringE' : 'ring'})" stroke-width="3"/>`;
-    s += `<line x1="${cx - r + 8}" x2="${cx + r - 8}" y1="${cy}" y2="${cy}" stroke="#262624"/><line x1="${cx}" x2="${cx}" y1="${cy - r + 8}" y2="${cy + r - 8}" stroke="#262624"/>`;
+  const lfs = o.labFs ?? 12, vfs = o.valFs ?? 11.5;
+  const WH = data.wheels || [{ name: 'Lift', vals: ['0.00', '0.00', '0.00'] }, { name: 'Gamma', vals: ['0.00', '0.00', '0.00'] }, { name: 'Gain', vals: ['0.00', '0.00', '0.00'] }];   // neutral until a grade lands
+  WH.forEach((W, i) => {
+    const cx = o.cx ? o.cx[i] : ww / n * (i + .5), cy = (o.cy ?? (r + 34));
+    s += `<text x="${cx}" y="${o.labY ?? 18}" font-size="${lfs}" fill="var(--wl-c,var(--text))" text-anchor="middle">${E(W.name)}</text>`;
+    if (o.conic) s += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${o.disc ?? '#0e0e0e'}"/>` + conic(cx, cy, W.em ? RINGE : RING);
+    else s += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#whc)" stroke="url(#${W.em ? 'ringE' : 'ring'})" stroke-width="${sw}"/>`;
+    const ci = r - sw / 2 - (o.cross ?? 8);
+    s += `<line x1="${cx - ci}" x2="${cx + ci}" y1="${cy}" y2="${cy}" stroke="${o.crossC ?? '#262624'}"/><line x1="${cx}" x2="${cx}" y1="${cy - ci}" y2="${cy + ci}" stroke="${o.crossC ?? '#262624'}"/>`;
     const [dx, dy] = W.dot || [0, 0];
-    s += `<circle cx="${px(cx + dx * r)}" cy="${px(cy - dy * r)}" r="4" fill="${W.em ? 'var(--ember)' : 'var(--cream)'}"/>`;
-    if (W.ring != null) { const a = W.ring * Math.PI / 180; s += `<circle cx="${px(cx + Math.cos(a) * r)}" cy="${px(cy - Math.sin(a) * r)}" r="4.5" fill="var(--ember)"/>`; }
-    s += `<text x="${cx}" y="${cy + r + 22}" font-size="11.5" text-anchor="middle">` + W.vals.map((v, k) => `<tspan dx="${k ? 10 : 0}" fill="${(W.em && k === 0) ? 'var(--ember-text)' : (W.cols && W.cols[k]) || 'var(--text)'}">${E(v)}</tspan>`).join('') + '</text>';
+    s += `<circle cx="${px(cx + dx * r)}" cy="${px(cy - dy * r)}" r="${o.dotR ?? 4}" fill="${W.em ? 'var(--ember)' : 'var(--cream)'}"/>`;
+    if (W.ring != null) { const a = W.ring * Math.PI / 180; s += `<circle cx="${px(cx + Math.cos(a) * r)}" cy="${px(cy - Math.sin(a) * r)}" r="${o.knobR ?? 4.5}" fill="var(--ember)"${o.conic ? ' stroke="#0e0e0e" stroke-width="1.5"' : ''}/>`; }
+    s += `<text x="${cx}" y="${o.valY ?? (cy + r + 22)}" font-size="${vfs}" text-anchor="middle">` + W.vals.map((v, k) => `<tspan dx="${k ? (o.valGap ?? 10) : 0}" fill="${(W.em && k === 0) ? 'var(--ember-text)' : (W.cols && W.cols[k]) || 'var(--wv-c,var(--text))'}">${E(v)}</tspan>`).join('') + '</text>';
   });
-  // parade
-  const x0 = ww + 34, x1 = w - 12, y0 = o.py0 ?? 22, y1 = h - (o.pyb ?? 22);
-  s += `<line x1="${ww}" x2="${ww}" y1="14" y2="${h - 14}" stroke="var(--line)"/>`;
-  s += [1023, 768, 512, 256, 0].map((v, i) => `<text x="${x0 - 6}" y="${px(y0 + i * (y1 - y0) / 4 + 3)}" font-size="9.5" fill="var(--dim)" text-anchor="end">${v}</text><line x1="${x0}" x2="${x1}" y1="${px(y0 + i * (y1 - y0) / 4)}" y2="${px(y0 + i * (y1 - y0) / 4)}" stroke="#1a1a19"/>`).join('');
-  const cw = (x1 - x0) / 3;
-  const cols = ['#e2553f', '#5fbf6a', '#4f7fe0'], lifts = [.05, 0, -.04];
-  cols.forEach((c, k) => s += `<svg x="${x0 + k * cw + 3}" y="${y0}" width="${cw - 6}" height="${y1 - y0}">${lumaTrace(cw - 6, y1 - y0, 11 + k, c, .55, u => .42 + lifts[k] + .2 * Math.sin(u * 5 + k))}</svg>`);
+  // parade: the engine's scope image when the data carries one, else the drawn luma traces
+  const x0 = o.px0 ?? (ww + 34), x1 = w - (o.pxr ?? 12), y0 = o.py0 ?? 22, y1 = h - (o.pyb ?? 22);
+  if (!o.noSep) s += `<line x1="${ww}" x2="${ww}" y1="14" y2="${h - 14}" stroke="var(--line)"/>`;
+  if (data.parade && data.parade.src) s += `<image href="${E(data.parade.src)}" x="${x0}" y="${y0 - (o.imgPadT ?? 0)}" width="${x1 - x0}" height="${y1 - y0 + (o.imgPadT ?? 0) + (o.imgPadB ?? 0)}" preserveAspectRatio="none"/>`;
+  s += [1023, 768, 512, 256, 0].map((v, i) => `<text x="${x0 - (o.plabGap ?? 6)}" y="${px(y0 + i * (y1 - y0) / 4 + (o.plabDy ?? 3))}" font-size="${o.plabFs ?? 9.5}" fill="var(--dim)" text-anchor="end" style="font-family:var(--plab-font,inherit)">${v}</text>` + (data.parade && data.parade.src ? '' : `<line x1="${x0}" x2="${x1}" y1="${px(y0 + i * (y1 - y0) / 4)}" y2="${px(y0 + i * (y1 - y0) / 4)}" stroke="#1a1a19"/>`)).join('');
+  if (!(data.parade && data.parade.src)) {
+    const cw = (x1 - x0) / 3;
+    const cols = ['#e2553f', '#5fbf6a', '#4f7fe0'], lifts = [.05, 0, -.04];
+    cols.forEach((c, k) => s += `<svg x="${x0 + k * cw + 3}" y="${y0}" width="${cw - 6}" height="${y1 - y0}">${lumaTrace(cw - 6, y1 - y0, 11 + k, c, .55, u => .42 + lifts[k] + .2 * Math.sin(u * 5 + k))}</svg>`);
+  }
   return head(spec, data) + `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
 }
 
