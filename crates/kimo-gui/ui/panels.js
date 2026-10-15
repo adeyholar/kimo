@@ -483,15 +483,17 @@ function scopeGeom(o, w, h) {
 const DIG = '0123456789abcdefghijklmnopqrstuvwxyz';
 // ---------- false colour ----------
 // Standard exposure LUT on Rec.709 luma (IRE = code value / 255 * 100):
-//   < 2.5 crushed: pink-purple · 2.5-16 shadows: purple · 39.5-43 skin: green
-//   92-97 high: yellow/orange · >= 97 clipping: red with zebra hatch · else grey.
+//   < 2.5 crushed: pink-purple · 2.5-16 shadows: purple · 39.5-43 on skin-hued pixels: green
+//   90-99 highlights: white/ink zebra · >= 99 clipping: red/ink zebra · else grey.
 // Pure function of the decoded frame; cached per src+size so a re-render only blits.
-export function falseColorLUT(Y, x, y) {
+export function falseColorLUT(Y, x, y, skin = true) {
   if (Y < 2.5) return [138, 44, 122];
   if (Y < 16) { const k = .55 + Y / 16 * .9; return [34 * k, 19 * k, 51 * k]; }
-  if (Y >= 39.5 && Y < 43) { const k = Y / 41.6; return [84 * k, 120 * k, 62 * k]; }
-  if (Y >= 97) return ((x + y) >> 2) & 1 ? [40, 10, 8] : [224, 48, 42];
-  if (Y >= 92) return Y >= 95 ? [238, 128, 36] : [232, 196, 52];
+  if (Y >= 39.5 && Y < 43 && skin) { const k = Y / 41.6; return [84 * k, 120 * k, 62 * k]; }
+  // highlights get diagonal zebra stripes like the mockup: white/ink over 90 IRE, red/ink at clipping
+  const zebra = ((x + y) >> 2) & 1;
+  if (Y >= 99) return zebra ? [36, 12, 10] : [224, 48, 42];
+  if (Y >= 90) return zebra ? [24, 22, 20] : [244, 240, 232];
   return null;
 }
 const FC = new Map();
@@ -505,7 +507,8 @@ function paintFalseColor(cv, im) {
     d = g.getImageData(0, 0, w, h); const p = d.data;
     for (let i = 0, n = 0; i < p.length; i += 4, n++) {
       const Y = (.2126 * p[i] + .7152 * p[i + 1] + .0722 * p[i + 2]) / 2.55, x = n % w, y = (n / w) | 0;
-      const f = falseColorLUT(Y, x, y);
+      const r = p[i], g = p[i + 1], b = p[i + 2], skin = r > g && g >= b * .8; // skin-hued (warm) pixels only get the skin band
+      const f = falseColorLUT(Y, x, y, skin);
       if (f) { p[i] = f[0]; p[i + 1] = f[1]; p[i + 2] = f[2]; }
       else { const v = Y * 2.55; p[i] = v * .85 + p[i] * .15; p[i + 1] = v * .85 + p[i + 1] * .15; p[i + 2] = v * .85 + p[i + 2] * .15; }
     }
