@@ -692,9 +692,9 @@ function exportOps(state, MODES, ev) {
     const ext = (base.match(/\.([a-z0-9]+)$/i) || [])[1];
     const res = A.resolution ?? (A.width && A.height ? `${A.width} x ${A.height}` : null);
     const codec = A.codec ?? A.video_codec ?? null;   // only what the call carried: nothing is guessed
-    const set = [['Format', A.container ?? A.format ?? (ext ? ext.toUpperCase() : null)], ['Video', codec], ['Resolution', res], ['Frame rate', A.fps], ['Quality', A.crf != null ? 'CRF ' + A.crf : A.quality], ['Audio', A.audio === false ? 'off' : A.audio_codec], ['Output', path ? shortPath(path) : null]];
+    const set = [['Format', A.container ?? A.format ?? (ext ? ext.toUpperCase() : null)], ['Video', codec], ['Resolution', res], ['Frame rate', A.fps], ['Quality', A.crf != null ? 'CRF ' + A.crf : A.quality], ['Audio', A.audio === false ? 'off' : A.audio_codec], ['Output', path ? String(path).split(/[\\/]/).pop() : null]];   // the destination's file name; the full path rides the Renders row
     exp.blocks = exp.blocks || [];
-    for (const [k, v] of set) { if (v == null || v === '') continue; const b = exp.blocks.find(x => x.k === k); if (b) { if (b.v !== String(v)) { b.from = b.v; b.v = String(v); } b._flash = now(); } else exp.blocks.push({ k, v: String(v), _flash: now() }); }
+    for (const [k, v] of set) { if (v == null || v === '') continue; const b = exp.blocks.find(x => x.k === k); if (b) { if (b.v !== String(v)) { if (k === 'Output') delete b.from; else b.from = b.v; b.v = String(v); } b._flash = now(); } else exp.blocks.push({ k, v: String(v), _flash: now() }); }   // a new output is a new file, not a change of one: no from → to
     const nParts = Array.isArray(A.parts) ? A.parts.length : null, sc = numOf(A.scale);
     const preset = tn === 'join_export' ? (nParts ? `join ${nParts} parts` : 'join') : tn === 'preview_range' ? `preview${sc != null && sc !== 1 ? ' ' + sc + 'x' : ''}` : tn === 'collect_project' ? 'collect' : tn === 'contact_sheet' ? 'contact sheet'
       : [res && String(res).replace(/\s*x\s*/, 'x'), codec].filter(Boolean).join(' ') || A.preset || '';
@@ -726,7 +726,7 @@ function exportOps(state, MODES, ev) {
     if (vw.src) row._thumb = vw.src;
     if (dur != null) row[4] = mmss(dur); row._flash = now(); row._live = false;
   }
-  if (vw.progress && !/^(collect_project|contact_sheet)$/.test(tn)) vw.progress = ok ? { ...vw.progress, pct: 100, right: (dur != null ? `done in ${mmss(dur)}` : 'done') } : { ...vw.progress, right: 'failed' };
+  if (vw.progress && !/^(collect_project|contact_sheet)$/.test(tn)) vw.progress = ok ? { ...vw.progress, pct: 100, left: vw.progress.left === 'starting' && row ? row[0] : vw.progress.left, right: (dur != null ? `done in ${mmss(dur)}` : 'done') } : { ...vw.progress, right: 'failed' };
   return true;
 }
 

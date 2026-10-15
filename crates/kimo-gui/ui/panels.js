@@ -969,7 +969,7 @@ function renders({ spec, data, w, h }) {
       if (i === 3) { const st = String(c); const em = st.startsWith('●'); return `<span class="mono ${em ? 'em' : st.startsWith('✕') ? 'err' : M && !/^[✓●]/.test(st) ? 'dim' : M ? 'cream' : 'dim'}">${status(st)}</span>`; }
       // a live job row (engine export): fixed 44px from its first frame so nothing shifts when it lands;
       // 16:9 thumb of the engine's last frame + output path under the name, each only when sent
-      if (i === 0 && r._job) return `<span class="rjob">${r._thumb ? `<img class="rthumb" src="${E(r._thumb)}">` : '<i class="rthumb"></i>'}<span class="rname"><span class="mono cream">${E(c)}</span>${r._path ? `<span class="mono dim rpath">${E(r._path)}</span>` : ''}</span></span>`;
+      if (i === 0 && r._job) return `<span class="rjob">${r._thumb ? `<img class="rthumb" src="${E(r._thumb)}">` : ''}<span class="rname"><span class="mono cream">${E(c)}</span>${r._path ? `<span class="mono dim rpath">${E(r._path)}</span>` : ''}</span></span>`;
       return `<span class="${M ? (String(c) === '-' ? 'mono dim' : 'mono cream') : i ? 'mono dim' : 'mono cream'}">${E(c)}</span>`;
     }).join('') + '</div>').join('') + '</div>';
   if (M && o.footLine != null && data.foot) html += `<i style="position:absolute;left:${o.left ?? 13}px;right:${o.right ?? 12}px;top:${o.footLine}px;height:1px;background:var(--line)"></i>`;
