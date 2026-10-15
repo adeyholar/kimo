@@ -68,12 +68,17 @@ export function apply(ev) {
       break;
     }
     case 'frame_rendered': {
-      const v = view(state.mode); v.viewer = v.viewer || {};
-      if (ev.png_b64) v.viewer.src = 'data:image/png;base64,' + ev.png_b64;
-      else if (ev.jpg_b64) v.viewer.src = 'data:image/jpeg;base64,' + ev.jpg_b64;
-      else if (ev.src) v.viewer.src = ev.src;
-      for (const k of ['tc', 'res', 'tag', 'left', 'right']) if (ev[k] !== undefined) v.viewer[k] = ev[k];
-      if (ev.frame !== undefined) v.viewer.frame = ev.frame;
+      const src = ev.png_b64 ? 'data:image/png;base64,' + ev.png_b64 : ev.jpg_b64 ? 'data:image/jpeg;base64,' + ev.jpg_b64 : ev.src;
+      // the engine's frame shows in this mode's viewer and in every other mode's viewer the engine
+      // already owns or that has no frame yet, so a live session never hops to an empty viewer
+      for (const [mode, M] of Object.entries(MODES)) for (const [name, spec] of Object.entries(M.panels)) {
+        if (spec.kind !== 'viewer') continue;
+        const V = view(mode), v = V[name] || (V[name] = {});
+        if (mode !== state.mode && v.src && !v._engine) continue;
+        if (src) { v.src = src; v._engine = true; }
+        for (const k of ['tc', 'res', 'tag', 'left', 'right']) if (ev[k] !== undefined) v[k] = ev[k];
+        if (ev.frame !== undefined) v.frame = ev.frame;
+      }
       break;
     }
     case 'project_changed':
