@@ -383,14 +383,26 @@ function timeline({ spec, data, w, h }) {
         (t.wave.beats ? t.wave.beats.map(bt => `<line x1="${px(X(bt) - a)}" x2="${px(X(bt) - a)}" y1="${o.beatY0 ?? 0}" y2="${o.beatY1 ?? 5}" stroke="var(--cream)" stroke-width="${o.beatW ?? 1.2}"/>`).join('') : '') +
         `</svg>`;
     }
+    // virtualized: a track below the panel draws nothing; clips outside the ruler are skipped; clips under MINW px
+    // wide (a long timeline fitted into the panel) merge into one plain run per stretch, so the panel holds at most
+    // about one element per few pixel columns whatever the clip count (tests/timeline_perf_test.py: 1,000 clips)
+    if (y >= h) { html += '</div>'; y += th + (o.trackGap ?? 0); continue; }
+    const MINW = 12; let run = null;   // under 12 px a clip has no room for its label; its edges stay as 1 px seams in the run
+    const flush = () => { if (!run) return; const w0 = Math.max(1, run[1] - run[0]), cuts = run[2].filter(x => x > run[0] + .5 && x < run[1] - .5).map(x => px(x - run[0]));
+      const bg = cuts.length ? `;background:linear-gradient(90deg,${cuts.map((x, i) => `var(--clip) ${i ? px(cuts[i - 1] + 1) : 0}px ${x}px,transparent ${x}px ${px(x + 1)}px`).join(',')},var(--clip) ${px(cuts[cuts.length - 1] + 1)}px)` : '';
+      html += `<div class="clip crun" style="left:${px(run[0])}px;width:${px(w0)}px${bg}"></div>`; run = null; };
     for (const c of (t.clips || [])) {
       const a = X(c.s), b = X(c.e);
+      if (b < x0 - 1 || a > x1 + 1) continue;
+      if (b - a < MINW && !c.keys && !F(c).trim() && !c.pill && !c.cls && !c.bg && !c.thumb && !c.cover && !c.fx) { if (run && a <= run[1] + 1) { run[2].push(a); run[1] = Math.max(run[1], b); } else { flush(); run = [a, b, []]; } continue; }
+      flush();
       html += `<div class="clip ${c.cls || ''}${F(c)}" style="left:${px(a)}px;width:${px(b - a)}px${c.bg ? ';background:' + c.bg : ''}">` +
         (c.thumb ? `<span class="ct"><img src="${E(c.thumb)}" alt=""></span>` : c.sw ? '<span class="ct sw"></span>' : '') + (c.cover ? `<img src="${E(c.cover)}" alt="">` : '') + (c.label ? `<span class="cl">${E(c.label)}</span>` : '') +
         (c.pill ? `<span class="cpill">${E(c.pill)}</span>` : '') +
         (c.keys ? c.keys.map(k => `<i class="ckey${k.em ? ' em' : ''}" style="left:${px(X(k.t) - a)}px"></i>`).join('') : '') +
         (c.fx ? (o.fxRow ? `<span class="fxrow">${c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')}</span>` : c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')) : '') + '</div>';
     }
+    flush();
     html += '</div>';
     y += th + (o.trackGap ?? 0);
   }
