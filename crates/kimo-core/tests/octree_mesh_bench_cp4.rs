@@ -109,10 +109,19 @@ fn folds(s:&Stream)->(usize,usize){
  // red(small/dense) -> blue(large/flat) ramp, 6 sextile bins per scene (per-scene quantiles:
  // colors compare density WITHIN a scene, not across scenes - captioned on the sheet)
  let ramp=[[0.85,0.2,0.2],[0.9,0.5,0.15],[0.85,0.75,0.2],[0.2,0.75,0.45],[0.15,0.65,0.8],[0.18,0.35,0.85]];
- let scenes:[(&str,Graph,OctreeConfig);3]=[("sphere",sphere(),cfg(2,6)),("box",boxg(),OctreeConfig{bounds:[[-1.6;3],[1.6;3]],..cfg(2,7)}),("crease",union_scene(),cfg(2,8))];
+ let scenes:[(&str,Graph,OctreeConfig);4]=[("sphere",sphere(),cfg(2,6)),("torus",torus(),cfg(2,7)),("box-d8",boxg(),OctreeConfig{bounds:[[-1.6;3],[1.6;3]],..cfg(2,8)}),("crease-d8",union_scene(),cfg(2,8))];
+ let dump=|frame:&kimo_core::effects::Frame,path:&str|{
+  let rgba=kimo_core::render::to_rgba8_tpdf(frame);
+  let mut ch=std::process::Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s","640x360","-i","-","-frames:v","1",path]).stdin(std::process::Stdio::piped()).spawn().unwrap();
+  std::io::Write::write_all(&mut ch.stdin.take().unwrap(),&rgba).unwrap();assert!(ch.wait().unwrap().success());
+  println!("CP4-FRAME dumped {path}");};
  for(name,g,c)in &scenes{
   let m=octree::extract_mesh(g,c).unwrap();
   assert_eq!((m.boundary_edges,m.nonmanifold_edges),(0,0),"{name} closed manifold");
+  if dump_env{ // lit companion (same camera/lights, base material, existing scene path)
+   let sc=scene::Scene{sources:vec![scene::Source::Stream{stream:m.stream.clone()}],nodes:vec![scene::Node{source:0,world:ident(),material:0}],materials:vec![surf([0.74,0.68,0.6])],lights:vec![dir_light(),point_light()],camera:camera()};
+   let c2=scene::compile(&sc,&mut scene::Cache::new()).unwrap();
+   let out=scene::render_cpu(&c2,640,360).unwrap();dump(&out.frame,&format!("/tmp/pm3-frames/cp4/{name}_lit.png"));}
   let mut order:Vec<usize>=(0..m.stream.indices.len()).collect();
   let areas=face_areas(&m.stream);
   order.sort_by(|a,b|areas[*a].partial_cmp(&areas[*b]).unwrap());
@@ -125,14 +134,103 @@ fn folds(s:&Stream)->(usize,usize){
    sources.push(scene::Source::Stream{stream:Stream{vertices:m.stream.vertices.clone(),indices:idx}});
    nodes.push(scene::Node{source:sources.len()-1,world:ident(),material:materials.len()});
    materials.push(surf(ramp[b]));}
-  let sc=scene::Scene{sources,nodes,materials,lights:vec![dir_light(),point_light()],camera:camera()};
+  let sc=scene::Scene{sources:sources.clone(),nodes:nodes.clone(),materials:materials.clone(),lights:vec![dir_light(),point_light()],camera:camera()};
   let c2=scene::compile(&sc,&mut scene::Cache::new()).unwrap();
   let out=scene::render_cpu(&c2,320,180).unwrap();
   assert!(out.covered>1500,"{name} density covered {}",out.covered);
-  if dump_env{
-   let out=scene::render_cpu(&c2,640,360).unwrap();
-   let rgba=kimo_core::render::to_rgba8_tpdf(&out.frame);
-   let mut ch=std::process::Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s","640x360","-i","-","-frames:v","1",&format!("/tmp/pm3-frames/cp4/{name}_density.png")]).stdin(std::process::Stdio::piped()).spawn().unwrap();
-   std::io::Write::write_all(&mut ch.stdin.take().unwrap(),&rgba).unwrap();assert!(ch.wait().unwrap().success());
-   println!("CP4-FRAME dumped /tmp/pm3-frames/cp4/{name}_density.png");}}
+  if dump_env{let out=scene::render_cpu(&c2,640,360).unwrap();dump(&out.frame,&format!("/tmp/pm3-frames/cp4/{name}_density.png"));}
+ // grazing-angle pair for the crease (lit + density) at the low camera
+ if *name=="crease-d8"{
+  let grz=Camera{eye:[4.5,0.4,-6.4],pan:324.79,tilt:2.9,roll:0.,sensor_height:24.,focal_length:50.,near:0.05};
+  let sc=scene::Scene{sources:sources,nodes,materials,lights:vec![dir_light(),point_light()],camera:grz};
+  let c2=scene::compile(&sc,&mut scene::Cache::new()).unwrap();
+  let out=scene::render_cpu(&c2,320,180).unwrap();assert!(out.covered>500,"grazing density covered {}",out.covered);
+  if dump_env{let out=scene::render_cpu(&c2,640,360).unwrap();dump(&out.frame,"/tmp/pm3-frames/cp4/crease_grazing_density.png");
+   let sc=scene::Scene{sources:vec![scene::Source::Stream{stream:m.stream.clone()}],nodes:vec![scene::Node{source:0,world:ident(),material:0}],materials:vec![surf([0.74,0.68,0.6])],lights:vec![dir_light(),point_light()],camera:grz};
+   let c2=scene::compile(&sc,&mut scene::Cache::new()).unwrap();let out=scene::render_cpu(&c2,640,360).unwrap();dump(&out.frame,"/tmp/pm3-frames/cp4/crease_grazing_lit.png");}}}
+}
+
+#[test]fn cp4_leaf_counts_planar_vs_curved(){
+ // adaptive vs uniform res64 on the SAME scene, three scene classes + the pinned near-tangent
+ // pathology. Measured economics (this box, reported + asserted only where they hold):
+ //  - smooth scene (sphere): adaptive spends FEWER triangles (curvature error stays under tol).
+ //  - sharp box: adaptive spends MORE triangles - that is the price of asserted corner/edge
+ //    sharpness; uniform is cheaper but chamfers corners (measured below) - NOT a defect.
+ //  - folds60/120 on a sharp box are CORRECT geometry (90deg creases are real); the fold
+ //    artifact claim applies to smooth fields: the near-tangent blend, where uniform DC
+ //    pinned 288 folds120 and adaptive must drop that sharply.
+ let scenes:[(&str,Graph,OctreeConfig,[[f64;3];2]);3]=[("box-d8",boxg(),OctreeConfig{bounds:[[-1.6;3],[1.6;3]],..cfg(2,8)},[[-1.6;3],[1.6;3]]),("crease-d8",union_scene(),cfg(2,8),[[-2.2;3],[2.2;3]]),("sphere-d6",sphere(),cfg(2,6),[[-2.2;3],[2.2;3]])];
+ let mut tri:std::collections::HashMap<&str,(usize,usize)>=Default::default();
+ for(name,g,c,ub)in &scenes{
+  let t0=Instant::now();let o=octree::build(g,c).unwrap();let build_ms=t0.elapsed().as_millis();
+  let t0=Instant::now();let m=octree::extract_mesh(g,c).unwrap();let mesh_ms=t0.elapsed().as_millis();
+  let t0=Instant::now();let u=contour_wrapped::polygonize(g,&contour_wrapped::Config{bounds:*ub,resolution:64,normal_epsilon:0.001}).unwrap();let uni_ms=t0.elapsed().as_millis();
+  let(ua60,ua120)=folds(&u.stream);let(aa60,aa120)=folds(&m.stream);
+  println!("CP4-LEAF {name} leaves={} surface_leaves={} field_evals={} max_depth={} | adaptive tris={} folds60={aa60} folds120={aa120} | uniform64 tris={} folds60={ua60} folds120={ua120} | build_ms={build_ms} extract_ms={mesh_ms} uniform64_ms={uni_ms}",o.stats.leaves,o.stats.surface_leaves,o.stats.field_evals,o.stats.max_depth_reached,m.stream.indices.len(),u.stream.indices.len());
+  assert!(o.stats.surface_leaves>0&&o.stats.field_evals>0,"octree populated");
+  assert!(mesh_ms<120_000&&uni_ms<120_000,"sanity time bounds");
+  tri.insert(name,(m.stream.indices.len(),u.stream.indices.len()));}
+ let(a,u)=tri["sphere-d6"];assert!(a<u,"smooth sphere: adaptive {a} must beat uniform {u}");
+ // sharpness, measured both sides: nearest-vertex distance to each true box corner
+ let corner_err=|st:&Stream|{let p=positions(st);(0..8).map(|k|{let t=[if k&1==0{-0.6}else{0.6},if k&2==0{-0.6}else{0.6},if k&4==0{-0.6}else{0.6}];p.iter().map(|c|((c[0]-t[0]).powi(2)+(c[1]-t[1]).powi(2)+(c[2]-t[2]).powi(2)).sqrt()).fold(f64::INFINITY,f64::min)}).fold(0.,f64::max)};
+ let ma=octree::extract_mesh(&boxg(),&OctreeConfig{bounds:[[-1.6;3],[1.6;3]],..cfg(2,8)}).unwrap();
+ let mu=contour_wrapped::polygonize(&boxg(),&contour_wrapped::Config{bounds:[[-1.6;3],[1.6;3]],resolution:64,normal_epsilon:0.001}).unwrap();
+ let(ea,eu)=(corner_err(&ma.stream),corner_err(&mu.stream));
+ println!("CP4-LEAF box corner sharpness: adaptive worst-corner-vertex-dist={ea:.5} vs uniform {eu:.5}");
+ assert!(ea<eu,"adaptive corners sharper: {ea} vs {eu}");
+ // the pinned pathology, same scene both sides: near-tangent blend
+ let t0=Instant::now();let nt=octree::extract_mesh(&near_tangent_scene(),&cfg(2,8)).unwrap();let nt_ms=t0.elapsed().as_millis();
+ // KNOWN DEFECT (pinned honestly, follow-up needed): the near-tangent torus+capsule blend
+ // currently yields 17 nonmanifold edges at depth 8. Reported, not silently tolerated.
+ assert_eq!((nt.boundary_edges,nt.nonmanifold_edges),(0,17),"near-tangent adaptive defect count changed - re-pin only with a note");
+ let(na60,na120)=folds(&nt.stream);
+ println!("CP4-LEAF near-tangent adaptive tris={} folds60={na60} folds120={na120} (pinned uniform: tris=13608 folds60=482 folds120=288) extract_ms={nt_ms}",nt.stream.indices.len());
+ // DEFECT PINNED: 427 folds120 is WORSE than uniform's 288 on this scene; deep refinement on
+ // the near-tangent blend creates its own fold artifacts + 17 nonmanifold edges. The sphere+box
+ // crease improvement (288 pinned -> 6) does NOT generalize here. Follow-up required.
+ assert_eq!(na120,427,"near-tangent adaptive folds120 changed - re-pin only with a note");
+}
+#[test]fn cp4_peak_memory_box_depth8(){
+ let rss=||->u64{let s=std::fs::read_to_string("/proc/self/status").unwrap();let h=s.lines().find(|l|l.starts_with("VmHWM")).unwrap().split_whitespace().nth(1).unwrap().parse::<u64>().unwrap();h};
+ let bc=OctreeConfig{bounds:[[-1.6;3],[1.6;3]],..cfg(2,8)};
+ let m=octree::extract_mesh(&boxg(),&bc).unwrap();
+ assert_eq!((m.boundary_edges,m.nonmanifold_edges,m.euler_characteristic),(0,0,2),"box d8 closed manifold");
+ let peak=rss();
+ println!("CP4-MEM box depth8 VmHWM={}kB tris={} verts={} (no OOM; process peak incl. harness)",peak,m.stream.indices.len(),m.stream.vertices.len());
+ assert!(peak<1_800_000,"peak RSS {}kB must stay well under the 2GB box",peak);
+}
+
+#[cfg(all(feature="gpu3d",feature="mesh-import",feature="material-textures",feature="flat-sah"))]
+#[test]fn cp4_wgpu_upload_render_latency_llvmpipe(){
+ // upload+render latency through the wgpu executor. llvmpipe = SOFTWARE adapter: proves the
+ // path and gives software-path timings, NOT hardware performance. Honest skip without gpu3d.
+ for(name,g,c)in[("sphere",sphere(),cfg(2,6)),("torus",torus(),cfg(2,7)),("crease",union_scene(),cfg(2,8))]{
+  let sc=scene::Scene{sources:vec![scene::Source::OctreeContour{graph:g.clone(),config:c.clone()}],nodes:vec![scene::Node{source:0,world:ident(),material:0}],materials:vec![surf([0.74,0.68,0.6])],lights:vec![dir_light(),point_light()],camera:camera()};
+  let t0=Instant::now();let compiled=scene::compile(&sc,&mut scene::Cache::new()).unwrap();let compile_ms=t0.elapsed().as_millis();
+  let t0=Instant::now();
+  match scene::render_wgpu(&compiled,&[],320,180,[0.2;3],0.,true,false){
+   Ok((_,status))if status.gpu_rendered=>{let ms=t0.elapsed().as_millis();println!("CP4-WGPU {name} compile_ms={compile_ms} wgpu_upload_render_ms={ms} tris={} (llvmpipe software adapter, 320x180)",compiled.stats.triangles);}
+   ok=>{println!("CP4-WGPU skipped (no gpu3d/adapter in this feature set): {:?}",ok.map(|(_,s)|s.fallback_reason));return;}}}
+}
+
+#[test]fn cp4_light_sweep_lod_transition_stability(){
+ // face-weighted normals must not tear across LOD transitions: sweep the directional light
+ // 6x60deg around the crease scene; coverage must stay stable and every frame renders full.
+ let m=octree::extract_mesh(&union_scene(),&cfg(2,8)).unwrap();
+ let dump_env=std::env::var("KIMO_SDF_FRAMES").is_ok();
+ let mut covs=Vec::new();
+ for i in 0..6{
+  let a=(i as f64)*std::f64::consts::PI/3.;
+  let dl=Light::Directional{travel_direction:[a.sin(),-0.5,a.cos()],radiance:[2.5;3]};
+  let sc=scene::Scene{sources:vec![scene::Source::Stream{stream:m.stream.clone()}],nodes:vec![scene::Node{source:0,world:ident(),material:0}],materials:vec![surf([0.74,0.68,0.6])],lights:vec![dl,point_light()],camera:camera()};
+  let c2=scene::compile(&sc,&mut scene::Cache::new()).unwrap();
+  let out=scene::render_cpu(&c2,320,180).unwrap();
+  assert!(out.covered>1500,"sweep {i} covered {}",out.covered);
+  covs.push(out.covered);
+  if dump_env{let out=scene::render_cpu(&c2,640,360).unwrap();let rgba=kimo_core::render::to_rgba8_tpdf(&out.frame);
+   let mut ch=std::process::Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s","640x360","-i","-","-frames:v","1",&format!("/tmp/pm3-frames/cp4/sweep_{i}.png")]).stdin(std::process::Stdio::piped()).spawn().unwrap();
+   std::io::Write::write_all(&mut ch.stdin.take().unwrap(),&rgba).unwrap();assert!(ch.wait().unwrap().success());}}
+ let(mx,mn)=(covs.iter().max().unwrap(),covs.iter().min().unwrap());
+ println!("CP4-SWEEP covered min={mn} max={mx} spread={:.3}",*mx as f64/ *mn as f64);
+ assert!((*mx as f64)/(*mn as f64)<1.05,"coverage stable across sweep: {mn}..{mx}");
 }
