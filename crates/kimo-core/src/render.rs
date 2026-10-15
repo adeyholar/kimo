@@ -544,9 +544,17 @@ pub(crate) fn unpremultiply(f: &mut Frame) { for px in f.d.chunks_exact_mut(4) {
 pub fn export_frame_rgba8(p: &Project, t: f64, cache: &Cache) -> Result<Vec<u8>, String> { render_frame_opts(p, t, cache, false).and_then(|mut f| { crate::color::pipeline::output(p, &mut f)?; Ok(to_rgba8(&f)) }) }
 pub fn to_rgba8(f: &Frame) -> Vec<u8> { f.d.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect() }
 
+/// Deterministic TPDF dither (sum of two uniforms, +/-1 LSB triangular PDF) applied in
+/// display-referred [0,1] before 8-bit rounding. Fixed splitmix64 seed keyed on channel
+/// index: same frame in, same bytes out. Kills mid-gradient quantization terraces.
+fn tpdf_lsb(i: usize) -> f64 { fn sm(mut x: u64) -> u64 { x = x.wrapping_add(0x9E3779B97F4A7C15); x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9); x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB); x ^ (x >> 31) } let u1 = (sm(0xD1B54A32D192ED03 ^ (i as u64).wrapping_mul(2)) >> 11) as f64 * (1.0 / 9007199254740992.0); let u2 = (sm(0xD1B54A32D192ED03 ^ (i as u64).wrapping_mul(2).wrapping_add(1)) >> 11) as f64 * (1.0 / 9007199254740992.0); u1 + u2 - 1.0 }
+pub fn to_rgba8_tpdf(f: &Frame) -> Vec<u8> { f.d.iter().enumerate().map(|(i, v)| (((v.clamp(0.0, 1.0) + (tpdf_lsb(i) * (1.0 / 255.0)) as f32) * 255.0 + 0.5).clamp(0.0, 255.0)) as u8).collect() }
+
 fn image_encoder_command(w:usize,h:usize,path:&str)->Command{let mut cmd=Command::new("ffmpeg");cmd.args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{w}x{h}"),"-i","-","-frames:v","1",path]);cmd}
 fn write_image_command(f:&Frame,cmd:&mut Command,deadline:std::time::Duration)->Result<(),String>{let size=f.w.checked_mul(f.h).and_then(|n|n.checked_mul(4)).filter(|n|*n>0&&*n==f.d.len()).ok_or("invalid image frame shape")?;crate::guard::reserve(size);let mut encoder=crate::color::process::EncodeStream::new(cmd,size,deadline)?;encoder.write(to_rgba8(f))?;encoder.finish()}
 pub(crate) fn write_image(f:&Frame,path:&str)->Result<(),String>{write_image_command(f,&mut image_encoder_command(f.w,f.h,path),crate::color::process::encode_deadline(1))}
+fn write_image_tpdf_command(f:&Frame,cmd:&mut Command,deadline:std::time::Duration)->Result<(),String>{let size=f.w.checked_mul(f.h).and_then(|n|n.checked_mul(4)).filter(|n|*n>0&&*n==f.d.len()).ok_or("invalid image frame shape")?;crate::guard::reserve(size);let mut encoder=crate::color::process::EncodeStream::new(cmd,size,deadline)?;encoder.write(to_rgba8_tpdf(f))?;encoder.finish()}
+pub(crate) fn write_image_tpdf(f:&Frame,path:&str)->Result<(),String>{write_image_tpdf_command(f,&mut image_encoder_command(f.w,f.h,path),crate::color::process::encode_deadline(1))}
 
 pub fn render_png(p: &Project, t: f64, path: &str, cache: &mut Cache) -> Result<(), String> { render_png_with(p, t, path, cache, None) }
 pub fn render_png_with(p: &Project, t: f64, path: &str, cache: &mut Cache, fc: Option<&mut crate::framecache::FrameCache>) -> Result<(), String> {

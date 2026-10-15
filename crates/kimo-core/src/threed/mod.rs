@@ -1,5 +1,6 @@
 //! Opt-in MCP-first 3D foundation. Original core math. No legacy render changes.
 pub mod mesh;
+pub mod obj_export;
 pub mod spatial;
 pub mod flat_sah;
 pub mod sdf_graph;

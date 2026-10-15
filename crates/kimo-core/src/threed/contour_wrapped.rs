@@ -1,10 +1,16 @@
 //! Wrapper of isosurface0.1.0-alpha.0 Apache-2.0 DualContouring/MinimiseQEF.
+//! KNOWN LIMIT (measured, CP2/CP3): near-tangent smooth blends whose fillet radius is
+//! under ~2 grid cells can produce crumpled triangles in the crease (uniform grid cannot
+//! represent the feature; QEF keeps one vertex per cell). Vertex normals stay exact there
+//! (analytic, 0.0deg vs FD) - the failure is geometry, not shading. Proper fix is the
+//! planned octree adaptive DC unit; tests/sdf_contour_frames.rs pins today's behavior as
+//! a named benchmark for it.
 //! No extraction/QEF source copied. MCP adapter and error/stream mapping original.
 use super::vertex_stream::Stream;#[cfg(feature="surface-contour")]use super::sdf_graph::Graph;use serde::{Serialize,Deserialize};
 #[derive(Clone,Debug,Serialize,Deserialize)]#[serde(deny_unknown_fields)]pub struct Config{pub bounds:[[f64;3];2],pub resolution:u32,pub normal_epsilon:f64}
 #[derive(Serialize)]pub struct Contour{pub stream:Stream,pub resolution:u32,pub sampled_field_residual_max:f64,pub topology_verified:bool,pub algorithm:&'static str,pub uv_tangent_contract:&'static str,pub empty:bool,pub welded_vertices:usize,pub boundary_edges:usize,pub nonmanifold_edges:usize,pub winding_consistent:bool,pub euler_characteristic:i64,pub signed_volume:f64,pub min_triangle_area:f64,pub sliver_triangles:usize,pub clamped_to_volume:usize,pub normal_fallbacks:usize}
 #[cfg(feature="surface-contour")]
-pub fn polygonize(g:&Graph,c:&Config)->Result<Contour,String>{use isosurface::{math::Vec3,distance::Signed,source::{ScalarSource,HermiteSource},sampler::Sampler,extractor::IndexedVertices,feature::MinimiseQEF,DualContouring};g.validate()?;if !(4..=48).contains(&c.resolution)||!c.normal_epsilon.is_finite()||!(1e-6..=0.01).contains(&c.normal_epsilon)||c.bounds.iter().flatten().any(|v|!v.is_finite()||v.abs()>999_000.)||(0..3).any(|j|c.bounds[1][j]<=c.bounds[0][j]){return Err("bounded volume,resolution4..48,epsilon1e-6..0.01 required".into());}
+pub fn polygonize(g:&Graph,c:&Config)->Result<Contour,String>{use isosurface::{math::Vec3,distance::Signed,source::{ScalarSource,HermiteSource},sampler::Sampler,extractor::IndexedVertices,feature::MinimiseQEF,DualContouring};g.validate()?;if !(4..=64).contains(&c.resolution)||!c.normal_epsilon.is_finite()||!(1e-6..=0.01).contains(&c.normal_epsilon)||c.bounds.iter().flatten().any(|v|!v.is_finite()||v.abs()>999_000.)||(0..3).any(|j|c.bounds[1][j]<=c.bounds[0][j]){return Err("bounded volume,resolution4..64,epsilon1e-6..0.01 required".into());}
  struct Source<'a>{g:&'a Graph,c:&'a Config,error:std::cell::RefCell<Option<String>>,fallbacks:std::cell::RefCell<u32>}
  impl Source<'_>{fn point(&self,p:Vec3)->[f64;3]{let q=[p.x as f64,p.y as f64,p.z as f64];std::array::from_fn(|j|self.c.bounds[0][j]+q[j]*(self.c.bounds[1][j]-self.c.bounds[0][j]))}fn fail(&self,e:String){if self.error.borrow().is_none(){*self.error.borrow_mut()=Some(e);}}}
  impl ScalarSource for Source<'_>{fn sample_scalar(&self,p:Vec3)->Signed{crate::guard::check();match self.g.evaluate(self.point(p)){Ok(v)=>Signed(v as f32),Err(e)=>{self.fail(e);Signed(f32::NAN)}}}}

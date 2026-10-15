@@ -67,7 +67,7 @@ compare_linear_exposure afcdd34f6dab8f45
 compute_text_bounds a1e565a4cc3fe0e4
 connect_nodes b6edfff20b9c6d1f
 contact_sheet 4c3841fa11139b4c
-contour_sdf_graph a299f2dc4ab5594b
+contour_sdf_graph d53d4b3f16e077ae
 copy_curve 5560581f371d7986
 corner_disagreement 364bb4e3f8409a46
 create_shared_grade_graph 58fa459ac9911fc4
@@ -103,6 +103,7 @@ export_job_start 07ddf323a2e92685
 export_manifest 5127d5c892991c43
 export_ocio_view_video 2eb3c79238b48182
 export_preset e5c29f6d9e3173dc
+export_vertex_stream_obj e4ee4a2a4c9506e2
 export_with_subtitles 824e8be7e0dd374e
 ext_list 83a5db4765dba269
 find 78641da05597f921
@@ -238,7 +239,7 @@ render_particle_flow cd9f93ba7ca535b1
 render_particle_flow_motion eb05f96c9b39b857
 render_scope 0ba759192f5e77dd
 render_textured_bvh ff1f91fde6db4cfa
-render_vertex_stream_pbr 0fe723ec8fd57699
+render_vertex_stream_pbr ac9d8af9a0820e8c
 render_wgpu_pbr 2be19c04be4cef5f
 reorder_mask b182a28a665330c4
 restore dab5b50df493b4be
