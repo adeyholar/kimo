@@ -68,6 +68,9 @@ pub struct Flow {
     pub dt: f64,
 }
 
+/// Fixed per-particle position history depth (ring, no allocation).
+pub const HISTORY: usize = 6;
+
 /// One ring-pool particle slot (public for read-only inspection; mutate via Simulation).
 #[derive(Clone, Copy, Debug)]
 pub struct Slot {
@@ -76,6 +79,23 @@ pub struct Slot {
     pub birth: f64,
     pub lifetime: f64,
     pub alive: bool,
+    /// Past positions, newest at (head + HISTORY - 1) % HISTORY; len valid entries.
+    pub history: [[f64; 3]; HISTORY],
+    pub history_head: u8,
+    pub history_len: u8,
+}
+impl Slot {
+    fn push_history(&mut self) {
+        self.history[self.history_head as usize] = self.position;
+        self.history_head = (self.history_head + 1) % HISTORY as u8;
+        self.history_len = (self.history_len + 1).min(HISTORY as u8);
+    }
+    /// Oldest-to-newest past positions.
+    pub fn history_ordered(&self) -> impl Iterator<Item = [f64; 3]> + '_ {
+        let n = self.history_len as usize;
+        let head = self.history_head as usize;
+        (0..n).map(move |k| self.history[(head + HISTORY - n + k) % HISTORY])
+    }
 }
 
 fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
@@ -227,8 +247,8 @@ impl Simulation {
         if !flow.dt.is_finite() || flow.dt <= 0.0 || flow.dt > 1.0 {
             return Err("dt (0, 1]".into());
         }
-        crate::guard::reserve(flow.emitter.count as usize * 64);
-        let slot = Slot { position: [0.0; 3], velocity: [0.0; 3], birth: 0.0, lifetime: 1.0, alive: false };
+        crate::guard::reserve(flow.emitter.count as usize * 224);
+        let slot = Slot { position: [0.0; 3], velocity: [0.0; 3], birth: 0.0, lifetime: 1.0, alive: false, history: [[0.0; 3]; HISTORY], history_head: 0, history_len: 0 };
         Ok(Self { pool: vec![slot; flow.emitter.count as usize], cursor: 0, time: 0.0, spawned: 0, total_born: 0, total_died: 0, scratch: Vec::new(), radii: Vec::new(), flags: Vec::new(), buckets: Vec::new(), flow })
     }
     pub fn time(&self) -> f64 {
@@ -265,7 +285,7 @@ impl Simulation {
                 if slot.alive {
                     self.total_died += 1; // ring overwrite of the oldest live slot
                 }
-                *slot = Slot { position: p, velocity: v, birth, lifetime: self.flow.emitter.lifetime_of(idx), alive: true };
+                *slot = Slot { position: p, velocity: v, birth, lifetime: self.flow.emitter.lifetime_of(idx), alive: true, history: [[0.0; 3]; HISTORY], history_head: 0, history_len: 0 };
                 self.cursor = (self.cursor + 1) % self.pool.len();
                 self.spawned += 1;
                 self.total_born += 1;
@@ -275,6 +295,7 @@ impl Simulation {
                     continue;
                 }
                 let field = self.flow.field.velocity(s.position)?;
+                s.push_history();
                 for j in 0..3 {
                     let a = self.flow.gravity[j] + self.flow.coupling * (field[j] - s.velocity[j]) - self.flow.drag * s.velocity[j];
                     s.velocity[j] += a * h;
@@ -410,6 +431,275 @@ pub fn render(sim: &mut Simulation, camera: &Camera, w: usize, h: usize, mesh: O
     Ok((frame, out))
 }
 
+/// Reflection with restitution + tangential friction against a mesh obstacle (flat SAH
+/// raycast, true interpolated vertex normals - not screen-depth gradients). Normal
+/// velocity reverses scaled by `restitution`; tangential velocity keeps `friction`,
+/// so particles slide along the surface and lose energy (no ping-pong jitter).
+/// Interpretation note: deflection is resolved in 3D against the mesh surface itself,
+/// which covers the no-normal-buffer case by construction.
+#[cfg(feature = "flat-sah")]
+pub fn advance_deflect(sim: &mut Simulation, to_time: f64, index: &crate::threed::flat_sah::Index, stream: &crate::threed::vertex_stream::Stream, restitution: f64, friction: f64) -> Result<usize, String> {
+    if !restitution.is_finite() || !(0.0..=1.0).contains(&restitution) || !friction.is_finite() || !(0.0..=1.0).contains(&friction) {
+        return Err("restitution/friction 0..1".into());
+    }
+    // Step in dt increments like advance(), reflecting after each sub-step.
+    let mut steps = 0;
+    while sim.time < to_time {
+        let h = flow_dt(sim.flow.dt, to_time - sim.time);
+        let target = sim.time + h;
+        for s in sim.pool.iter_mut() {
+            if !s.alive {
+                continue;
+            }
+            let speed = s.velocity[0].hypot(s.velocity[1]).hypot(s.velocity[2]);
+            if speed <= 1e-12 {
+                continue;
+            }
+            let dir = [s.velocity[0] / speed, s.velocity[1] / speed, s.velocity[2] / speed];
+            let ray = crate::threed::spatial::Ray { origin: s.position, direction: dir, t_min: 1e-9, t_max: speed * h };
+            if let Some(hit) = index.raycast(&ray, false)? {
+                let tri = stream.indices[hit.triangle].map(|i| stream.vertices[i as usize].normal);
+                let mut n = [0.0; 3];
+                for k in 0..3 {
+                    for j in 0..3 {
+                        n[j] += hit.barycentric[k] * tri[k][j] as f64;
+                    }
+                }
+                let mut n = crate::threed::vertex_stream::unit(n)?;
+                let vn = s.velocity[0] * n[0] + s.velocity[1] * n[1] + s.velocity[2] * n[2];
+                if vn > 0.0 {
+                    n = [-n[0], -n[1], -n[2]]; // face the normal against the motion
+                }
+                let a = vn.abs();
+                let travel = (hit.t - 1e-6).max(0.0);
+                for j in 0..3 {
+                    s.position[j] += dir[j] * travel;
+                    // vn' = -restitution * vn (reversed normal part) + friction * vt (sliding tangent).
+                    s.velocity[j] = (s.velocity[j] + (1.0 + restitution) * a * n[j]) * 1.0 - (1.0 - friction) * (s.velocity[j] + a * n[j]);
+                }
+                if s.velocity.iter().any(|v| !v.is_finite()) {
+                    return Err("reflected velocity overflow".into());
+                }
+            }
+        }
+        sim.advance(target)?;
+        steps += 1;
+    }
+    Ok(steps)
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tonemap {
+    /// Per-channel exponential Reinhard: 1 - exp(-x); original, smooth, mono.
+    Reinhard,
+    /// Clamp only (linear HDR written straight; may clip above 1).
+    None,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Style {
+    /// Motion streak exposure in seconds; 0 disables oriented splats.
+    pub shutter: f64,
+    /// Screen-space ribbon trails from the fixed history ring for particles at or above this world speed; <0 disables.
+    pub trail_speed: f64,
+    /// HDR exposure multiplier before the tone map; must be > 0.
+    pub exposure: f64,
+    pub tonemap: Tonemap,
+    /// Reuse of the existing multi-scale bloom effect: None skips, Some(amount) runs it with fixed soft-knee defaults.
+    pub bloom: Option<f64>,
+}
+
+impl Default for Style {
+    fn default() -> Self {
+        Self { shutter: 0.0, trail_speed: -1.0, exposure: 1.0, tonemap: Tonemap::None, bloom: None }
+    }
+}
+
+/// HDR accumulating render: streaked splats + history trails in linear f32 (no clamp),
+/// optional existing-pipeline bloom, exposure, tone map. Everything else (ring pool,
+/// tiled buckets, mesh z-buffer with relative bias) identical to `render`.
+pub fn render_styled(sim: &mut Simulation, camera: &Camera, w: usize, h: usize, mesh: Option<&crate::threed::primitives::Geometry>, depth_range: [f64; 2], style: &Style) -> Result<(Frame, RenderOut), String> {
+    camera.validate()?;
+    if w == 0 || h == 0 || w > 1920 || h > 1080 {
+        return Err("target 1..1920x1080".into());
+    }
+    if !style.shutter.is_finite() || !(0.0..=1.0).contains(&style.shutter) {
+        return Err("shutter 0..1 s".into());
+    }
+    if !style.exposure.is_finite() || style.exposure <= 0.0 || style.exposure > 1e4 {
+        return Err("exposure (0, 1e4]".into());
+    }
+    if let Some(b) = style.bloom {
+        if !b.is_finite() || !(0.0..=1.0).contains(&b) {
+            return Err("bloom amount 0..1 (conserve)".into());
+        }
+    }
+    let (mut frame, depth) = if let Some(g) = mesh {
+        let o = crate::threed::perspective::render(g, camera, w, h, crate::threed::perspective::Shading::Normal, depth_range)?;
+        (o.frame, o.depth)
+    } else {
+        (Frame::try_new(w, h)?, vec![f64::INFINITY; w * h])
+    };
+    let mut out = RenderOut { frame_pixels: w * h, active: 0, drawn: 0, occluded_by_mesh: 0, behind_camera: 0 };
+    let e = &sim.flow.emitter;
+    let focal_px = h as f64 * (camera.focal_length / camera.sensor_height);
+    struct Head { px: f64, py: f64, z: f64, t: f64, vx: f64, vy: f64 }
+    let mut heads: Vec<Head> = Vec::new();
+    let mut trails: Vec<(f64, f64, f64, f64, f64)> = Vec::new(); // px,py,z,t,age_frac of head life
+    for s in &sim.pool {
+        if !s.alive {
+            continue;
+        }
+        out.active += 1;
+        let t = (sim.time - s.birth) / s.lifetime;
+        let Some(o) = camera.project(s.position, w as u32, h as u32)? else {
+            out.behind_camera += 1;
+            continue;
+        };
+        // Screen-space velocity from the world velocity over the shutter window.
+        let q = camera.project([s.position[0] + s.velocity[0] * style.shutter, s.position[1] + s.velocity[1] * style.shutter, s.position[2] + s.velocity[2] * style.shutter], w as u32, h as u32)?;
+        let (vx, vy) = match q {
+            Some(q) => ((q[0] - o[0]) / style.shutter.max(1e-9), (q[1] - o[1]) / style.shutter.max(1e-9)),
+            None => (0.0, 0.0),
+        };
+        let speed = s.velocity[0].hypot(s.velocity[1]).hypot(s.velocity[2]);
+        heads.push(Head { px: o[0], py: o[1], z: o[2], t, vx, vy });
+        if style.trail_speed >= 0.0 && speed >= style.trail_speed && s.history_len >= 2 {
+            let n = s.history_len as usize;
+            let mut last: Option<[f64; 2]> = None;
+            for (k, hp) in s.history_ordered().enumerate() {
+                if let Some(ho) = camera.project(hp, w as u32, h as u32)? {
+                    // Skip segments shorter than half a pixel (no sub-pixel ribbon stubs).
+                    if last.map(|l| (ho[0] - l[0]).hypot(ho[1] - l[1]) < 0.5).unwrap_or(false) {
+                        continue;
+                    }
+                    last = Some([ho[0], ho[1]]);
+                    let frac = (k + 1) as f64 / (n + 1) as f64;
+                    trails.push((ho[0], ho[1], ho[2], t, frac * frac)); // quadratic tail decay to zero
+                }
+            }
+        }
+    }
+    // Trails first (older behind), then heads; both back-to-front by view depth.
+    trails.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    heads.sort_by(|a, b| b.z.partial_cmp(&a.z).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.px.total_cmp(&b.px)).then_with(|| a.py.total_cmp(&b.py)));
+    let mut flags = vec![0u8; heads.len() * 2];
+    let splat = |frame: &mut Frame, depth: &[f64], px: f64, py: f64, z: f64, rx: f64, ry: f64, cos: f64, sin: f64, color: [f64; 3], alpha: f64, drawn: &mut bool, occluded: &mut bool| {
+        let rmax = rx.max(ry);
+        let (x0, x1) = ((px - rmax).floor().max(0.0) as usize, ((px + rmax).ceil() as usize).min(w - 1));
+        let (y0, y1) = ((py - rmax).floor().max(0.0) as usize, ((py + rmax).ceil() as usize).min(h - 1));
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let dx = x as f64 + 0.5 - px;
+                let dy = y as f64 + 0.5 - py;
+                // Rotated gaussian: u along the streak axis, v across it.
+                let u = dx * cos + dy * sin;
+                let v = -dx * sin + dy * cos;
+                let d = ((u / rx).hypot(v / ry)).sqrt();
+                if d >= 1.0 {
+                    continue;
+                }
+                let id = y * w + x;
+                if z >= depth[id] * (1.0 + 1e-6) + 1e-9 {
+                    *occluded = true;
+                    continue;
+                }
+                let k = e.kernel(d) * alpha;
+                if k <= 0.0 {
+                    continue;
+                }
+                match e.blend {
+                    Blend::Additive => {
+                        for j in 0..3 {
+                            frame.d[id * 4 + j] += (color[j] * k) as f32; // HDR: no clamp
+                        }
+                    }
+                    Blend::PremultipliedAlpha => {
+                        for j in 0..3 {
+                            frame.d[id * 4 + j] = frame.d[id * 4 + j] * (1.0 - k as f32) + (color[j] * k) as f32;
+                        }
+                    }
+                }
+                frame.d[id * 4 + 3] = 1.0;
+                *drawn = true;
+            }
+        }
+    };
+    for (px, py, z, t, frac) in trails {
+        crate::guard::check();
+        let r = (0.5 * e.size_at(t) * focal_px / z).clamp(0.5, 64.0);
+        let alpha = e.alpha_at(t) * frac; // alpha falloff along the trail
+        let mut d = false;
+        let mut o = false;
+        splat(&mut frame, &depth, px, py, z, r, r, 1.0, 0.0, e.color_at(t), alpha, &mut d, &mut o);
+    }
+    for (i, hd) in heads.iter().enumerate() {
+        crate::guard::check();
+        let r = (0.5 * e.size_at(hd.t) * focal_px / hd.z).clamp(0.5, 64.0);
+        // Oriented streak: major axis along screen velocity, length = |v_px|*shutter; gaussian kept on both axes.
+        let streak = (hd.vx.hypot(hd.vy)) * style.shutter;
+        let (rx, ry, cos, sin) = if streak > 1e-9 {
+            let rl = r + streak / 2.0;
+            (rl.min(r * 12.0).min(192.0), r, hd.vx / (hd.vx.hypot(hd.vy)), hd.vy / (hd.vx.hypot(hd.vy)))
+        } else {
+            (r, r, 1.0, 0.0)
+        };
+        let mut d = false;
+        let mut o = false;
+        splat(&mut frame, &depth, hd.px, hd.py, hd.z, rx, ry, cos, sin, e.color_at(hd.t), e.alpha_at(hd.t), &mut d, &mut o);
+        flags[i] = d as u8;
+        flags[heads.len() + i] = o as u8;
+    }
+    let nh = heads.len();
+    out.drawn = flags[..nh].iter().filter(|v| **v == 1).count();
+    out.occluded_by_mesh = (0..nh).filter(|&i| flags[nh + i] == 1 && flags[i] == 0).count();
+    // NaN/inf pre-clamp on the HDR accumulation before any downstream pass.
+    for v in frame.d.iter_mut() {
+        if !v.is_finite() {
+            *v = 0.0;
+        } else {
+            *v = v.clamp(-65504.0, 65504.0);
+        }
+    }
+    // Bloom through the existing effect pipeline (multi-scale box-blur gaussian stack, HDR-aware soft knee:
+    // only clusters above luma 0.8 with the quadratic knee feed the blur, so dim low-alpha particles do not bloom).
+    if let Some(amount) = style.bloom {
+        let mut params: crate::effects::Params = std::collections::BTreeMap::new();
+        params.insert("amount".into(), crate::keyframe::Prop::new(amount));
+        params.insert("threshold".into(), crate::keyframe::Prop::new(0.8));
+        params.insert("knee".into(), crate::keyframe::Prop::new(0.2));
+        params.insert("radius".into(), crate::keyframe::Prop::new(8.0));
+        params.insert("levels".into(), crate::keyframe::Prop::new(5.0));
+        params.insert("conserve".into(), crate::keyframe::Prop::new(0.0)); // additive: bloom only adds light, never darkens cores
+        crate::effects::apply("bloom", &params, &std::collections::BTreeMap::new(), &mut frame, 0.0, 0)?;
+    }
+    // Exposure + tone map; Reinhard path finishes with the sRGB transfer and a
+    // triangular dither so the 8-bit encode has no banding (Tonemap::None stays
+    // clamped linear for raw comparison, matching the project's no-display-transform convention).
+    let mut dith = 0x9E3779B97F4A7C15u64;
+    for i in 0..w * h {
+        for j in 0..3 {
+            let x = frame.d[i * 4 + j] as f64 * style.exposure;
+            frame.d[i * 4 + j] = match style.tonemap {
+                Tonemap::Reinhard => {
+                    let v = (1.0 - (-x).exp()).clamp(0.0, 1.0);
+                    let srgb = if v <= 0.0031308 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+                    dith ^= dith << 13;
+                    dith ^= dith >> 7;
+                    dith ^= dith << 17;
+                    let u = (dith >> 11) as f64 / 9007199254740992.0;
+                    (srgb + (u - 0.5) / 255.0) as f32
+                }
+                Tonemap::None => x as f32,
+            }
+            .clamp(0.0, 1.0);
+        }
+    }
+    Ok((frame, out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,6 +829,122 @@ mod tests {
         assert!(sim.advance(-1.0).is_err());
     }
 
+    fn single_particle_sim(vx: f64, shutter: f64) -> (Simulation, Camera) {
+        let f = Flow {
+            emitter: Emitter {
+                seed: 3, count: 1, origin: [0.0; 3], spread: [0.0; 3], base_velocity: [vx, 0.0, 0.0], velocity_jitter: 0.0,
+                birth_rate: 1.0, lifetime: [10.0, 10.0],
+                color_stops: vec![ColorStop { offset: 0.0, rgb: [1.0, 1.0, 1.0] }, ColorStop { offset: 1.0, rgb: [1.0, 1.0, 1.0] }],
+                alpha_start: 1.0, alpha_end: 1.0, fade_in: 0.05, fade_out: 0.05,
+                size_start: 0.05, size_end: 0.05, blend: Blend::Additive, hardness: 4.0,
+            },
+            field: Advect::Curl3 { noise: "perlin".into(), seed: 1, frequency: 1.0, amplitude: 0.0, octaves: 1 },
+            gravity: [0.0; 3], drag: 0.0, coupling: 0.0, dt: 0.005,
+        };
+        let mut sim = Simulation::new(f).unwrap();
+        sim.advance(0.5).unwrap();
+        let camera = Camera { eye: [0.0, 0.0, -4.0], pan: 0.0, tilt: 0.0, roll: 0.0, sensor_height: 24.0, focal_length: 35.0, near: 0.1 };
+        (sim, camera)
+    }
+    fn extent(f: &Frame) -> (usize, usize) {
+        let (mut xs, mut ys) = (vec![], vec![]);
+        for y in 0..f.h {
+            for x in 0..f.w {
+                if f.d[(y * f.w + x) * 4] > 0.01 {
+                    xs.push(x);
+                    ys.push(y);
+                }
+            }
+        }
+        (xs.iter().max().unwrap() - xs.iter().min().unwrap() + 1, ys.iter().max().unwrap() - ys.iter().min().unwrap() + 1)
+    }
+    #[test]
+    fn oriented_streak_stretches_along_screen_velocity() {
+        let (mut still, cam) = single_particle_sim(0.0, 0.2);
+        let (f0, _) = render_styled(&mut still, &cam, 200, 120, None, [0.5, 20.0], &Style::default()).unwrap();
+        let (w0, h0) = extent(&f0);
+        assert!((w0 as i32 - h0 as i32).abs() <= 2, "zero velocity stays round: {w0}x{h0}");
+        let (mut fast, cam) = single_particle_sim(3.0, 0.2);
+        let style = Style { shutter: 0.2, ..Style::default() };
+        let (f1, _) = render_styled(&mut fast, &cam, 200, 120, None, [0.5, 20.0], &style).unwrap();
+        let (w1, h1) = extent(&f1);
+        assert!(w1 > w0 + 10, "streak widens: {w0} -> {w1}");
+        assert!((h1 as i32 - h0 as i32).abs() <= 3, "minor axis preserved: {h0} -> {h1}");
+        // Gaussian falloff across the minor axis: center row profile strictly decreasing from center.
+        let (mut cy, mut cx) = (0usize, 0usize);
+        let mut best = 0f32;
+        for y in 0..f1.h {
+            for x in 0..f1.w {
+                if f1.d[(y * f1.w + x) * 4] > best {
+                    best = f1.d[(y * f1.w + x) * 4];
+                    cy = y;
+                    cx = x;
+                }
+            }
+        }
+        let col: Vec<f32> = (0..f1.h).map(|y| f1.d[(y * f1.w + cx) * 4]).collect();
+        assert!(col[cy] >= col[cy + 2] && col[cy] >= col[cy - 2], "minor-axis falloff monotone");
+    }
+    #[test]
+    fn history_ring_fixed_and_ordered() {
+        let mut sim = Simulation::new(Flow { emitter: Emitter { birth_rate: 1.0, count: 1, base_velocity: [1.0, 0.0, 0.0], velocity_jitter: 0.0, ..flow().emitter }, coupling: 0.0, gravity: [0.0; 3], drag: 0.0, ..flow() }).unwrap();
+        sim.advance(0.5).unwrap(); // 125 steps at dt 0.004
+        let s = &sim.pool()[0];
+        assert_eq!(s.history_len as usize, HISTORY, "ring saturates at HISTORY");
+        let h: Vec<_> = s.history_ordered().collect();
+        assert_eq!(h.len(), HISTORY);
+        for w in h.windows(2) {
+            assert!(w[1][0] > w[0][0], "oldest-to-newest along +x");
+        }
+        assert!((h[HISTORY - 1][0] - s.position[0]).abs() < 0.01 + 1e-9, "newest history one step behind head");
+    }
+    #[test]
+    fn trails_and_hdr_bloom_tonemap() {
+        let (mut sim, cam) = single_particle_sim(4.0, 0.0);
+        let style = Style { shutter: 0.0, trail_speed: 1.0, exposure: 1.0, tonemap: Tonemap::Reinhard, bloom: Some(0.6) };
+        let (f, _) = render_styled(&mut sim, &cam, 200, 120, None, [0.5, 20.0], &style).unwrap();
+        assert!(f.d.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "tonemapped output in gamut");
+        // Trail leaves energy behind the head (head is leading at +x).
+        let (mut cx, mut cy) = (0usize, 0usize);
+        let mut best = 0f32;
+        for y in 0..f.h {
+            for x in 0..f.w {
+                let v = f.d[(y * f.w + x) * 4];
+                if v > best {
+                    best = v;
+                    cx = x;
+                    cy = y;
+                }
+            }
+        }
+        let behind: f32 = (0..cx.saturating_sub(4)).map(|x| f.d[(cy * f.w + x) * 4]).sum();
+        assert!(behind > 0.0, "trail deposits energy behind the head");
+    }
+    #[test]
+    fn reinhard_endpoints_and_exposure() {
+        let (mut sim, cam) = single_particle_sim(0.0, 0.0);
+        let dim = Style { exposure: 0.5, tonemap: Tonemap::Reinhard, ..Style::default() };
+        let bright = Style { exposure: 4.0, tonemap: Tonemap::Reinhard, ..Style::default() };
+        let (a, _) = render_styled(&mut sim, &cam, 120, 80, None, [0.5, 20.0], &dim).unwrap();
+        let (b, _) = render_styled(&mut sim, &cam, 120, 80, None, [0.5, 20.0], &bright).unwrap();
+        let peak = |f: &Frame| f.d.iter().skip(0).step_by(4).fold(0f32, |m, v| m.max(*v));
+        assert!(peak(&a) < peak(&b), "exposure scales before the tone map");
+        assert!(peak(&b) <= 1.0 && peak(&a) > 0.0);
+    }
+    #[cfg(feature = "flat-sah")]
+    #[test]
+    fn obstacle_deflection_reflects_and_damps() {
+        let g = generate(&Primitive::Sphere { radius: 1.0, longitude_slices: 24, latitude_slices: 12 }).unwrap();
+        let stream = crate::threed::vertex_stream::Stream { vertices: g.vertices.clone(), indices: g.indices.clone() };
+        let index = crate::threed::flat_sah::Index::build(&stream).unwrap();
+        // Particle at (-3,0,0) flying +x into the unit sphere.
+        let mut sim = Simulation::new(Flow { emitter: Emitter { count: 1, origin: [-3.0, 0.05, 0.0], spread: [0.0; 3], base_velocity: [4.0, 0.0, 0.0], velocity_jitter: 0.0, birth_rate: 1.0, lifetime: [10.0, 10.0], ..flow().emitter }, coupling: 0.0, gravity: [0.0; 3], drag: 0.0, dt: 0.005, ..flow() }).unwrap();
+        advance_deflect(&mut sim, 1.0, &index, &stream, 0.5, 0.7).unwrap();
+        let s = sim.pool()[0];
+        assert!(s.velocity[0] < 0.0, "reflected: v={:?}", s.velocity);
+        assert!(s.velocity[0].abs() <= 4.0 * 0.5 + 0.6, "damped below restitution bound: {}", s.velocity[0]);
+        assert!(s.position[0] < -0.9, "stays outside the sphere: {}", s.position[0]);
+    }
     #[test]
     #[ignore]
     fn pv3_frames() {
