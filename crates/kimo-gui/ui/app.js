@@ -105,7 +105,9 @@ function render() {
   renderGraph(); renderPasses(); renderInspector();
 }
 
-/* derived graph: nodes from tool_start inputs, read-only, live path animated */
+/* derived graph: nodes from tool_start inputs, read-only, live path animated.
+   Pills are appended first and measured, then bezier splines anchor to the
+   real port dots, so edges stay glued whatever the pill width. */
 function renderGraph() {
   const nodesEl = $('#nodes'), edgesEl = $('#edges');
   const nodes = [...state.nodes.values()];
@@ -113,25 +115,42 @@ function renderGraph() {
   const depth = n => { let d=0,g=new Set(),cur=n; while(cur.inputs.length&&cur.inputs[0].from&&!g.has(cur.name)){g.add(cur.name);cur=state.nodes.get(cur.inputs[0].from.split(':')[0])||{inputs:[]};d++;} return d; };
   const lanes = {};
   for (const n of nodes) { const d = n.x?null:depth(n); if(!n.x){ n.x = 60 + d*220; const lane = lanes[d]=(lanes[d]||0); n.y = 40 + lane*110; lanes[d]=lane+1; } }
-  edgesEl.innerHTML = ''; nodesEl.innerHTML = '';
+  nodesEl.innerHTML = ''; edgesEl.innerHTML = '';
+  const box = {};
   for (const n of nodes) {
-    for (const inp of n.inputs) {
-      const src = state.nodes.get(inp.from.split(':')[0]);
-      if (!src) continue;
-      const p = document.createElementNS('http://www.w3.org/2000/svg','path');
-      const x1=src.x+150, y1=src.y+26, x2=n.x, y2=n.y+26, mx=(x1+x2)/2;
-      p.setAttribute('d', `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`);
-      p.setAttribute('class', 'edge' + (n.active||src.active ? ' live' : ''));
-      edgesEl.appendChild(p);
-    }
     const el = document.createElement('div');
     el.className = 'node' + (n.active ? ' active' : '');
     el.style.left = n.x+'px'; el.style.top = n.y+'px';
-    el.innerHTML = `<div class="nhead" style="background:${colorFor(n.name)}">${n.name}</div>
-      <div class="nbody">${n.inputs.map(i=>`<div class="port"><span>${i.port}</span></div>`).join('')}<div class="port"><span class="dim">${n.dur!=null?n.dur+' ms':''}</span><span class="dot"></span></div></div>`;
+    el.style.setProperty('--nc', colorFor(n.name));   // identity color (dot + out port)
+    el.innerHTML = `<span class="ndot"></span><span class="nname">${n.name}</span>` +
+      (n.dur != null ? `<span class="ndur">${n.dur}&thinsp;ms</span>` : '') +
+      n.inputs.map((_,k) => `<span class="pdot in" style="top:${8+k*12}px"></span>`).join('') +
+      `<span class="pdot out"></span>`;
     nodesEl.appendChild(el);
+    box[n.name] = el;
   }
-  // presenter mode: keep the active card in view
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  for (const n of nodes) {
+    for (const inp of n.inputs) {
+      const src = state.nodes.get(inp.from.split(':')[0]);
+      if (!src || !box[src.name]) continue;
+      const a = box[src.name], b = box[n.name];
+      const x1 = src.x + a.offsetWidth, y1 = src.y + a.offsetHeight/2;
+      const x2 = n.x, y2 = n.y + b.offsetHeight/2, mx = (x1+x2)/2;
+      const d = `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+      const live = n.active || src.active;
+      if (live) {   // cheap glow: wide translucent twin under the live spline
+        const g = document.createElementNS(SVGNS,'path');
+        g.setAttribute('d', d); g.setAttribute('class', 'edge-glow live');
+        edgesEl.appendChild(g);
+      }
+      const p = document.createElementNS(SVGNS,'path');
+      p.setAttribute('d', d);
+      p.setAttribute('class', 'edge' + (live ? ' live' : ''));
+      edgesEl.appendChild(p);
+    }
+  }
+  // presenter mode: keep the active pill in view
   const act = nodesEl.querySelector('.node.active');
   if (act) act.scrollIntoView({ block:'nearest', inline:'nearest', behavior:'smooth' });
 }
@@ -201,6 +220,29 @@ function buildTimeline() {
   })();
 }
 buildTimeline();
+
+
+/* ---------- workstation chrome ---------- */
+/* collapsible docks: every dock-toggle flips .collapsed on its target panel */
+document.addEventListener('click', e => {
+  const b = e.target.closest('.dock-toggle'); if (!b) return;
+  const d = document.getElementById(b.dataset.dock);
+  if (d) d.classList.toggle('collapsed');
+});
+/* floating inspector: drag by its header (pointer events, transform-free) */
+{ const insp = $('#inspector'), head = $('#insp-head'), host = $('main');
+  head.addEventListener('pointerdown', e => {
+    if (e.target.closest('.dock-toggle')) return;
+    const r = insp.getBoundingClientRect(), hr = host.getBoundingClientRect();
+    if (!insp.classList.contains('floating')) {   // undock: float at the current rect
+      insp.classList.add('floating');
+      insp.style.left = (r.left - hr.left) + 'px'; insp.style.top = (r.top - hr.top) + 'px';
+    }
+    const ox = e.clientX - r.left, oy = e.clientY - r.top;
+    const move = ev => { insp.style.left = (ev.clientX - hr.left - ox) + 'px'; insp.style.top = (ev.clientY - hr.top - oy) + 'px'; };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+  }); }
 
 /* ---------- feeds ---------- */
 function setPill(txt, sim) {

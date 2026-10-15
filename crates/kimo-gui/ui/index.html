@@ -14,9 +14,11 @@
   <span class="right-note">SPECTATOR · READ-ONLY · <span id="feed-label">starting</span></span>
 </header>
 <main>
-  <aside id="calllog" class="card">
-    <div class="card-head"><span>CALL LOG</span><span class="dim">TOOL_START / TOOL_END</span></div>
-    <div id="log-rows"></div>
+  <aside id="dock-left" class="dock">
+    <div class="card" id="calllog">
+      <div class="card-head"><button type="button" class="dock-toggle" data-dock="dock-left" aria-label="collapse call log">‹</button><span>CALL LOG</span><span class="dim">TOOL_START / TOOL_END</span></div>
+      <div id="log-rows" class="dock-body"></div>
+    </div>
   </aside>
   <section id="center">
     <div id="frames">
@@ -34,19 +36,19 @@
       <div id="graph-body"><svg id="edges"></svg><div id="nodes"></div></div>
     </div>
   </section>
-  <aside id="rightrail">
+  <aside id="dock-right" class="dock">
     <div class="card" id="passstack">
-      <div class="card-head"><span>PASS STACK</span><span class="dim">LAST RENDER</span></div>
-      <div id="pass-rows"></div>
+      <div class="card-head"><span>PASS STACK</span><span class="dim">LAST RENDER</span><button type="button" class="dock-toggle" data-dock="dock-right" aria-label="collapse pass stack">›</button></div>
+      <div id="pass-rows" class="dock-body"></div>
     </div>
     <div class="card" id="inspector">
-      <div class="card-head"><span>INSPECTOR</span><span class="dim" id="insp-name">—</span></div>
+      <div class="card-head" id="insp-head"><span>INSPECTOR</span><span class="dim" id="insp-name">—</span><button type="button" class="dock-toggle" data-dock="inspector" aria-label="collapse inspector">–</button></div>
       <div id="insp-rows"></div>
     </div>
   </aside>
 </main>
 <footer id="timeline" class="card">
-  <div class="card-head"><span>TIMELINE</span><span class="dim" id="tc">00:00.0 · 24 FPS</span></div>
+  <div class="card-head"><button type="button" class="dock-toggle" data-dock="timeline" aria-label="collapse timeline">▾</button><span>TIMELINE</span><span class="dim" id="tc">00:00.0 · 24 FPS</span></div>
   <div id="tl-body">
     <div id="tl-ruler"></div>
     <div id="tl-tracks"></div>
