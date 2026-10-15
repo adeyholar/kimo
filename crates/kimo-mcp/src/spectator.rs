@@ -5,14 +5,16 @@
 //!   `file:/path/events.jsonl` (append; tests and recordings).
 //! Guarantees: nothing is ever written to stdout (the MCP channel); tool arguments and results are only read,
 //! never changed; the request loop never blocks on telemetry: events go into a bounded channel drained by one
-//! background writer, and with no listener or a full buffer they are dropped. With the variable unset every hook
+//! background writer, and with no listener or a full buffer they are dropped. The writer reconnects lazily with
+//! backoff when the GUI is closed and reopened mid-session; events from while it was gone are not replayed. With the variable unset every hook
 //! below is a single `OnceLock` load.
 //!
 //! One event per line, the spectator's unified contract (crates/kimo-gui/README.md, "Unified tool events"):
 //!   {tool_name, call_id, phase: start|progress|complete|error, target: {track_id, clip_id, param}, payload, ts, ts_ms}
 //! plus `duration_ms` on complete/error. payload by phase:
 //!   start    {args}
-//!   progress {pct 0..100, progress 0..1, stage, elapsed_ms}
+//!   progress {pct 0..100, progress 0..1, stage, elapsed_ms} plus, from frame-counting tools (export),
+//!            {current_frame (frames finished = next frame index), total_frames, fps (instantaneous), eta_ms}
 //!   complete {dur_ms, result, changed, mutated} plus the router's vocabulary where the engine state shows it:
 //!            from/to (+param) for a field change, clip/track/s/e/label for an insert, s/e/at for edits,
 //!            effect, on (mute/solo), text/s/e (captions)
@@ -47,7 +49,7 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 static REV: AtomicU64 = AtomicU64::new(0);
 static ACTIVE: Mutex<Option<Active>> = Mutex::new(None);
 
-struct Active { call_id: String, tool: String, target: Value, t0: Instant, snap: Snap, last_progress: Option<(Instant, f64)>, args: Value }
+struct Active { call_id: String, tool: String, target: Value, t0: Instant, snap: Snap, last_progress: Option<(Instant, f64)>, last_frame: Option<(Instant, u64)>, frames_t0: Option<(Instant, u64)>, args: Value }
 
 /// Parse a `KIMO_SPECTATOR` value. None = telemetry off (unset, empty, `0`, `off`, unparsable or non-loopback).
 pub fn parse_dest(spec: &str) -> Option<Dest> {
@@ -110,35 +112,87 @@ pub fn flush(within: Duration) {
     let _ = ack_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
 }
 
-fn open(dest: &Dest) -> Option<Box<dyn Write + Send>> {
+/// A live connection to the sink.
+enum Conn { File(std::fs::File), Tcp(std::net::TcpStream) }
+
+impl Conn {
+    /// False once the peer has closed its end (the spectator window went away): a non-blocking peek reads EOF.
+    /// Checked before each write so a closed GUI is noticed at once instead of one event later.
+    fn alive(&mut self) -> bool {
+        match self {
+            Conn::File(_) => true,
+            Conn::Tcp(s) => {
+                if s.set_nonblocking(true).is_err() { return false; }
+                let mut b = [0u8; 1];
+                let ok = match s.peek(&mut b) {
+                    Ok(0) => false,
+                    Ok(_) => true,
+                    Err(e) => e.kind() == std::io::ErrorKind::WouldBlock,
+                };
+                ok && s.set_nonblocking(false).is_ok()
+            }
+        }
+    }
+    fn write_line(&mut self, l: &[u8]) -> std::io::Result<()> {
+        match self { Conn::File(f) => f.write_all(l), Conn::Tcp(s) => s.write_all(l) }
+    }
+    fn flush(&mut self) {
+        let _ = match self { Conn::File(f) => f.flush(), Conn::Tcp(s) => s.flush() };
+    }
+}
+
+fn open(dest: &Dest) -> Option<Conn> {
     match dest {
-        Dest::File(p) => std::fs::OpenOptions::new().create(true).append(true).open(p).ok().map(|f| Box::new(f) as Box<dyn Write + Send>),
+        Dest::File(p) => std::fs::OpenOptions::new().create(true).append(true).open(p).ok().map(Conn::File),
         Dest::Tcp(a) => {
             use std::net::ToSocketAddrs;
             let addr = a.to_socket_addrs().ok()?.find(|x| x.ip().is_loopback())?;
             let s = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250)).ok()?;
             let _ = s.set_nodelay(true);
             let _ = s.set_write_timeout(Some(Duration::from_millis(250)));
-            Some(Box::new(s))
+            Some(Conn::Tcp(s))
         }
     }
 }
 
-/// Background writer: (re)connects lazily, at most once a second while events are flowing; a write error drops the connection.
+/// Reconnect pacing: 50 ms after the first failure, doubling to a 1000 ms ceiling, back to 50 ms once connected.
+/// The wait is a timestamp the writer compares, never a sleep: events arriving inside it are dropped at once.
+#[derive(Debug)]
+pub struct Backoff { next: Duration }
+impl Backoff {
+    pub const FIRST: Duration = Duration::from_millis(50);
+    pub const CEIL: Duration = Duration::from_millis(1000);
+    pub fn new() -> Self { Backoff { next: Self::FIRST } }
+    /// A connect or write failed: how long to wait before the next attempt.
+    pub fn fail(&mut self) -> Duration { let d = self.next; self.next = (self.next * 2).min(Self::CEIL); d }
+    /// Connected: start over.
+    pub fn reset(&mut self) { self.next = Self::FIRST; }
+}
+impl Default for Backoff { fn default() -> Self { Self::new() } }
+
+/// Background writer, the only place that touches the sink. It connects lazily when an event arrives, with
+/// `Backoff` between failed attempts; a write error or a peer that closed drops the connection and the event.
+/// Events that arrive while disconnected (or inside a backoff wait) are dropped, never queued for later.
+/// Nothing here can panic or reach the dispatch thread, which only ever `try_send`s into the bounded queue.
 fn writer(dest: Dest, rx: Receiver<Msg>) {
-    let mut conn: Option<Box<dyn Write + Send>> = None;
+    let mut conn: Option<Conn> = None;
+    let mut backoff = Backoff::new();
     let mut retry_at = Instant::now();
     for m in rx {
         match m {
-            Msg::Flush(ack) => { if let Some(c) = conn.as_mut() { let _ = c.flush(); } let _ = ack.send(()); }
+            Msg::Flush(ack) => { if let Some(c) = conn.as_mut() { c.flush(); } let _ = ack.send(()); }
             Msg::Line(mut l) => {
+                if conn.as_mut().map_or(false, |c| !c.alive()) {
+                    conn = None;
+                    retry_at = Instant::now();
+                }
                 if conn.is_none() && Instant::now() >= retry_at {
                     conn = open(&dest);
-                    if conn.is_none() { retry_at = Instant::now() + Duration::from_secs(1); }
+                    if conn.is_some() { backoff.reset(); } else { retry_at = Instant::now() + backoff.fail(); }
                 }
                 if let Some(c) = conn.as_mut() {
                     l.push('\n');
-                    if c.write_all(l.as_bytes()).is_err() { conn = None; retry_at = Instant::now() + Duration::from_millis(500); }
+                    if c.write_line(l.as_bytes()).is_err() { conn = None; retry_at = Instant::now() + backoff.fail(); }
                 }
             }
         }
@@ -334,22 +388,44 @@ pub fn call_start(name: &str, args: &Value, ss: &Arc<Mutex<Session>>) {
     if target["track_id"].is_null() {
         if let Some((t, _, _)) = target["clip_id"].as_str().and_then(|c| snap.find(c)) { target["track_id"] = json!(t); }
     }
-    let a = Active { call_id: new_call_id(), tool, target, t0: Instant::now(), snap, last_progress: None, args: eff };
+    let a = Active { call_id: new_call_id(), tool, target, t0: Instant::now(), snap, last_progress: None, last_frame: None, frames_t0: None, args: eff };
     let mut ev = event(&a, "start", json!({"args": summarize(&a.args)}));
     if let Some(g) = group { ev["group"] = json!(g); }
     emit(&ev);
     *ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(a);
 }
 
-/// Progress from the engine (kimo_core::telemetry::progress) for the call in flight; throttled to ~25/s.
-fn on_progress(frac: f64, stage: &str) {
+/// Progress from the engine (kimo_core::telemetry) for the call in flight; throttled to ~25/s (the first and last
+/// report always go out). Frame-counting tools (export) add `current_frame` (frames finished = the next frame's
+/// index), `total_frames`, `fps` (instantaneous: frames finished since the previous report over the wall-clock
+/// between them; 0 on the opening report) and `eta_ms` (remaining frames at the average rate since the first frame
+/// report; null until a frame has finished, 0 at the end).
+fn on_progress(p: &kimo_core::telemetry::Progress) {
     let mut g = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
     let Some(a) = g.as_mut() else { return };
     let now = Instant::now();
+    let frac = p.frac;
+    // rate bookkeeping on every report (not only the emitted ones), so throttling never skews it
+    let mut fps = 0.0;
+    let mut eta_ms: Option<u64> = None;
+    if let (Some(f), Some(n)) = (p.frame, p.total_frames) {
+        if let Some((t, f0)) = a.last_frame { let dt = now.duration_since(t).as_secs_f64(); if f > f0 && dt > 0.0 { fps = (f - f0) as f64 / dt; } }
+        if a.last_frame.map_or(true, |(_, f0)| f > f0) { a.last_frame = Some((now, f)); }
+        let (t0, f0) = *a.frames_t0.get_or_insert((now, f));
+        if f >= n { eta_ms = Some(0); }
+        else if f > f0 { let per = now.duration_since(t0).as_secs_f64() / (f - f0) as f64; eta_ms = Some(((n - f) as f64 * per * 1000.0).round() as u64); }
+    }
     if let Some((t, f)) = a.last_progress { if frac < 1.0 && (now.duration_since(t) < Duration::from_millis(40) || frac - f < 0.002) { return; } }
     a.last_progress = Some((now, frac));
     let el = now.duration_since(a.t0).as_millis() as u64;
-    emit(&event(a, "progress", json!({"pct": (frac * 1000.0).round() / 10.0, "progress": frac, "stage": stage, "elapsed_ms": el})));
+    let mut payload = json!({"pct": (frac * 1000.0).round() / 10.0, "progress": frac, "stage": p.stage, "elapsed_ms": el});
+    if let (Some(f), Some(n)) = (p.frame, p.total_frames) {
+        payload["current_frame"] = json!(f);
+        payload["total_frames"] = json!(n);
+        payload["fps"] = json!((fps * 10.0).round() / 10.0);
+        payload["eta_ms"] = json!(eta_ms);
+    }
+    emit(&event(a, "progress", payload));
 }
 
 fn round1(ms: f64) -> f64 { (ms * 10.0).round() / 10.0 }
@@ -399,6 +475,15 @@ pub fn call_abort(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reconnect_backoff_doubles_to_a_ceiling_and_resets() {
+        let mut b = Backoff::new();
+        let seq: Vec<u64> = (0..7).map(|_| b.fail().as_millis() as u64).collect();
+        assert_eq!(seq, [50, 100, 200, 400, 800, 1000, 1000]);
+        b.reset();
+        assert_eq!(b.fail(), Backoff::FIRST);
+    }
+
     #[test]
     fn dest_parsing() {
         assert_eq!(parse_dest(""), None);

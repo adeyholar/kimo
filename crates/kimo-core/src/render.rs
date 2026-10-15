@@ -667,6 +667,7 @@ pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mu
     let mut encoder=crate::color::process::EncodeStream::new(&mut command,frame_bytes,crate::color::process::encode_deadline(n))?;
     let nt = crate::guard::export_threads_n(p.width, p.height, std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).max(1), frame_buffers(p));
     let mut i = 0;
+    crate::telemetry::progress_frames(0, n, "frames");
     while i < n {
         crate::guard::check();
         let mut end = (i + nt * 4).min(n);
@@ -678,7 +679,7 @@ pub(crate) fn export_range_cmd(p: &Project, path: &str, f0: usize, f1: usize, mu
         let frames: Vec<Result<Vec<u8>, String>> = slots.into_iter().map(|m| m.into_inner().unwrap().unwrap()).collect();
         for f in frames { encoder.write(f?)?; }
         i = end;
-        crate::telemetry::progress(i as f64 / n as f64, "frames");
+        crate::telemetry::progress_frames(i, n, "frames");
     }
     encoder.finish()?;
     // mux mixed audio

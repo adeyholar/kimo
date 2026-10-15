@@ -196,5 +196,148 @@ fn export_reports_progress() {
     assert!(prog.windows(2).all(|w| w[0] <= w[1]), "progress is monotonic: {prog:?}");
     assert!((prog.last().unwrap() - 1.0).abs() < 1e-9, "progress reaches 1.0: {prog:?}");
     assert!(ex.iter().all(|e| e["call_id"] == ex[0]["call_id"]));
+    // frame counters (Naman's spec): current_frame, total_frames, fps (instantaneous), pct, elapsed_ms, eta_ms
+    let pe: Vec<&Value> = ex.iter().copied().filter(|e| e["phase"] == "progress").collect();
+    let total = pe[0]["payload"]["total_frames"].as_u64().expect("total_frames on every progress event");
+    assert_eq!(total, 24, "1 s at 24 fps");
+    let frames: Vec<u64> = pe.iter().map(|e| e["payload"]["current_frame"].as_u64().expect("current_frame on every progress event")).collect();
+    assert_eq!(frames[0], 0, "an opening report before any frame: {frames:?}");
+    assert_eq!(*frames.last().unwrap(), total, "the last report has every frame done: {frames:?}");
+    assert!(frames.windows(2).all(|w| w[0] <= w[1]), "current_frame is monotonic: {frames:?}");
+    let els: Vec<u64> = pe.iter().map(|e| e["payload"]["elapsed_ms"].as_u64().expect("elapsed_ms")).collect();
+    assert!(els.windows(2).all(|w| w[0] <= w[1]), "elapsed_ms is monotonic: {els:?}");
+    for e in &pe {
+        let pl = &e["payload"];
+        assert_eq!(pl["total_frames"].as_u64(), Some(total), "total_frames is constant: {pl}");
+        let f = pl["current_frame"].as_u64().unwrap();
+        assert!((pl["progress"].as_f64().unwrap() - f as f64 / total as f64).abs() < 1e-9, "progress = current_frame / total_frames: {pl}");
+        assert!((pl["pct"].as_f64().unwrap() - 100.0 * f as f64 / total as f64).abs() < 0.06, "pct: {pl}");
+        let fps = pl["fps"].as_f64().expect("fps on every progress event");
+        assert!(fps.is_finite() && fps >= 0.0, "fps is a finite rate: {pl}");
+        assert!(pl.get("eta_ms").is_some(), "eta_ms is always present (null when unknown): {pl}");
+        if f == 0 {
+            assert_eq!(fps, 0.0, "no frame finished yet, no rate: {pl}");
+            assert!(pl["eta_ms"].is_null(), "no frame finished yet, no ETA: {pl}");
+        } else {
+            assert!(fps > 0.0, "frames finished since the last report give a rate: {pl}");
+            assert!(pl["eta_ms"].as_u64().is_some(), "an ETA once frames are done: {pl}");
+        }
+    }
+    assert_eq!(pe.last().unwrap()["payload"]["eta_ms"], 0, "nothing left at the end");
     let _ = std::fs::remove_file(&p); let _ = std::fs::remove_file(&mp4);
+}
+
+/// Collects every line the spectator connection sends, until the peer goes away.
+fn listen_once(l: std::net::TcpListener) -> (std::thread::JoinHandle<()>, std::sync::Arc<std::sync::Mutex<Vec<String>>>, std::sync::mpsc::Receiver<std::net::TcpStream>) {
+    let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (stx, srx) = std::sync::mpsc::channel();
+    let g = got.clone();
+    let h = std::thread::spawn(move || {
+        let Ok((s, _)) = l.accept() else { return };
+        drop(l); // one connection per listener lifetime; the port is closed again once it is taken
+        let _ = stx.send(s.try_clone().unwrap());
+        for line in BufReader::new(s).lines().map_while(Result::ok) { g.lock().unwrap().push(line); }
+    });
+    (h, got, srx)
+}
+
+fn wait_for(got: &std::sync::Arc<std::sync::Mutex<Vec<String>>>, within: Duration, pred: impl Fn(&Value) -> bool) -> bool {
+    let t = Instant::now();
+    while t.elapsed() < within {
+        if got.lock().unwrap().iter().filter_map(|l| serde_json::from_str::<Value>(l).ok()).any(|e| pred(&e)) { return true; }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
+#[test]
+fn spectator_closing_and_reopening_under_load() {
+    // one long-lived server under continuous tool-call load; the GUI's listener dies mid-session and comes back on
+    // the same port while calls keep flowing
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+    let l1 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l1.local_addr().unwrap().port();
+    let (h1, got1, conn1) = listen_once(l1);
+
+    let mut ch = Command::new(env!("CARGO_BIN_EXE_kimo-mcp"))
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .env_remove("KIMO_TOOLS").env("KIMO_SPECTATOR", format!("tcp://127.0.0.1:{port}"))
+        .spawn().expect("spawn kimo-mcp");
+    let mut stdin = ch.stdin.take().unwrap();
+    let stdout = ch.stdout.take().unwrap();
+    let (otx, orx) = std::sync::mpsc::channel::<String>();
+    let reader = std::thread::spawn(move || { for l in BufReader::new(stdout).lines().map_while(Result::ok) { if otx.send(l).is_err() { break; } } });
+    let setp = |id: u64, v: u64| json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"set_property","arguments":{"clip_id":"clip2","property":"x","value":v}}});
+    let start_value = |e: &Value| -> Option<u64> { (e["tool_name"] == "set_property" && e["phase"] == "start").then(|| e["payload"]["args"]["value"].as_u64()).flatten() };
+
+    // load driver: one call after another as fast as the server answers, each under a 10 s deadline (a server
+    // blocked on telemetry fails here instead of hanging the suite); records (value, sent at, answered at)
+    let stop = Arc::new(AtomicBool::new(false));
+    let next = Arc::new(AtomicU64::new(1));
+    let (st, nx) = (stop.clone(), next.clone());
+    let driver = std::thread::spawn(move || {
+        let mut sent: Vec<Value> = Vec::new(); let mut out: Vec<String> = Vec::new(); let mut log: Vec<(u64, Instant, Instant)> = Vec::new();
+        for r in &requests()[..4] {
+            writeln!(stdin, "{r}").unwrap(); stdin.flush().unwrap();
+            out.push(orx.recv_timeout(Duration::from_secs(10)).expect("setup response")); sent.push(r.clone());
+        }
+        while !st.load(Ordering::SeqCst) {
+            let v = nx.fetch_add(1, Ordering::SeqCst);
+            let req = setp(100 + v, v);
+            let t0 = Instant::now();
+            writeln!(stdin, "{req}").unwrap(); stdin.flush().unwrap();
+            let resp = orx.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| panic!("no response within 10 s to call {v}: the server hung"));
+            log.push((v, t0, Instant::now())); sent.push(req); out.push(resp);
+        }
+        drop(stdin);
+        (sent, out, log)
+    });
+
+    // 1. connected under load: events arrive
+    assert!(wait_for(&got1, Duration::from_secs(10), |e| start_value(e).is_some()), "first listener receives events");
+    let s1 = conn1.recv_timeout(Duration::from_secs(5)).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    // 2. the spectator dies mid-load: connection shut, listener already gone, calls keep flowing
+    let killed_at = Instant::now();
+    let v_at_kill = next.load(Ordering::SeqCst);
+    s1.shutdown(std::net::Shutdown::Both).unwrap();
+    h1.join().unwrap();
+    std::thread::sleep(Duration::from_millis(700));
+    let v_before_bind = next.load(Ordering::SeqCst);
+    assert!(v_before_bind > v_at_kill + 5, "calls kept flowing while the spectator was gone ({v_at_kill} -> {v_before_bind})");
+    // 3. the spectator comes back on the same port, still under load: the writer reconnects within the backoff ceiling
+    let l2 = std::net::TcpListener::bind(("127.0.0.1", port)).expect("rebind the spectator port");
+    let bound_at = Instant::now();
+    let (h2, got2, conn2) = listen_once(l2);
+    assert!(wait_for(&got2, Duration::from_secs(5), |e| start_value(e).is_some()), "the writer reconnected to the reopened spectator");
+    let reconnect = bound_at.elapsed();
+    assert!(reconnect < Duration::from_millis(1500), "reconnect inside the 1000 ms backoff ceiling plus slack ({reconnect:?})");
+    // later calls arrive whole (start then complete under one call_id)
+    let v_after = next.load(Ordering::SeqCst) + 2;
+    assert!(wait_for(&got2, Duration::from_secs(5), |e| start_value(e).map_or(false, |v| v >= v_after)), "events after the reconnect keep arriving");
+    stop.store(true, Ordering::SeqCst);
+    let (sent, out, log) = driver.join().expect("load driver: every call answered");
+    let st = ch.wait().unwrap();
+    assert!(st.success(), "kimo-mcp exited {st:?}");
+    reader.join().unwrap();
+    if let Ok(s2) = conn2.recv_timeout(Duration::from_secs(1)) { let _ = s2.shutdown(std::net::Shutdown::Both); }
+    h2.join().unwrap();
+
+    let evs2: Vec<Value> = got2.lock().unwrap().iter().map(|l| serde_json::from_str(l).expect("whole JSON lines after the reconnect")).collect();
+    let first = evs2.iter().find(|e| start_value(e).map_or(false, |v| v >= v_after)).unwrap();
+    assert!(evs2.iter().any(|e| e["call_id"] == first["call_id"] && e["phase"] == "complete"), "complete follows start for {}", first["call_id"]);
+    // nothing emitted while disconnected was queued and replayed: calls answered well before the rebind never show up
+    let gone: Vec<u64> = log.iter().filter(|(_, _, done)| *done > killed_at && *done + Duration::from_millis(200) < bound_at).map(|x| x.0).collect();
+    assert!(gone.len() > 5, "calls answered while disconnected: {}", gone.len());
+    for v in &gone { assert!(!evs2.iter().any(|e| start_value(e) == Some(*v)), "event from while disconnected was replayed: call {v}"); }
+    // no call slowed down by the spectator going away or coming back
+    let worst = log.iter().filter(|(_, t0, _)| *t0 > killed_at - Duration::from_millis(200)).map(|(_, t0, t1)| *t1 - *t0).max().unwrap();
+    assert!(worst < Duration::from_secs(1), "a call took {worst:?} while the spectator came and went");
+    eprintln!("load: {} calls, {} while disconnected, reconnect {:?} after rebind, worst call {:?}", log.len(), gone.len(), reconnect, worst);
+
+    // MCP stdout through all of it is exactly what the same requests give with telemetry off
+    let off = String::from_utf8(run(None, &sent)).unwrap();
+    let on = out.join("\n") + "\n";
+    assert_eq!(on, off, "stdout unchanged by the spectator coming and going");
 }

@@ -229,7 +229,13 @@ Kimo spectator app (`crates/kimo-gui`), which listens on that loopback port: a `
 `progress` for long calls such as `export`, and `complete` with what changed in the project (or `error`), all
 under one `call_id`. `file:/path/events.jsonl` writes the same lines to a file. Unset, nothing runs. The stream is
 out of band: `tools/list`, results and stdout are byte-identical with it on or off, it never waits for the app,
-and with no app listening events are dropped. To watch in a plain browser instead of the app, run
+and with no app listening events are dropped. The app can be opened and closed at any point in a session: the
+engine notices a closed window before its next event, reconnects on its own (retrying after 50 ms, doubling to
+at most 1 s between attempts, never waiting on the tool calls), and events from while no app was listening are
+dropped rather than replayed.
+`export` progress events carry `current_frame` (frames finished, so the index of the next frame), `total_frames`,
+`fps` (the instantaneous rate over the time since the previous progress report) and `eta_ms` (null until the first
+frame is done) beside `pct` and `elapsed_ms`. To watch in a plain browser instead of the app, run
 `python3 crates/kimo-mcp/tools/spectator_sse_relay.py` and open the UI with `?feed=sse`. Event fields:
 `crates/kimo-mcp/src/spectator.rs`.
 
