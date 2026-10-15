@@ -1,5 +1,6 @@
 //! Scene descriptor + compile-to-draws (scene composition CP1). Original code, zero new deps.
-//! A Scene binds named geometry sources (SDF contour, primitive, raw stream, glTF scene) to
+//! A Scene binds named geometry sources (uniform SDF contour, adaptive octree contour, primitive,
+//! raw stream, glTF scene) to
 //! nodes carrying an explicit row-major affine world matrix and a material index, plus the
 //! pass-level context (lights, camera-v2). compile() resolves each referenced source once,
 //! then emits one Draw per (node, source instance): stream coordinates are SOURCE-local,
@@ -7,7 +8,8 @@
 //! node_ingest::transform). glTF scene sources arrive with their internal node worlds already
 //! baked by instantiate(); the descriptor node world composes on top.
 //! SDF contour sources are memoized by content hash (fnv1a-64 of the canonical JSON of
-//! graph+config) in a caller-supplied Cache, so repeated identical sources and repeated
+//! graph+config) in a caller-supplied Cache; octree contour sources share the same memo under a
+//! discriminated key ("octree_contour" prefix), same FIFO bound, so repeated identical sources and repeated
 //! compiles with the same cache pay for one polygonization. The MCP tool uses a fresh cache
 //! per call (stateless); executors may carry a Cache across frames.
 //! Empty is a result: a scene with no nodes compiles to zero draws without error.
@@ -22,7 +24,7 @@ use super::{mesh::Matrix,primitives::{generate,Primitive},vertex_stream::Stream,
 use crate::camera_projection::Camera;
 
 #[derive(Clone,Debug,Serialize,Deserialize)]#[serde(tag="kind",rename_all="snake_case",deny_unknown_fields)]
-pub enum Source{Primitive{primitive:Primitive},SdfContour{graph:Graph,config:contour_wrapped::Config},Stream{stream:Stream},GltfScene{bytes:Vec<u8>,buffers:Vec<Vec<u8>>,derive_tangents:bool,scene_index:usize}}
+pub enum Source{Primitive{primitive:Primitive},SdfContour{graph:Graph,config:contour_wrapped::Config},#[cfg(feature="surface-contour")]OctreeContour{graph:Graph,config:super::octree::OctreeConfig},Stream{stream:Stream},GltfScene{bytes:Vec<u8>,buffers:Vec<Vec<u8>>,derive_tangents:bool,scene_index:usize}}
 
 #[derive(Clone,Debug,Serialize,Deserialize)]#[serde(deny_unknown_fields)]
 pub struct Node{pub source:usize,pub world:Matrix,pub material:usize}
@@ -87,7 +89,9 @@ pub fn validate(s:&Scene)->Result<(),String>{
  for(i,src)in s.sources.iter().enumerate(){match src{
   Source::Primitive{..}|Source::GltfScene{..}=>{}
   Source::Stream{stream}=>stream.validate().map_err(|e|format!("source {i}: {e}"))?,
-  Source::SdfContour{graph,..}=>graph.validate().map_err(|e|format!("source {i}: {e}"))?,}}
+  Source::SdfContour{graph,..}=>graph.validate().map_err(|e|format!("source {i}: {e}"))?,
+  #[cfg(feature="surface-contour")]
+  Source::OctreeContour{graph,..}=>graph.validate().map_err(|e|format!("source {i}: {e}"))?,}}
  for(i,n)in s.nodes.iter().enumerate(){
   if n.source>=s.sources.len(){return Err(format!("node {i} references source {} of {}",n.source,s.sources.len()));}
   if n.material>=s.materials.len(){return Err(format!("node {i} references material {} of {}",n.material,s.materials.len()));}
@@ -113,6 +117,11 @@ pub fn compile(s:&Scene,cache:&mut Cache)->Result<Compiled,String>{
       {let m=contour_wrapped::polygonize(graph,config)?;polygonized+=1;cache.contour_insert(key,m.stream.clone());vec![m.stream]}
       #[cfg(not(feature="surface-contour"))]
       {let _=(graph,config);return Err("surface-contour feature not compiled".into());}}}
+    #[cfg(feature="surface-contour")]
+    Source::OctreeContour{graph,config}=>{
+     let key=fnv1a64(&serde_json::to_vec(&("octree_contour",graph,config)).map_err(|e|e.to_string())?);
+     if let Some(cached)=cache.contour_get(key){hits+=1;vec![cached.clone()]}
+     else{let m=super::octree::extract_mesh(graph,config)?;polygonized+=1;cache.contour_insert(key,m.stream.clone());vec![m.stream]}}
     Source::GltfScene{bytes,buffers,derive_tangents,scene_index}=>{
      #[cfg(feature="mesh-import")]
      {super::node_ingest::instantiate(bytes,buffers,*derive_tangents,*scene_index)?.streams}
@@ -151,6 +160,39 @@ pub fn compile(s:&Scene,cache:&mut Cache)->Result<Compiled,String>{
   // second compile with the same cache: pure hits, zero polygonization
   let c2=compile(&s,&mut cache).unwrap();assert_eq!((c2.stats.contour_polygonized,c2.stats.contour_cache_hits),(0,2),"second compile: both sources hash-hit");
   for(a,b)in c.draws[0].stream.vertices.iter().zip(&c.draws[1].stream.vertices){assert_eq!(a.position,b.position);}}
+ #[cfg(feature="surface-contour")]
+ fn octree_cfg()->crate::threed::octree::OctreeConfig{crate::threed::octree::OctreeConfig{bounds:[[-2.2;3],[2.2;3]],min_depth:2,max_depth:7,error_tolerance:0.02,normal_angle_degrees:20.,normal_epsilon:0.001}}
+ #[cfg(feature="surface-contour")]
+ fn octree_sphere_source()->Source{Source::OctreeContour{graph:Graph{nodes:vec![crate::threed::sdf_graph::Field::Sphere{center:[0.;3],radius:1.}],output:0},config:octree_cfg()}}
+ #[cfg(feature="surface-contour")]
+ #[test]fn octree_contour_resolves_memoized_and_matches_direct_extraction(){
+  let graph=Graph{nodes:vec![crate::threed::sdf_graph::Field::Sphere{center:[0.;3],radius:1.}],output:0};
+  let s=Scene{sources:vec![octree_sphere_source()],nodes:vec![Node{source:0,world:ident(),material:0}],materials:vec![surf()],lights:vec![],camera:cam()};
+  let mut cache=Cache::new();
+  let c1=compile(&s,&mut cache).unwrap();assert_eq!((c1.stats.contour_polygonized,c1.stats.contour_cache_hits),(1,0));
+  let c2=compile(&s,&mut cache).unwrap();assert_eq!((c2.stats.contour_polygonized,c2.stats.contour_cache_hits),(0,1),"second compile hits the content memo");
+  let direct=crate::threed::octree::extract_mesh(&graph,&octree_cfg()).unwrap();
+  let st=&c1.draws[0].stream;
+  assert_eq!((st.vertices.len(),st.indices.len()),(direct.stream.vertices.len(),direct.stream.indices.len()));
+  for i in [0usize,st.vertices.len()/2,st.vertices.len()-1]{assert_eq!(st.vertices[i].position,direct.stream.vertices[i].position);assert_eq!(st.vertices[i].normal,direct.stream.vertices[i].normal,"vertex {i}: Hermite normals flow into scene3d unchanged");}
+  assert_eq!((direct.boundary_edges,direct.nonmanifold_edges),(0,0),"closed manifold into scene3d");}
+ #[cfg(feature="surface-contour")]
+ #[test]fn octree_contour_cpu_frame_bit_matches_stream_source(){
+  let graph=Graph{nodes:vec![crate::threed::sdf_graph::Field::Sphere{center:[0.;3],radius:1.}],output:0};
+  let mesh=crate::threed::octree::extract_mesh(&graph,&octree_cfg()).unwrap();
+  let lights=vec![Light::Directional{travel_direction:[-0.3,-0.5,1.],radiance:[2.5;3]}];
+  let fwd={let mut m=ident();m[2][3]=8.;m};
+  let mk=|src:Source|Scene{sources:vec![src],nodes:vec![Node{source:0,world:fwd,material:0}],materials:vec![surf()],lights:lights.clone(),camera:cam()};
+  let a=render_cpu(&compile(&mk(octree_sphere_source()),&mut Cache::new()).unwrap(),96,54).unwrap();
+  let b=render_cpu(&compile(&mk(Source::Stream{stream:mesh.stream}),&mut Cache::new()).unwrap(),96,54).unwrap();
+  assert!(a.covered>0);assert_eq!(a.frame.d,b.frame.d,"same mesh, same raster: octree source bit-matches raw stream source on the CPU path");}
+ #[cfg(feature="surface-contour")]
+ #[test]fn octree_contour_bad_graph_and_bad_config_are_typed_errors(){
+  let bad_graph=Scene{sources:vec![Source::OctreeContour{graph:Graph{nodes:vec![],output:0},config:octree_cfg()}],nodes:vec![],materials:vec![],lights:vec![],camera:cam()};
+  assert!(validate(&bad_graph).unwrap_err().contains("source 0"),"empty graph: typed source error");
+  let mut cfg=octree_cfg();cfg.max_depth=99;
+  let s=Scene{sources:vec![Source::OctreeContour{graph:Graph{nodes:vec![crate::threed::sdf_graph::Field::Sphere{center:[0.;3],radius:1.}],output:0},config:cfg}],nodes:vec![Node{source:0,world:ident(),material:0}],materials:vec![surf()],lights:vec![],camera:cam()};
+  assert!(compile(&s,&mut Cache::new()).unwrap_err().contains("depth"),"bad octree config: typed resolve error, not panic");}
  #[test]fn camera_required_and_degenerate_rejected_no_fallback(){
   // missing camera: typed serde error - there is NO default-camera fallback
   let j=serde_json::json!({"sources":[],"nodes":[],"materials":[],"lights":[]});
@@ -240,6 +282,28 @@ pub fn compile(s:&Scene,cache:&mut Cache)->Result<Compiled,String>{
   let inter=a.iter().zip(&b).filter(|(x,y)|**x&&**y).count();let union=a.iter().zip(&b).filter(|(x,y)|**x||**y).count();
   let iou=inter as f64/union as f64;assert!(iou>0.98,"coverage IoU gpu vs render_cpu {iou:.4}");
   println!("SCENE-WGPU parity: compare={cmp:?} iou_vs_render_cpu={iou:.4}");}
+ #[cfg(all(feature="gpu3d",feature="mesh-import",feature="material-textures",feature="flat-sah",feature="surface-contour"))]
+ #[test]fn render_wgpu_octree_contour_scene(){
+  // octree adaptive contour source through the wgpu executor (software adapter): vertex/index
+  // upload + Hermite normals + pbr ingest of the Surface factors. Same contract as the mixed
+  // parity test: gpu_rendered, tolerance parity vs flat-SAH reference, coverage IoU vs render_cpu.
+  let fwd={let mut m=ident();m[2][3]=8.;m};
+  let s=Scene{sources:vec![octree_sphere_source()],nodes:vec![Node{source:0,world:fwd,material:0}],materials:vec![surf()],lights:vec![Light::Directional{travel_direction:[0.3,-0.4,1.],radiance:[2.;3]},Light::Point{position:[0.,2.,4.],intensity:[1.;3],min_distance:0.01}],camera:cam()};
+  let(w,h)=(96,54);
+  let compiled=compile(&s,&mut Cache::new()).unwrap();assert_eq!(compiled.stats.draws,1);
+  let(gpu,status)=render_wgpu(&compiled,&[],w,h,[0.2;3],0.,true,false).unwrap();
+  assert!(status.gpu_rendered,"llvmpipe adapter must render: {:?}",status.fallback_reason);
+  let draws:Vec<crate::threed::pbr_offscreen::Draw>=compiled.draws.iter().map(|d|crate::threed::pbr_offscreen::Draw{stream:d.stream.clone(),world:d.world,surface:d.surface.clone()}).collect();
+  let reference=crate::threed::pbr_offscreen::cpu(&draws,&[],&s.camera,w,h,&s.lights,[0.2;3]).unwrap();
+  let cmp=crate::threed::pbr_offscreen::compare(&gpu,&reference,w,h).unwrap();
+  assert!(cmp.passed,"octree gpu vs flat-SAH reference parity: {cmp:?}");
+  let cpu=render_cpu(&compiled,w,h).unwrap();
+  let cov=|f:&crate::effects::Frame|(0..w*h).map(|i|f.d[i*4+3]>0.5).collect::<Vec<_>>();
+  let(a,b)=(cov(&gpu),cov(&cpu.frame));
+  let inter=a.iter().zip(&b).filter(|(x,y)|**x&&**y).count();let union=a.iter().zip(&b).filter(|(x,y)|**x||**y).count();
+  let iou=inter as f64/union as f64;assert!(iou>0.98,"coverage IoU gpu vs render_cpu {iou:.4}");
+  if let Ok(dir)=std::env::var("KIMO_GPU_PBR_FRAMES"){std::fs::create_dir_all(&dir).unwrap();crate::render::write_image(&gpu,&format!("{dir}/cp3_octree_gpu.png")).unwrap();crate::render::write_image(&reference,&format!("{dir}/cp3_octree_ref.png")).unwrap();}
+  println!("SCENE-WGPU octree: compare={cmp:?} iou_vs_render_cpu={iou:.4}");}
  #[cfg(all(feature="gpu3d",feature="mesh-import",feature="material-textures",feature="flat-sah",feature="surface-contour"))]
  #[test]fn render_wgpu_intersecting_surfaces_band_is_bounded_and_layering_holds(){
   // DOCUMENTED LIMIT, pinned honestly: where surfaces genuinely intersect, the f32 wgpu
