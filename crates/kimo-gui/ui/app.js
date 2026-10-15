@@ -252,7 +252,7 @@ function elapsed() {
 
 function renderTop() {
   const M = MODES[state.mode];
-  document.getElementById('proj').textContent = state.session.project;
+  { const pj = state.session.project, has = pj != null && String(pj).trim() !== '' && pj !== '—', pe = document.getElementById('proj'); pe.textContent = has ? pj : ''; pe.style.display = has ? '' : 'none'; if (pe.previousElementSibling) pe.previousElementSibling.style.display = has ? '' : 'none'; }   // no '/ —' without a project name
   const pill = document.getElementById('livepill');
   pill.classList.toggle('down', state.status.kind === 'down');
   document.getElementById('pill-state').textContent = state.status.kind === 'down' ? state.status.label : 'live';

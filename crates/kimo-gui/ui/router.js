@@ -20,7 +20,7 @@ export const FAMILIES = [
   ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut|set_grade_node|set_grade_graph|pick_white_balance|match_grade|match_color|set_white_balance|set_grade_output|remove_grade_node|generate_lut_node|add_acescct_primaries|create_shared_grade_graph|bind_shared_grade_graphs|remove_shared_grade_graph|set_node_param|set_node_mask|apply_asc_cdl|set_color_curve|set_grade_scopes|add_node$|connect_nodes|disconnect_nodes)/],
   ['audio', /^(set_|add_|apply_|auto_|measure_|normalize_|analyze_)?(mix|audio|gain|fader|mute|solo|pan|compress|eq|limiter|limit|loudness|duck|stem|bus|route_)|^track_beats$/],
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
-  ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents|fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track|undistort_clip|stabilize|apply_camera_solve|pin_layer|set_corner_pin|add_emitter|add_particles|add_shard_burst)/],
+  ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents|fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track|undistort_clip|stabilize|apply_camera_solve|pin_layer|set_corner_pin|add_emitter|add_particles|add_shard_burst|set_material$|remove_material$|preview_material$|set_relight$|remove_light$)/],
   ['graphics', /^(add_shape|add_path_shape|set_path|add_path_key|clear_path_keys|add_shape_modifier|remove_shape_modifier|add_modifier|remove_modifier|set_layer_style|remove_layer_style|add_box_expand|add_detection_box|add_hud_frame|add_counter|add_prompt_box|add_glitch_confetti)$/],
   ['export', /^(export|render|queue_render|encode|deliver)/],
 ];
@@ -89,7 +89,7 @@ function inspectorDiff(state, MODES, ev, fam) {
   const FIRST = ['param', 'from', 'to', 'value', 'effect', 'label', 'text', 'on', 'at', 'clip', 'track'];
   const HIDE = /^(dur_ms|duration_ms|duration|start|end|s|e|changed|mutated|result|images|ts|ts_ms|stage|elapsed_ms|progress|pct)$/;
   const rank = k => { const i = FIRST.indexOf(k); return i < 0 ? FIRST.length : i; };
-  const rows = Object.entries(P).filter(([k, v]) => v != null && typeof v !== 'object' && !HIDE.test(k)).sort((a, b) => rank(a[0]) - rank(b[0])).slice(0, 4);
+  const rows = Object.entries(P).filter(([k, v]) => v != null && typeof v !== 'object' && !HIDE.test(k) && !RAW_ID.test(String(v))).sort((a, b) => rank(a[0]) - rank(b[0])).slice(0, 4);
   const val = P.to ?? P.value, head = param != null && val != null;
   const rest = head ? rows.filter(([k]) => !['param', 'from', 'to', 'value'].includes(k)).slice(0, 3) : rows;
   if (!head && !rest.length) return false;
@@ -428,7 +428,14 @@ function timelineOps(state, MODES, ev, fam) {
   const tl = timelineView(state, MODES); if (!tl) return false;
   const A = (ev.payload || {}).args || (state._editArgs && state._editArgs[ev.call_id]) || {};
   if (fam === 'edit') delete (state._editArgs || {})[ev.call_id];
-  if (fam === 'edit' && editOps2(state, MODES, tl, ev, A)) { fitRuler(tl); return true; }
+  if (fam === 'edit' && editOps2(state, MODES, tl, ev, A)) {
+    fitRuler(tl);
+    // the m16 inspector heads with the touched clip's name (its rows fill only from args that carry them)
+    const [t2, i2] = findClip(tl, { clip_id: A.clip_id ?? A.clip_a ?? (ev.target || {}).clip_id }); const kv = panels(state, MODES, ['kv'])[0];
+    if (kv && t2) { const lb = t2.clips[i2].label; if (lb && !RAW_ID.test(String(lb))) kv.sub = String(lb); }
+    if (kv && kv.blocks) { const j = kv.blocks.findIndex(b => b._live); if (j >= 0) kv.blocks.splice(j); }   // the previous call's rows no longer describe this clip
+    ev._kvDone = true; return true;
+  }
   const hit = timelineOps1(tl, ev, fam);
   if (hit) {
     fitRuler(tl);
@@ -863,7 +870,7 @@ function sceneOps(state, MODES, ev) {
       if (tn === 'set_light') {
         const pos = Array.isArray(A.pos) && numOf(A.pos[0]) != null && numOf(A.pos[1]) != null ? [numOf(A.pos[0]), numOf(A.pos[1])] : null;
         const col = Array.isArray(A.color) && A.color.length >= 3 ? A.color.slice(0, 3).map(numOf) : null;
-        const v = [A.kind, numOf(A.intensity) != null ? fmtVal(A.intensity) : null].filter(Boolean).join(' · ');
+        const tK = numOf(A.temperature ?? A.kelvin), v = tK != null ? `${Math.round(tK)}K` : [A.kind, numOf(A.intensity) != null ? fmtVal(A.intensity) : null].filter(Boolean).join(' · ');   // m11 Lights shows the colour temperature
         if (A.id != null || A.kind != null) { add(String(A.id ?? A.kind), A.kind, v, pos, col); hit = true; }
       } else if (A.preset && ev.phase === 'complete') {
         const pre = String(A.prefix ?? 'rig'), sub = Array.isArray(A.subject) ? A.subject.map(numOf) : null;
@@ -871,6 +878,27 @@ function sceneOps(state, MODES, ev) {
         ids.forEach(id => add(id, null, String(A.preset), null, null));
         if (sub && sub[0] != null) { const o = ov(); o.push({ light: sub, kind: 'subject', label: String(A.preset), _call: ev.call_id, _kind: tn }); }
         hit = true;
+      }
+    }
+    // materials / relight / remove_light (m11): the Inspector's Material rows from set_material's own args,
+    // a removed light leaves Lights and the rig table, relight names its layer on the viewer tag
+    if (ev.phase === 'complete' && /^(set_material|remove_material|preview_material|set_relight|remove_light)$/.test(tn)) {
+      const PP = MODES[mode] ? MODES[mode].panels : {};
+      const kvn2 = Object.entries(PP).find(([, sp]) => sp.kind === 'kv');
+      if (tn === 'set_material' && kvn2) {
+        const K = V[kvn2[0]] || (V[kvn2[0]] = {}); const nm = String(A.name ?? 'material');
+        const alb = Array.isArray(A.albedo) && A.albedo.length >= 3 ? A.albedo.slice(0, 3).map(x => fmtVal(numOf(x))).join(', ') : null;
+        const F = [['Albedo', alb], ['Roughness', numOf(A.roughness)], ['Metallic', numOf(A.metal)], ['IOR', numOf(A.ior)], ['Clearcoat', numOf(A.clearcoat)]].filter(([, v]) => v != null);
+        const keep = (K.blocks || []).filter(b => b.widget);
+        K.sub = nm; K.blocks = [...keep, { sec: 'Material' }, ...F.map(([k, v]) => ({ k, v: typeof v === 'number' ? v.toFixed(2) : v, _flash: now() }))]; ev._kvDone = true; hit = true;
+      }
+      if (tn === 'remove_material' && kvn2) { const K = V[kvn2[0]] || (V[kvn2[0]] = {}); if (K.sub === String(A.name)) { K.blocks = (K.blocks || []).filter(b => b.widget); K.sub = ''; } ev._kvDone = true; hit = true; }
+      if (tn === 'preview_material') { const p = R.path; if (typeof p === 'string') { vw.left = `preview · ${String(A.material ?? '')}${numOf(R.mean) != null ? ` · mean ${fmtVal(R.mean)}` : ''}`.trim(); hit = true; } }
+      if (tn === 'set_relight') { const lay = A.clip_id; if (lay != null) { vw.tag = `relight ${String(lay)}`; hit = true; } }
+      if (tn === 'remove_light' && A.id != null) {
+        const id = String(A.id);
+        for (const [k, sp] of Object.entries(PP)) { const D = V[k]; if (!D) continue; if (sp.kind === 'list' && D.rows) D.rows = D.rows.filter(x => x._id !== id && x.k !== id); if (sp.kind === 'lightrig') { if (D.rows) D.rows = D.rows.filter(x => x[0] !== id); if (D.lights) D.lights = D.lights.filter(x => x.name !== id && x._id !== id); } }
+        vw.overlay = (vw.overlay || []).filter(o => o._kind !== 'light:' + id); hit = true;
       }
     }
     // mesh ops: a node on the Stack (modelling), newest in ember
@@ -930,7 +958,11 @@ function sceneOps(state, MODES, ev) {
         const inten = numOf(A.intensity), temp = numOf(A.temperature ?? A.kelvin);
         if (!r) { r = [id, '', '', 0, false, '']; G2.rows.push(r); }
         r[1] = temp != null ? Math.round(temp) + 'K' : r[1]; if (inten != null) { r[2] = fmtVal(inten); r._i = inten; } if (numOf(A.falloff) != null) r[5] = fmtVal(A.falloff);
-        const mx = Math.max(...G2.rows.map(x => x._i || 0)) || 1; for (const x of G2.rows) { x[3] = (x._i || 0) / mx; x[4] = x === r; } hit = true; }
+        if (numOf(A.falloff) != null) r[5] = numOf(A.falloff).toFixed(1);
+        const mx = Math.max(...G2.rows.map(x => x._i || 0)) || 1; for (const x of G2.rows) { x[3] = (x._i || 0) / mx; x[4] = x === r; }
+        // the rig diagram: the light on the ring at the angle of its frame position around the subject
+        if (Array.isArray(A.pos) && numOf(A.pos[0]) != null && numOf(A.pos[1]) != null) { G2.lights = (G2.lights || []).filter(l => l.name !== id); for (const l of G2.lights) l.em = false; G2.lights.push({ name: id.replace(/^rig_/, ''), _id: id, a: Math.round(Math.atan2(.5 - numOf(A.pos[1]), numOf(A.pos[0]) - .5) * 180 / Math.PI), em: true }); }
+        hit = true; }
     }
     // Track residual graph: per-frame residuals when the result carries them (else the mockup's empty state)
     const res = [R.frame_rms, R.residuals, R.residuals_px, R.per_frame_rms].find(a => Array.isArray(a) && a.length > 1 && a.every(v => numOf(v) != null));

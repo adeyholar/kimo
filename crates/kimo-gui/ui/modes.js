@@ -120,7 +120,7 @@ const RULES = [
   [/mesh|sdf|lathe/, 'modelling'],
   [/hud|detection_box|counter|prompt_box|path_shape|shape_modifier|layer_style/, 'graphics'],
   [/emitter|advection|shard|simulate|particle/, 'particles'],
-  [/light_rig|set_light|material|relight|pbr/, 'lighting'],
+  [/light_rig|set_light|remove_light|material|relight|pbr/, 'lighting'],
   [/set_camera|scene3d|gltf/, 'scene3d'],                                // before roto: set_camera_keyframe is not a key/matte
   [/key|spill|mask|roto|matte/, 'roto'],
   [/scene_add|light_add|camera_set|keyframe/, 'scene3d'],
