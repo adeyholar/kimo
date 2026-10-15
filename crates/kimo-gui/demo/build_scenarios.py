@@ -131,17 +131,15 @@ scen("m06", "effects", "neon_run.kimo", "claude", hms("00:18:22"),
   stats={"cpu": 74, "ffmpeg": "7.1", "saved_s": 1}, final={"count": 57})
 
 # ---------------------------------------------------------------- m07 tracking
-import random
-random.seed(4)
-res = [0.6 + 0.5 * abs(math.sin(i / 5)) + random.random() * .5 + (1.2 if 30 < i < 40 else 0) for i in range(73)]
+res = [0.73, 0.73, 0.73, 0.73, 0.8, 0.73, 0.77, 0.91, 0.73, 0.91, 1.1, 1.28, 1.1, 1.12, 0.77, 0.73, 0.8, 0.73, 0.64, 0.55, 0.55, 0.6, 0.91, 0.91, 1.14, 1.1, 1.08, 0.55, 0.72, 0.89, 0.59, 0.55, 0.73, 0.83, 0.91, 1.02, 1.1, 1.1, 1.03, 0.68, 0.59, 0.94, 1.1, 0.92, 0.57, 0.55, 1.01, 0.94, 0.91, 0.91, 1.03, 1.1, 0.83, 1.39, 2.67, 2.31, 1.03, 0.75, 0.91, 0.91, 0.9, 0.91, 1.26, 1.1, 0.91, 1.1, 1.1, 1.1, 1.01, 0.91, 0.91, 0.91, 0.91]  # traced from the m07 mockup residual line
 scen("m07", "tracking", "city_billboard.kimo", "claude", hms("00:44:51"),
   [["undistort_clip", ["clip_05", {"k1": "-0.08"}], 3200], ["stabilize", ["clip_05", {"smooth": "0.5"}], 4100], ["camera_solve", ["clip_05", {"pan": "false"}], 9800],
    ["track_planar", ["clip_05", "screen_quad"], 6300], ["track_mesh", ["clip_05", "flag", "8x6"], 5000], ["validate_planar_track", ["screen_quad"], 2100]],
   {"viewer": {"src": F("m07"), "tag": "track · screen_quad", "left": "solve 0.70 px RMS", "tc": "01:00:02:21", "res": "1920 x 1080 24p"},
    "insp": {"sub": "screen_quad · planar", "blocks": [K("Confidence", "0.85"), K("Lost frames", "0"), K("Corner p95", "1.8 px"), K("Corner max", "2.6 px", **{"from": "3.4"}), K("Anchors", "4"),
-            S("Camera solve"), {"widget": "solve", "h": 150, "seed": 9}, {"cap": ["focal 28.4 mm", "96/96 frames"]}]},
-   "res": {"ruler": {"t0": 0, "t1": 72, "step": 12, "fmt": "n"}, "playhead": 42, "graph": {"pts": res, "max": 4, "thr": 2, "thrLabel": "2 px"},
-           "lanes": [{"label": "screen_quad", "bar": [[0, 72, "#6b665d"]]}, {"label": "flag mesh", "bar": [[0, 72, "#57534c"]]}]}},
+            S("Camera solve"), {"widget": "solve", "h": 133, "src": F("m07_solve")}, {"html": "<div class=\"cap\"><span>focal <b>28.4 mm</b></span><b>96/96 frames</b></div>"}]},
+   "res": {"ruler": {"t0": 0, "t1": 72, "step": 12, "fmt": "n"}, "playhead": 41, "graph": {"pts": res, "max": 11.8, "thr": 2, "thrLabel": "2 px"},
+           "lanes": [{"label": "screen_quad", "bar": [[0, 72, "#64625c"]]}, {"label": "flag mesh", "bar": [[0, 72, "#5e5c57"]]}]}},
   stats={"cpu": 88, "ffmpeg": "7.1", "saved_s": 2}, final={"count": 72})
 
 # ---------------------------------------------------------------- m08 modelling

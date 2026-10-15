@@ -209,7 +209,7 @@ function block(b, w) {
   if (b.list) return `<div class="list">${b.list.map((x, i) => `<div class="${i === b.sel ? 'sel' : ''}">${E(x)}</div>`).join('')}</div>`;
   if (b.code) return `<div class="code">${E(b.code)}</div>`;
   if (b.cap) return `<div class="cap"><span>${E(b.cap[0])}</span><span>${E(b.cap[1] || '')}</span></div>`;
-  if (b.widget) return `<div class="widget" style="height:${b.h || 90}px${b.style ? ';' + b.style : ''}">${(WIDGETS[b.widget] || (() => ''))(b, w, b.h || 90)}</div>`;
+  if (b.widget) return `<div class="widget${b.src ? ' img' : ''}" style="height:${b.h || 90}px${b.style ? ';' + b.style : ''}">${b.src ? `<img src="${E(b.src)}" alt="">` : (WIDGETS[b.widget] || (() => ''))(b, w, b.h || 90)}</div>`;
   if (b.html) return b.html;
   const cls = ['row', b.from != null || b.ch ? 'ch' : '', b.chip ? 'chip' : '', b.emb ? 'emb' : '', b.bar ? 'bar' : ''].join(' ');
   const v = b.from != null ? `<span class="from">${E(b.from)}</span><span class="arr">→</span>${E(b.v)}` : E(b.v);
@@ -381,7 +381,7 @@ function keys({ spec, data, w, h }) {
     const g = data.graph, gy = o.graphY ?? 30, gh = o.graphH ?? 76, gx = o.graphX ?? x0;
     const vy = v => gh - 6 - (v / g.max) * (gh - 14);
     const d = g.pts.map((v, i) => (i ? 'L' : 'M') + px(X(r.t0 + i * (r.t1 - r.t0) / (g.pts.length - 1)) - gx) + ' ' + px(vy(v))).join('');
-    html += `<svg style="position:absolute;left:${gx}px;top:${gy}px;width:${x1 - gx + 8}px;height:${gh}px;background:#121211;border-radius:4px" viewBox="0 0 ${x1 - gx + 8} ${gh}">` +
+    html += `<svg style="position:absolute;left:${gx}px;top:${gy}px;width:${x1 - gx + 8}px;height:${gh}px;background:var(--graph-bg,#121211);border-radius:4px" viewBox="0 0 ${x1 - gx + 8} ${gh}">` +
       (g.thr != null ? `<line x1="0" x2="${x1 - gx + 8}" y1="${vy(g.thr)}" y2="${vy(g.thr)}" stroke="#8a867d" stroke-dasharray="3 3"/><text x="${x1 - gx}" y="${vy(g.thr) - 4}" font-size="10" fill="var(--dim)" text-anchor="end">${E(g.thrLabel ?? '')}</text>` : '') +
       `<path d="${d}" fill="none" stroke="var(--cream)" stroke-width="1.3"/></svg>`;
   }
