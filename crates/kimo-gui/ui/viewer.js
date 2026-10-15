@@ -14,7 +14,7 @@ camera.lookAt(0, 0.2, 0);
 
 const cube = new THREE.Mesh(
   new THREE.BoxGeometry(1.4, 1.4, 1.4),
-  new THREE.MeshStandardMaterial({ color:0xdd5227, roughness:.55, metalness:.05 }));
+  new THREE.MeshStandardMaterial({ color:0xe8e0cf, roughness:.55, metalness:.05 }));
 cube.position.y = 0.2;
 scene.add(cube);
 scene.add(new THREE.AmbientLight(0xf4f0e8, 0.55));
@@ -31,7 +31,8 @@ const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.07, 16, 16),
   new THREE.MeshBasicMaterial({ color:0xf4e0a8 }));
 lamp.position.set(1.8, 1.6, 1.2); scene.add(lamp);
 
-let dirty = true, raf = 0, last = 0, spinUntil = performance.now() + 4000;
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let dirty = true, raf = 0, last = 0, spinUntil = reduced ? 0 : performance.now() + 4000;
 function resize() {
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (!w || !h) return;

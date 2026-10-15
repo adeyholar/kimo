@@ -6,11 +6,12 @@ import { markDirty, setCubeColor } from './viewer.js';
 import { connect } from './bridge.js';
 
 const $ = s => document.querySelector(s);
-const PALETTE = ['#dd5227','#7fb7a6','#b9a6e8','#e889a0','#a7948d','#9a8f5f'];
+const PALETTE = ['#c9b99a','#7fb7a6','#b9a6e8','#e889a0','#a7948d','#9a8f5f'];  // no ember: it is reserved for active/highlight
 const colorFor = name => PALETTE[[...name].reduce((a,c)=>(a*31+c.charCodeAt(0))>>>0,7) % PALETTE.length];
 
 const state = {
-  rev: 0, calls: [],            // {id,name,dur,status,active}
+  rev: 0, calls: [],            // ring buffer, capped (bounded memory under bursts)
+  CALLS_CAP: 400,
   nodes: new Map(),             // name -> {name,x,y,inputs:[{port,from}],active,args,dur}
   ends: [],                     // recent tool_end times for the rate pill
   focus: null,
@@ -20,6 +21,7 @@ const state = {
 function onEvent(ev) {
   if (ev.type === 'tool_start') {
     state.calls.push({ id:ev.id, name:ev.name, active:true });
+    if (state.calls.length > state.CALLS_CAP) state.calls.splice(0, state.calls.length - state.CALLS_CAP);
     // pipeline membership: the node graph is derived from data dependencies -
     // a tool enters it when it consumes another tool's output or the engine
     // assigns it a slot. Pure calls (search_tools, add_clip) stay log-only.
@@ -45,6 +47,7 @@ function onEvent(ev) {
   } else if (ev.type === 'project_changed') {
     state.rev = ev.rev;
     state.calls.push({ sys:`project_changed  rev ${ev.rev}` });
+    if (state.calls.length > state.CALLS_CAP) state.calls.splice(0, state.calls.length - state.CALLS_CAP);
   } else if (ev.type === 'frame_rendered') {
     $('#frame-no').textContent = ev.frame;
     if (ev.png_b64) blitEngineFrame(ev.png_b64);
@@ -53,21 +56,49 @@ function onEvent(ev) {
   } else if (ev.type === 'viewport_tint') {
     setCubeColor(ev.color);
   }
-  render();
+  scheduleRender();
+}
+
+/* Burst discipline: events only mutate state; the DOM is touched once per
+   frame at most, so a 500-event burst costs one layout, not five hundred. */
+let renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(); });
 }
 
 /* ---------- render ---------- */
 const logEl = $('#log-rows');
-function render() {
-  // call log (latest at top? mockup appends downward; keep append, cap 200)
-  logEl.innerHTML = '';
-  for (const c of state.calls.slice(-60)) {
-    const row = document.createElement('div');
-    row.className = 'log-row' + (c.active ? ' active' : '') + (c.sys ? ' sys' : '');
-    if (c.sys) { row.innerHTML = `<span>${c.sys}</span>`; }
-    else row.innerHTML = `<span>${c.active?'tool_start':'tool_end'}&nbsp; <span class="tname">${c.name}</span></span><span class="dur">${c.dur!=null?c.dur+' ms':c.active?'…':''}</span>`;
-    logEl.appendChild(row);
+const LOG_CAP = 200;                      // ring buffer: bounded DOM + memory under bursts
+const logRows = new Map();                // call id -> row element
+function logAppend(id) {
+  const row = document.createElement('div');
+  row.className = 'log-row';
+  row.innerHTML = `<span></span><span class="dur"></span>`;
+  logEl.appendChild(row);
+  while (logEl.children.length > LOG_CAP) {
+    const first = logEl.firstChild; first.remove();
+    for (const [k,v] of logRows) if (v === first) { logRows.delete(k); break; }
   }
+  if (id) logRows.set(id, row);
+  return row;
+}
+function render() {
+  for (const c of state.calls) {
+    if (c.rendered) continue;
+    if (c.sys) {
+      const row = logAppend(null); row.classList.add('sys'); row.firstChild.textContent = c.sys;
+      c.rendered = true; continue;
+    }
+    let row = c.id && logRows.get(c.id);
+    if (!row) { row = logAppend(c.id); }
+    row.classList.toggle('active', !!c.active);
+    row.firstChild.innerHTML = `${c.active?'tool_start':'tool_end'}&nbsp; <span class="tname">${c.name}</span>`;
+    row.lastChild.textContent = c.dur!=null ? c.dur+' ms' : (c.active?'…':'');
+    if (!c.active) c.rendered = true;   // tool_end is the row's final state
+  }
+  logEl.scrollTop = logEl.scrollHeight;   // stay pinned to the newest row
   $('#rev-pill').textContent = 'rev ' + state.rev;
   const minute = state.ends.filter(t => Date.now()-t < 60000).length;
   $('#rate-pill').textContent = `tools ${minute}/min`;
@@ -107,8 +138,8 @@ function renderGraph() {
 
 function renderPasses() {
   const done = [...state.nodes.values()].filter(n=>n.dur!=null).sort((a,b)=>a.x-b.x).slice(-6);
-  $('#pass-rows').innerHTML = done.map(n=>
-    `<div class="pass-row"><span class="pname"><span class="sw" style="background:${colorFor(n.name)}"></span>${n.name.replace(/_/g,' ')}</span><span class="dur">${n.dur>0?n.dur+' ms':'— ms'}</span></div>`).join('');
+  $('#pass-rows').innerHTML = done.map((n,i)=>
+    `<div class="pass-row"><span class="pname"><span class="idx">${String(i+1).padStart(2,'0')}</span><span class="sw" style="background:${colorFor(n.name)}"></span>${n.name.replace(/_/g,' ')}</span><span class="dur">${n.dur>0?n.dur+' ms':'— ms'}</span></div>`).join('');
 }
 function renderInspector() {
   const n = state.focus && state.nodes.get(state.focus);
@@ -120,24 +151,24 @@ function renderInspector() {
 
 /* engine frame: blit a real frame payload; without one the card keeps its
    placeholder gradient + tagline (labeled by the feed state, as in mockup A) */
-function blitEngineFrame(b64) {
-  const img = new Image();
-  img.onload = () => {
-    const c = $('#engine-canvas'), r = c.parentElement.getBoundingClientRect();
-    c.width = r.width; c.height = r.height;
-    const g = c.getContext('2d');
-    const s = Math.max(c.width/img.width, c.height/img.height);
-    g.drawImage(img, (c.width-img.width*s)/2, (c.height-img.height*s)/2, img.width*s, img.height*s);
-    $('.tagline').style.display = 'none';
-  };
-  img.src = 'data:image/png;base64,' + b64;
+async function blitEngineFrame(b64) {
+  // decode off the UI thread; only the draw lands on the main thread
+  const blob = await (await fetch('data:image/png;base64,' + b64)).blob();
+  const bmp = await createImageBitmap(blob);
+  const c = $('#engine-canvas'), r = c.parentElement.getBoundingClientRect();
+  c.width = r.width; c.height = r.height;
+  const g = c.getContext('2d');
+  const s = Math.max(c.width/bmp.width, c.height/bmp.height);
+  g.drawImage(bmp, (c.width-bmp.width*s)/2, (c.height-bmp.height*s)/2, bmp.width*s, bmp.height*s);
+  bmp.close();
+  $('.tagline').style.display = 'none';
 }
 
 /* ---------- timeline (DOM-only playhead, zero GPU) ---------- */
 const TL0 = 210, PXS = 48;               // one time->x scale: ruler, bars and playhead share it
 const tx = s => TL0 + s*PXS;
 const TRACKS = [                          // times in seconds
-  { label:'V3 glass_panel', color:'#dd5227', t0:4,   t1:10,   kfs:[4.5,6,7.5] },
+  { label:'V3 glass_panel', color:'#c9b99a', t0:4,   t1:10,   kfs:[4.5,6,7.5] },
   { label:'V2 title',       color:'#9a8f5f', t0:4,   t1:13,   kfs:[] },
   { label:'V1 plate.mp4',   color:'#7fb7a6', t0:2.5, t1:17,   kfs:[] },
   { label:'A1 score.wav',   color:'#b9a6e8', t0:2.5, t1:18.5, kfs:[] },
@@ -191,7 +222,7 @@ function demoFramePng() {
   const c = document.createElement('canvas'); c.width = 640; c.height = 360;
   const g = c.getContext('2d');
   const grad = g.createLinearGradient(0,0,640,360);
-  grad.addColorStop(0,'#dd5227'); grad.addColorStop(.55,'#33222e'); grad.addColorStop(1,'#15151b');
+  grad.addColorStop(0,'#ff5a23'); grad.addColorStop(.55,'#33222e'); grad.addColorStop(1,'#15151b');
   g.fillStyle = grad; g.fillRect(0,0,640,360);
   g.strokeStyle = '#f4f0e8'; g.lineWidth = 3; g.globalAlpha = .8;
   g.strokeRect(150,80,340,200); g.globalAlpha = 1;
@@ -214,7 +245,7 @@ function runSimulatedFeed() {
     ['tool_start',{id:'c6',name:'set_keyframe',args:{track:'V3',t:'00:06'}}],
     ['tool_end',{id:'c6',name:'set_keyframe',dur_ms:1,status:'ok'}],
     ['tool_start',{id:'c7',name:'render_frame',args:{f:142}}],
-    ['viewport_tint',{color:0xdd5227}],
+    ['viewport_tint',{color:0xff5a23}],
     ['tool_end',{id:'c7',name:'render_frame',dur_ms:380,status:'ok'}],
     ['frame_rendered',{frame:142,png_b64:demoFramePng()}],
     ['tool_end',{id:'c5',name:'composite',dur_ms:31,status:'ok'}],
