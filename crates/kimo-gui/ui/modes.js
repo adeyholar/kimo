@@ -95,9 +95,11 @@ export const MODES = {
       viewer: { kind: 'viewer', cls: 'vis', opts: { pad: [0, 0, 0, 0], metaY: 450, metaL: 0, metaR: 0 } }, insp: { kind: 'kv', title: 'Inspector', opts: { lines: true, topLine: true, top: 65 } },
       keys: { kind: 'keys', title: 'Keyframes', phPad: '19px 15px 0 15px', opts: { x0: 342, xr: 1, rulerY: 35, laneY: 56, laneH: 32.6, stripY: 7, stripH: 27, stripX: 323, stripBg: '#222120', stripR: 3, stripPad: 1, stripW: 1.3, stripC: '#eeeae2', stripEmOp: .75, chipX: 13.5, chipW: 300, divX: 316, headLine: 55, laneSep: '#242321', keyLine: '#66645e', selBg: '#1d1a15', altBg: '#1a1917', selX: 317, keySize: 6.3, emKeyScale: 1.15, rTickDx: -8, rTickY: 3, rTickH: 15, rulerHl: true, phDx: -5, phTop: 2, phBot: 0 } } } },
   export: { activity: 'rendering', top: 44, foot: 0, rightCls: 'chipclock',
+    vars: { '--ph-pad': '12px 14px 0 13px', '--call-fs': '16px', '--call-ls': '-0.08em', '--call-pl': '12px', '--ck-fs': '17px', '--rh-fs': '16px', '--call-pr': '13px', '--call-gap': '9.5px', '--dur-w': '4ch', '--dur-fs': '15px', '--call-c': '#c2c0bb', '--ck-c': '#b6b4af', '--dur-c': '#b6b4af',
+      '--kv-pl': '13px', '--kv-pr': '12px', '--kv-vls': '-0.04em', '--klabel': '#ece4d6', '--rh-c': '#aba8a1', '--rd-c': '#b2afa8', '--rf-c': '#b4b3af', '--rf-fs': '13px', '--rf-ls': '-0.05em' },
     rects: { agent: [11, 50, 345, 759], viewer: [357, 50, 1051, 535], exp: [1063, 50, 1364, 535], renders: [357, 547, 1364, 759] },
-    panels: { agent: AG({ checkRight: true }), viewer: { kind: 'viewer', opts: { pad: [10, 10, 166, 10], thumbY: 400, thumbH: 60 } }, exp: { kind: 'kv', title: 'Export', opts: { lines: true } },
-      renders: { kind: 'renders', title: 'Renders' } } },
+    panels: { agent: AG({ checkRight: true }), viewer: { kind: 'viewer', opts: { pad: [0, 13, 111, 12], progY: 13, progH: 4, thumbY: 425, thumbH: 47, thumbW: 82, thumbGap: 7, thumbR: 0 } }, exp: { kind: 'kv', title: 'Export', opts: { lines: true } },
+      renders: { kind: 'renders', title: 'Renders', opts: { colW: [329, 223, 115, '1fr', 'auto'], top: 43, headH: 28.5, rowH: 28.5, left: 13, right: 12, footLine: 182 } } } },
   grading: { activity: 'grading', top: 48, foot: 0, cls: 'lab-mono',
     vars: { '--title-font': 'var(--sans)', '--pt-fs': '19px', '--call-fs': '15.6px', '--call-ls': '-0.07em', '--kv-row': '39.5px', '--ch-label': 'var(--ember-text)', '--li-h': '39.2px', '--li-fs': '15.5px', '--li-c': 'var(--cream)', '--list-border': '0', '--list-sep': 'var(--line2)', '--li-sel-r': '5px', '--thl-fs': '14px', '--thl-c': 'var(--cream)', '--wl-c': 'var(--cream)', '--wv-c': 'var(--cream)', '--sec-line': 'transparent', '--line2': '#272725', '--call-line': 'transparent', '--klabel': 'var(--cream)', '--kv-fs': '16px', '--sec-font': 'var(--mono)', '--grade-title-font': 'var(--mono)', '--plab-font': 'var(--sans)', '--tag-font': 'var(--mono)', '--tag-fs': '12.5px', '--tag-h': '21px', '--tag-px': '6px', '--tag-r': '4px', '--tag-bg': 'rgba(70,70,66,.62)', '--call-pl': '12px' },
     rects: { agent: [10, 60, 392, 505], viewer: [404, 60, 1094, 505], grade: [1106, 60, 1364, 759], bottom: [10, 516, 1094, 759] },
@@ -108,7 +110,7 @@ export const MODES = {
 // Engines that do not announce a mode still drive the view: the tool name
 // picks the workspace. First match wins.
 const RULES = [
-  [/^export|^set_export|render_queue/, 'export'],
+  [/^export|^set_export|render_queue|^(join_export|preview_range|collect_project|contact_sheet|cancel_job|resume_job)$/, 'export'],
   [/caption|transcri|title|text_/, 'captions'],
   [/batch|history|checkpoint|recipe|template_apply|project_diff|relink|undo|redo|collect_project/, 'batch'],
   [/keyframe_bezier|set_motion_path|bind_beats|set_expression|add_null|set_parent/, 'graph'],

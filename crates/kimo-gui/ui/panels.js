@@ -6,7 +6,7 @@ const F = o => (o && flashing(o._flash) ? ' flash' : '') + (o && flashing(o._pee
 const E = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const px = n => Math.round(n * 10) / 10;
 
-export function fmtArgs(a) {
+export function fmtArgs(a, tool = '') {
   if (a == null) return '';
   if (typeof a === 'string') return a;
   const kv = o => Object.entries(o).filter(([, v]) => v != null && v !== '' && !(typeof v === 'number' && !Number.isFinite(v)))
@@ -15,11 +15,16 @@ export function fmtArgs(a) {
   // a live call's args object, in the mockups' rail style: what it acts on first, positional
   // ("set_material(cap, …)", "add_emitter(V2, dust, …)"), then its own values named; nested arrays /
   // objects stay out of the rail (they are in the inspector)
-  const ID = ['clip_id', 'clip', 'name', 'id', 'track_id', 'preset', 'kind', 'shape', 'mode', 'material', 'path', 'text', 'label', 'effect'];
+  const ID = ['clip_id', 'clip', 'name', 'id', 'track_id', 'preset', 'kind', 'shape', 'mode', 'material', 'path', 'text', 'label', 'effect', 'property'];
   const prim = v => v != null && v !== '' && typeof v !== 'object' && !(typeof v === 'number' && !Number.isFinite(v));
-  const maskT = prim(a.mask_id), skip = new Set(maskT ? ['mask_id', 'clip_id', 'clip'] : []);   // the mask is the target: "set_mask_path_key(mask_1, time: 4.2)"
-  const pos = [...(maskT ? [String(a.mask_id)] : []), ...ID.filter(k => !skip.has(k) && prim(a[k])).map(k => k === 'path' ? String(a[k]).split(/[\\/]/).pop() : String(a[k]))];
-  const named = Object.entries(a).filter(([k, v]) => !ID.includes(k) && !skip.has(k) && prim(v)).map(([k, v]) => `${k}: ${typeof v === 'number' ? Math.round(v * 1000) / 1000 : v}`);
+  // the mask is the target of a mask call (its mask_id, or the name add_mask gives it): it goes first and the clip
+  // is left out — "set_mask_path_key(mask_1, time: 4.2)", "add_mask(mask_1, bezier, feather: 2)"
+  const maskId = prim(a.mask_id) ? a.mask_id : /mask/.test(tool) && prim(a.name) ? a.name : null;
+  const skip = new Set(maskId != null ? ['mask_id', 'clip_id', 'clip', 'name'] : []);
+  const TIME = /^(time|t|start|end|duration|at|from|to|in|out|offset)$/;   // times read to 1 decimal in the rail
+  const num = (k, v) => TIME.test(k) ? Math.round(v * 10) / 10 : Math.round(v * 1000) / 1000;
+  const pos = [...(maskId != null ? [String(maskId)] : []), ...ID.filter(k => !skip.has(k) && prim(a[k])).map(k => k === 'path' ? String(a[k]).split(/[\\/]/).pop() : String(a[k]))];
+  const named = Object.entries(a).filter(([k, v]) => !ID.includes(k) && !skip.has(k) && prim(v)).map(([k, v]) => `${k === 'time' ? 't' : k}: ${typeof v === 'number' ? num(k, v) : v}`);   // 'time' reads as t, like the mockups' short keys
   const out = [...pos, ...named].join(', ');
   return out || kv(a);
 }
@@ -57,14 +62,14 @@ function agent({ spec, state, data, w, h }) {
     const showCk = !(cur && o.noCheckCur);
     const ckEl = `<span class="ck">${showCk ? ck : ''}</span>`;
     const dur = c.status === 'running' ? fmtDur(state.session.still && c.elapsed_ms != null ? c.elapsed_ms : performance.now() - c.t) : fmtDur(c.dur_ms);
-    const args = fmtArgs(c.args);
+    const args = fmtArgs(c.args, c.name);
     const faded = !cur && o.fade != null && i < calls.length - 1 - o.fade;
     const ch = cur && o.curH ? o.curH : rowH;
     const recent = o.boldLast && i >= calls.length - o.boldLast;
     html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}${recent ? ' recent' : ''}${c.status === 'error' ? ' err' : ''}" style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
       (o.checkRight ? '' : ckEl) +
       `<span class="sig${args ? '' : ' noargs'}"><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
-      (o.checkRight ? ckEl : '') +
+      (o.checkRight && showCk ? ckEl : '') +
       `<span class="dur" ${c.status === 'running' ? `data-run="${E(c.id)}"` : ''}>${dur}</span></div>`;
     if (cur && c.progress && o.progress) {
       const p = c.progress;
@@ -102,12 +107,12 @@ function viewer({ spec, data, w, h, state }) {
   html += '</div>';
   if (data.progress) {
     const p = data.progress, y = pt + fh + (o.progY ?? 14);
-    html += `<div style="position:absolute;left:${pl}px;right:${pr}px;top:${y}px;height:3px;background:var(--raise2);border-radius:2px"><div style="width:${p.pct}%;height:100%;background:var(--ember);border-radius:2px"></div></div>` +
-      `<div class="vmeta" style="top:${y + 9}px;left:${pl}px;right:${pr}px"><span>${E(p.left)}</span><span class="r"><span class="em">${E(p.pct)}%</span>&nbsp;&nbsp;&nbsp;${E(p.right)}</span></div>`;
+    html += `<div style="position:absolute;left:${pl}px;right:${pr}px;top:${y}px;height:${o.progH ?? 3}px;background:var(--raise2);border-radius:2px"><div style="width:${p.pct}%;height:100%;background:var(--ember);border-radius:2px"></div></div>` +
+      `<div class="vmeta" style="top:${y + (o.progMetaDy ?? 9)}px;left:${pl}px;right:${pr}px"><span>${E(p.left)}</span><span class="r"><span class="em">${E(p.pct)}%</span>&nbsp;&nbsp;&nbsp;${E(p.right)}</span></div>`;
   }
   if (data.thumbs) {
     const ty = o.thumbY ?? (pt + fh + 12), th = o.thumbH ?? 50;
-    html += `<div class="thumbs" style="left:${pl}px;right:${pr}px;top:${ty}px;height:${th}px;gap:${o.thumbGap ?? 6}px;overflow:hidden">` +
+    html += `<div class="thumbs" style="left:${pl}px;right:${o.thumbR ?? pr}px;top:${ty}px;height:${th}px;gap:${o.thumbGap ?? 6}px;overflow:hidden">` +
       data.thumbs.map(t => `<div class="thumb ${t.sel ? 'sel' : ''} ${t.dim ? 'dimmed' : ''}"${o.thumbW ? ` style="flex:none;width:${o.thumbW}px"` : ''}>${t.src ? `<img src="${E(t.src)}" alt="">` : ''}${t.check ? '<span class="badge">✓</span>' : ''}</div>`).join('') + '</div>';
   }
   const my = o.metaY ?? (pt + fh + (pb - 20) / 2);
@@ -952,17 +957,24 @@ function lightrig({ spec, data, w, h }) {
 // ---------- renders table (export) ----------
 function renders({ spec, data, w, h }) {
   const o = spec.opts || {};
-  const cols = `grid-template-columns:${o.cols || '2.2fr 1.6fr 1fr 1.6fr 1fr'}`;
+  // m14 measured layout when o.colW is given: px columns, sans header, every row cream (queued / "-" dim), the
+  // status glyph in its own slot so the words line up with the header, a rule above a right-aligned footer
+  const M = !!o.colW;
+  const cols = `grid-template-columns:${M ? o.colW.map(c => typeof c === 'number' ? c + 'px' : c).join(' ') : (o.cols || '2.2fr 1.6fr 1fr 1.6fr 1fr')}`;
+  const icoW = o.icoW ?? 22;
+  const status = st => { const m = /^([●✓✕])\s*(.*)$/.exec(st); return M ? (m ? `<i class="rico">${E(m[1])} </i>${E(m[2])}` : `<i class="rico"></i>${E(st)}`) : E(st); };
   let html = head(spec, data);
-  html += `<div class="tbl" style="top:${o.top ?? 42}px">` + `<div class="tr h" style="${cols}">${(data.head || []).map(x => `<span>${E(x)}</span>`).join('')}</div>` +
+  html += `<div class="tbl${M ? ' meas' : ''}" style="top:${o.top ?? 42}px${M ? `;left:${o.left ?? 13}px;right:${o.right ?? 12}px;--rico-w:${icoW}px` : ''}">` + `<div class="tr h" style="${cols}${M ? `;height:${o.headH ?? 28.5}px` : ''}">${(data.head || []).map((x, i) => `<span${M && i === 3 ? ' class="rst"' : ''}>${E(x)}</span>`).join('')}</div>` +
     (data.rows || []).map(r => `<div class="tr" style="${cols};height:${r._job ? (o.jobH ?? 44) : (o.rowH ?? 30)}px">` + r.map((c, i) => {
-      if (i === 3) { const st = String(c); const em = st.startsWith('●'); return `<span class="mono ${em ? 'em' : st.startsWith('✕') ? 'err' : 'dim'}">${E(st)}</span>`; }
+      if (i === 3) { const st = String(c); const em = st.startsWith('●'); return `<span class="mono ${em ? 'em' : st.startsWith('✕') ? 'err' : M && !/^[✓●]/.test(st) ? 'dim' : M ? 'cream' : 'dim'}">${status(st)}</span>`; }
       // a live job row (engine export): fixed 44px from its first frame so nothing shifts when it lands;
       // 16:9 thumb of the engine's last frame + output path under the name, each only when sent
       if (i === 0 && r._job) return `<span class="rjob">${r._thumb ? `<img class="rthumb" src="${E(r._thumb)}">` : '<i class="rthumb"></i>'}<span class="rname"><span class="mono cream">${E(c)}</span>${r._path ? `<span class="mono dim rpath">${E(r._path)}</span>` : ''}</span></span>`;
-      return `<span class="${i ? 'mono dim' : 'mono cream'}">${E(c)}</span>`;
+      return `<span class="${M ? (String(c) === '-' ? 'mono dim' : 'mono cream') : i ? 'mono dim' : 'mono cream'}">${E(c)}</span>`;
     }).join('') + '</div>').join('') + '</div>';
-  if (data.foot) html += `<div class="pfoot" style="left:auto;right:15px">${E(data.foot)}</div>`;
+  if (M && o.footLine != null && data.foot) html += `<i style="position:absolute;left:${o.left ?? 13}px;right:${o.right ?? 12}px;top:${o.footLine}px;height:1px;background:var(--line)"></i>`;
+  if (data.foot) { const f = E(data.foot), em = data.footEm ? E(data.footEm) : null;
+    html += `<div class="pfoot${M ? ' meas' : ''}" style="left:auto;right:${M ? (o.right ?? 12) + 1 : 15}px">${em && f.includes(em) ? f.replace(em, `<span class="cream">${em}</span>`) : f}</div>`; }
   return html;
 }
 

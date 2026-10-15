@@ -23,7 +23,7 @@ export const FAMILIES = [
   ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents|fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track|undistort_clip|stabilize|apply_camera_solve|pin_layer|set_corner_pin|add_emitter|add_particles|add_shard_burst|set_material$|remove_material$|preview_material$|set_relight$|remove_light$)/],
   ['graphics', /^(add_shape|add_path_shape|set_path|add_path_key|clear_path_keys|add_shape_modifier|remove_shape_modifier|add_modifier|remove_modifier|set_layer_style|remove_layer_style|add_box_expand|add_detection_box|add_hud_frame|add_counter|add_prompt_box|add_glitch_confetti)$/],
   ['roto', /^(add_mask|set_mask|set_mask_keyframe|set_mask_path_key|set_mask_prop_key|update_mask|reorder_mask|remove_mask|remove_mask_layer|roto_propagate|refine_matte|set_track_matte|remove_track_matte)$/],
-  ['export', /^(export|render|queue_render|encode|deliver)/],
+  ['export', /^(export|render|queue_render|encode|deliver|join_export$|preview_range$|collect_project$|contact_sheet$|cancel_job$|resume_job$)/],
 ];
 export function family(name) {
   const n = String(name || '').toLowerCase();
@@ -677,6 +677,15 @@ function exportOps(state, MODES, ev) {
   ren.head = ren.head || ['name', 'preset', 'length', 'status', 'started'];
   ren.rows = ren.rows || [];
   let row = ren.rows.find(r => r._call === id);
+  const tn = ev.tool_name, R0 = P.result && typeof P.result === 'object' ? P.result : {};
+  // cancel / resume act on an existing job: its row (matched by the engine's job id, else the live row)
+  if (tn === 'cancel_job' || tn === 'resume_job') {
+    const job = ren.rows.find(r => A.job_id != null && r._jobId === A.job_id) || ren.rows.find(r => r._live);
+    if (!job) return false;
+    if (tn === 'cancel_job' && ev.phase === 'complete') { const kept = Array.isArray(R0.completed_ranges) ? R0.completed_ranges.length : null; job[3] = '✕ cancelled' + (kept ? ` · ${kept} chunk${kept > 1 ? 's' : ''} kept` : ''); job._live = false; job._flash = now(); if (vw.progress) vw.progress = { ...vw.progress, right: 'cancelled' }; }
+    if (tn === 'resume_job' && ev.phase === 'start') { job[3] = '● resuming'; job._live = true; job._call = id; job._flash = now(); vw.progress = { pct: vw.progress ? vw.progress.pct : 0, left: 'resuming', right: '' }; }
+    if (tn === 'resume_job' && ev.phase !== 'start') { job._call = id; row = job; } else return true;
+  }
   if (ev.phase === 'start') {
     const path = A.path ?? A.output ?? A.file ?? '';
     const base = String(path).split(/[\\/]/).pop() || ev.tool_name;
@@ -686,10 +695,13 @@ function exportOps(state, MODES, ev) {
     const set = [['Format', A.container ?? A.format ?? (ext ? ext.toUpperCase() : null)], ['Video', codec], ['Resolution', res], ['Frame rate', A.fps], ['Quality', A.crf != null ? 'CRF ' + A.crf : A.quality], ['Audio', A.audio === false ? 'off' : A.audio_codec], ['Output', path ? shortPath(path) : null]];
     exp.blocks = exp.blocks || [];
     for (const [k, v] of set) { if (v == null || v === '') continue; const b = exp.blocks.find(x => x.k === k); if (b) { if (b.v !== String(v)) { b.from = b.v; b.v = String(v); } b._flash = now(); } else exp.blocks.push({ k, v: String(v), _flash: now() }); }
-    const preset = [res && String(res).replace(/\s*x\s*/, 'x'), codec].filter(Boolean).join(' ') || A.preset || '';
-    if (!row) { row = [base, preset, '', '● rendering 0%', 'now']; row._call = id; row._t0 = now(); row._job = true; ren.rows.unshift(row); }
+    const nParts = Array.isArray(A.parts) ? A.parts.length : null, sc = numOf(A.scale);
+    const preset = tn === 'join_export' ? (nParts ? `join ${nParts} parts` : 'join') : tn === 'preview_range' ? `preview${sc != null && sc !== 1 ? ' ' + sc + 'x' : ''}` : tn === 'collect_project' ? 'collect' : tn === 'contact_sheet' ? 'contact sheet'
+      : [res && String(res).replace(/\s*x\s*/, 'x'), codec].filter(Boolean).join(' ') || A.preset || '';
+    const label = tn === 'collect_project' && !path && A.dest_dir ? (String(A.dest_dir).split(/[\\/]/).filter(Boolean).pop() || base) : base;
+    if (!row) { row = [label, preset, '', tn === 'collect_project' ? '● collecting' : tn === 'contact_sheet' ? '● rendering' : '● rendering 0%', 'now']; row._call = id; row._t0 = now(); row._job = true; ren.rows.unshift(row); }
     row._live = true; if (path) row._path = shortPath(path, 48); if (vw.src) row._thumb = vw.src;
-    vw.progress = { pct: 0, left: 'starting', right: '' };
+    if (!/^(collect_project|contact_sheet)$/.test(tn)) vw.progress = { pct: 0, left: 'starting', right: '' };   // a collect / sheet is not a frame render: no bar
     return true;
   }
   if (ev.phase === 'progress') {
@@ -701,7 +713,7 @@ function exportOps(state, MODES, ev) {
     if (row) row[3] = `● rendering ${Math.round(pct)}%`;
     return true;
   }
-  const ok = ev.phase === 'complete', dur = P.dur_ms ?? ev.duration_ms;
+  const ok = ev.phase === 'complete', dur = P.dur_ms ?? ev.duration_ms ?? ev._dur;
   if (row) {
     // history row: the last frame the engine rendered, the output path, length and final size, each
     // only when the engine actually sent it (no placeholder)
@@ -710,10 +722,11 @@ function exportOps(state, MODES, ev) {
     row[3] = ok ? '✓ done' + (bytes ? ' · ' + fmtBytes(bytes) : '') : '✕ failed';
     if (ok && typeof R.duration === 'number') row[2] = mmss(R.duration * 1000);
     if (ok && R.path) row._path = shortPath(R.path, 48);
+    if (R.job_id != null) row._jobId = R.job_id;
     if (vw.src) row._thumb = vw.src;
     if (dur != null) row[4] = mmss(dur); row._flash = now(); row._live = false;
   }
-  if (vw.progress) vw.progress = ok ? { ...vw.progress, pct: 100, right: (dur != null ? `done in ${mmss(dur)}` : 'done') } : { ...vw.progress, right: 'failed' };
+  if (vw.progress && !/^(collect_project|contact_sheet)$/.test(tn)) vw.progress = ok ? { ...vw.progress, pct: 100, right: (dur != null ? `done in ${mmss(dur)}` : 'done') } : { ...vw.progress, right: 'failed' };
   return true;
 }
 
@@ -753,7 +766,7 @@ export function route(ev, state, MODES) {
   } else if (ev.phase === 'complete' || ev.phase === 'error') {
     const err = ev.phase === 'error';
     const t0 = state._t0 && state._t0[id]; if (t0 != null) delete state._t0[id];
-    const dur = numOf(P.dur_ms) ?? numOf(ev.duration_ms) ?? (t0 != null && ev.ts_ms != null && ev.ts_ms >= t0 ? ev.ts_ms - t0 : null);
+    const dur = numOf(P.dur_ms) ?? numOf(ev.duration_ms) ?? (t0 != null && ev.ts_ms != null && ev.ts_ms >= t0 ? ev.ts_ms - t0 : null); ev._dur = dur;
     // the landed value replaces the rail's start-time args: "scale: 104% → 112%"
     const landed = !err && param && val != null ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
     out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(landed ? { args: railArgs(state, landed) } : {}) });

@@ -7157,9 +7157,7 @@
     [
      "1920x1080",
      "h264",
-     {
-      "crf": 18
-     }
+     "crf:18"
     ],
     38400
    ]
@@ -7178,43 +7176,35 @@
     "thumbs": [
      {
       "src": "../demo/frames/m14_t1.jpg",
-      "sel": false,
-      "dim": false
+      "sel": true
      },
      {
       "src": "../demo/frames/m14_t2.jpg",
-      "sel": false,
-      "dim": false
+      "sel": false
      },
      {
       "src": "../demo/frames/m14_t3.jpg",
-      "sel": false,
-      "dim": false
+      "sel": false
      },
      {
       "src": "../demo/frames/m14_t4.jpg",
-      "sel": false,
-      "dim": false
+      "sel": false
      },
      {
       "src": "../demo/frames/m14_t5.jpg",
-      "sel": true,
-      "dim": false
+      "sel": true
      },
      {
       "src": "../demo/frames/m14_t6.jpg",
-      "sel": false,
-      "dim": true
+      "sel": false
      },
      {
       "src": "../demo/frames/m14_t7.jpg",
-      "sel": false,
-      "dim": true
+      "sel": false
      },
      {
       "src": "../demo/frames/m14_t8.jpg",
-      "sel": false,
-      "dim": true
+      "sel": false
      }
     ]
    },
@@ -7271,6 +7261,7 @@
      "started"
     ],
     "foot": "cpu 92%   ffmpeg 7.1   disk 212 GB free",
+    "footEm": "92%",
     "rows": [
      [
       "dune_film.mp4",

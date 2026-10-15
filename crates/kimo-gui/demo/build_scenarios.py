@@ -222,12 +222,12 @@ SC[-1]["elapsed"] = hms("00:34:12")
 # ---------------------------------------------------------------- m14 export
 scen("m14", "export", "dune_film.kimo", "codex", hms("00:16:55"),
   [["trim", ["clip_09", {"out": "01:30:00"}], 100], ["grade", ["clip_04", {"warmth": "+18"}], 800], ["caption", [{"track": "en"}], 1800], ["mix_audio", ["music", "-14 LUFS"], 900],
-   ["normalize", ["dialogue"], 400], ["validate_project", [], 300], ["set_export", [{"preset": "web_1080"}], 100], ["export", ["1920x1080", "h264", {"crf": 18}], 38400]],
+   ["normalize", ["dialogue"], 400], ["validate_project", [], 300], ["set_export", [{"preset": "web_1080"}], 100], ["export", ["1920x1080", "h264", "crf:18"], 38400]],
   {"agent": {"footer": "project saved 2s ago"},
-   "viewer": {"src": F("m14"), "progress": {"pct": 64, "left": "frame 1382 / 2160", "right": "42 fps   eta 00:18"}, "thumbs": [{"src": F(f"m14_t{i}"), "sel": i == 5, "dim": i > 5} for i in range(1, 9)]},
+   "viewer": {"src": F("m14"), "progress": {"pct": 64, "left": "frame 1382 / 2160", "right": "42 fps   eta 00:18"}, "thumbs": [{"src": F(f"m14_t{i}"), "sel": i in (1, 5)} for i in range(1, 9)]},
    "exp": {"blocks": [K("Format", "MP4"), K("Video", "H.264 high"), K("Resolution", "1920 x 1080"), K("Frame rate", "24"), K("Quality", "CRF 18"), K("Audio", "AAC 320 kbps"), K("Loudness", "-14 LUFS"),
             K("Captions", "en.srt"), K("Output", "~/films/dune_film.mp4"), K("Size so far", "41.2 MB")]},
-   "renders": {"head": ["name", "preset", "length", "status", "started"], "foot": "cpu 92%   ffmpeg 7.1   disk 212 GB free",
+   "renders": {"head": ["name", "preset", "length", "status", "started"], "foot": "cpu 92%   ffmpeg 7.1   disk 212 GB free", "footEm": "92%",
                "rows": [["dune_film.mp4", "1080p h264", "01:30", "● rendering 64%", "now"], ["dune_film_square.mp4", "1080x1080", "01:30", "queued", "-"],
                         ["dune_teaser.mp4", "1080p h264", "00:15", "✓ done", "4m ago"], ["dune_film_v1.mp4", "1080p h264", "01:28", "✓ done", "32m ago"]]}})
 
