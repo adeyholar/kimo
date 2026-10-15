@@ -233,6 +233,7 @@ render_offscreen_mesh_normal e5810f0e1140caa9
 render_scope 0ba759192f5e77dd
 render_textured_bvh ff1f91fde6db4cfa
 render_vertex_stream_pbr e257a7f88203a83d
+render_wgpu_pbr 2be19c04be4cef5f
 reorder_mask b182a28a665330c4
 restore dab5b50df493b4be
 resume_job ddf7317d0c4d5591
