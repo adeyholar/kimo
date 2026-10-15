@@ -14,7 +14,7 @@
 use serde_json::Value;
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 const BIND: &str = "127.0.0.1:7421";
 

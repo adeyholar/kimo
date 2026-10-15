@@ -11,8 +11,11 @@
 
 export function connect(onEvent, onStatus) {
   if (window.__TAURI__) {
-    window.__TAURI__.event.listen('engine-event', e => onEvent(e.payload));
-    window.__TAURI__.event.listen('spectator-status', e => onStatus(String(e.payload) === 'live' ? 'live' : 'down', String(e.payload)));
+    // An engine event is itself proof the link is up: the shell's one-shot
+    // "live" status can fire before the webview has registered its listener.
+    let live = false;
+    window.__TAURI__.event.listen('engine-event', e => { if (!live) { live = true; onStatus('live', 'live'); } onEvent(e.payload); });
+    window.__TAURI__.event.listen('spectator-status', e => { live = String(e.payload) === 'live'; onStatus(live ? 'live' : 'down', String(e.payload)); });
     onStatus('down', 'listening');
     return { kind: 'tauri' };
   }

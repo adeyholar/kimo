@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "dev.kimo.spectator",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "ui"
   },
   "app": {
     "windows": [

@@ -77,12 +77,16 @@ at 10 Hz (text only) while visible; that is the only other timer.
 
 ## Build & run (needs webkit2gtk 4.1)
 
-Ubuntu 22.04: `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`
-then `cargo tauri dev` (or `cargo build` for the shell). In another shell:
-`python3 tools/feed_demo.py` to stream the mockup-A scenario.
+Debian 12 / Ubuntu 22.04+:
+`sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev`
+then, from this directory, `cargo build` (or `cargo tauri dev`). In another shell:
+`python3 tools/feed_demo.py --scenario m16` streams a demo scenario to the
+shell over loopback TCP 127.0.0.1:7421 (omit `--scenario` for all 16).
 
-NOTE: the shell has not been compiled on the dev box this was authored on
-(no webkit2gtk-4.1-dev); the frontend is verified in headless Chromium.
+Verified on Debian 12 (webkit2gtk 2.50, rustc 1.99): `cargo build` succeeds,
+and the debug binary runs under Xvfb and renders the m16 feed from
+`feed_demo.py`. `icons/icon.png` (512px, from kimo-mark.svg) is the window
+icon `generate_context!` requires.
 
 ## Transports (ui/bridge.js)
 
