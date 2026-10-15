@@ -68,7 +68,7 @@ function agent({ spec, state, data, w, h }) {
     const recent = o.boldLast && i >= calls.length - o.boldLast;
     html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}${recent ? ' recent' : ''}${c.status === 'error' ? ' err' : ''}${state.pick != null && state.pick === c.id ? ' picked' : ''}"${c.id != null ? ` data-call="${E(c.id)}"` : ''} style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
       (o.checkRight ? '' : ckEl) +
-      `<span class="sig${args ? '' : ' noargs'}"><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
+      `<span class="sig${args ? '' : ' noargs'}"${args ? ` title="${E(c.name + '(' + args + ')')}"` : ''}><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
       (o.checkRight && showCk ? ckEl : '') +
       `<span class="dur" ${c.status === 'running' ? `data-run="${E(c.id)}"` : ''}>${dur}</span></div>`;
     if (cur && c.progress && o.progress) {

@@ -318,6 +318,18 @@ function renderFooter() {
   f.innerHTML = parts.join('');
 }
 
+// A picked call can carry more rows than a short Inspector holds: the tail (Result, then the last Args) gives way,
+// and one dim '+N more' row says so, instead of rows running past the panel's bottom edge (only on a pick render)
+function fitPicked(el) {
+  const kv = el.querySelector('.kv'); if (!kv) return;
+  const bottom = el.getBoundingClientRect().bottom - 6, over = () => kv.lastElementChild && kv.lastElementChild.getBoundingClientRect().bottom > bottom;
+  if (!over()) return;
+  let n = 0;
+  while (kv.children.length > 3 && over()) { const last = kv.lastElementChild; if (last.classList.contains('row')) n++; last.remove(); }
+  while (kv.lastElementChild && kv.lastElementChild.classList.contains('sec')) kv.lastElementChild.remove();   // no empty section title at the end
+  const more = document.createElement('div'); more.className = 'row dim'; more.innerHTML = `<span class="k"></span><span class="v">+${n} more</span>`; kv.appendChild(more);
+  while (kv.children.length > 3 && over()) { more.previousElementSibling.remove(); more.lastElementChild.textContent = `+${++n} more`; }
+}
 function render() {
   if (layoutDirty) buildLayout();
   renderTop();
@@ -334,6 +346,7 @@ function render() {
     if (name === pickPanel && pickCall) data = { sub: `${pickCall.name}${pickCall.status === 'running' ? '' : ''}`, blocks: pickedRows(pickCall) };   // a clicked rail row, in the existing inspector
     const args = { spec, data, view: V, state, w, h, mode: state.mode };
     el.innerHTML = fn(args);
+    if (name === pickPanel && pickCall) fitPicked(el);
     if (POST[spec.kind]) POST[spec.kind](el, args);
   }
 }
