@@ -130,7 +130,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .kv .row{height:var(--kv-row,37px);display:flex;align-items:center;justify-content:space-between;white-space:nowrap;font-size:var(--kv-fs,16px)}
 .kv.lines .row,.kv.lines .sec{border-bottom:1px solid var(--line2)}
 .kv .row .k{color:var(--klabel,var(--text));font-family:var(--label-font);font-size:var(--klabel-fs,inherit)}
-.kv .row .v{font-family:var(--mono);color:var(--cream);text-align:right}
+.kv .row .v{font-family:var(--kv-vfont,var(--mono));color:var(--cream);text-align:right}
 .kv .row .v .from{color:var(--text)} .kv .row .v .arr{color:var(--dim);margin:0 6px}
 .kv .row.ch .v{color:var(--ember-text)}
 .kv .row.chip{background:var(--raise);border-radius:4px;padding:0 8px;margin:0 -8px 4px}
@@ -225,3 +225,5 @@ body.calls-sans{--call-font:var(--sans)}
 /* live wipe while a grade/effect call runs (driven by progress events) */
 .frame img.before{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:saturate(.25) brightness(.82) contrast(.92)}
 .frame .wipe{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--ember);box-shadow:0 0 0 1px rgba(255,90,35,.25)}
+.kv .row.emb.bar{background:var(--emb-row-bg,transparent);margin:0 -15px;padding:0 15px}
+.call.recent .fn,.call.recent .args,.call.recent .pp{font-weight:600}

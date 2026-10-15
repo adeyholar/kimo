@@ -47,7 +47,8 @@ function agent({ spec, state, data, w, h }) {
     const args = fmtArgs(c.args);
     const faded = !cur && o.fade != null && i < calls.length - 1 - o.fade;
     const ch = cur && o.curH ? o.curH : rowH;
-    html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}" style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
+    const recent = o.boldLast && i >= calls.length - o.boldLast;
+    html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}${recent ? ' recent' : ''}" style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
       (o.checkRight ? '' : ckEl) +
       `<span class="sig"><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
       (o.checkRight ? ckEl : '') +
@@ -441,18 +442,70 @@ function vectorscope(cx, cy, r, seed) {
 }
 function scopes({ spec, data, w, h }) {
   const o = spec.opts || {};
-  const split = o.split ?? Math.round(w * .5);
+  if (!data.wave) {   // legacy synthetic look (no binned scope data from the engine)
+    const split = o.split ?? Math.round(w * .5);
+    let s = '';
+    const y0 = o.y0 ?? 18, y1 = h - (o.yb ?? 34);
+    s += `<g>${scopeAxis(44, y0, y1)}</g>`;
+    s += `<svg x="52" y="${y0}" width="${split - 66}" height="${y1 - y0}">${lumaTrace(split - 66, y1 - y0, 4, '#e9e4d8', .5)}</svg>`;
+    s += `<line x1="${split}" x2="${split}" y1="12" y2="${h - 12}" stroke="var(--line)"/>`;
+    const cx = split + (w - split) / 2, cy = (y0 + y1) / 2, r = Math.min((w - split) / 2 - 20, (y1 - y0) / 2 + 6);
+    s += vectorscope(cx, cy, r, 7);
+    return head(spec, data) + `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
+  }
+  // Binned scope data (what an engine's render_scope sends): drawn on canvas after mount.
+  const g = scopeGeom(o, w, h);
   let s = '';
-  const y0 = o.y0 ?? 18, y1 = h - (o.yb ?? 34);
-  s += `<g>${scopeAxis(44, y0, y1)}</g>`;
-  s += `<rect x="50" y="0" width="${split - 64}" height="${h}" fill="var(--panel)" opacity="0"/>`;
-  s += `<svg x="52" y="${y0}" width="${split - 66}" height="${y1 - y0}">${lumaTrace(split - 66, y1 - y0, 4, '#e9e4d8', .5)}</svg>`;
-  s += `<line x1="${split}" x2="${split}" y1="12" y2="${h - 12}" stroke="var(--line)"/>`;
-  const cx = split + (w - split) / 2, cy = (y0 + y1) / 2, r = Math.min((w - split) / 2 - 20, (y1 - y0) / 2 + 6);
-  s += vectorscope(cx, cy, r, 7);
-  s += `<text x="${split / 2 + 22}" y="${h - 12}" font-size="10.5" fill="var(--dim)" text-anchor="middle">waveform</text><text x="${cx}" y="${h - 12}" font-size="10.5" fill="var(--dim)" text-anchor="middle">vectorscope</text>`;
-  return head(spec, data) + `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
+  [1023, 768, 512, 256, 0].forEach(v => {
+    const y = g.wy1 - v / 1023 * (g.wy1 - g.wy0);
+    s += `<line x1="${g.wx0}" x2="${g.wx1}" y1="${px(y)}" y2="${px(y)}" stroke="#1f1f1d"/><text x="${g.wx0 - 8}" y="${px(y + 4.5)}" text-anchor="end" font-size="${o.axFs ?? 13}" fill="var(--dim)" font-family="var(--mono)">${v}</text>`;
+  });
+  for (let x = g.wx0; x <= g.wx1; x += (o.vgrid ?? 21.2)) s += `<line x1="${px(x)}" x2="${px(x)}" y1="${g.wy0}" y2="${g.wy1}" stroke="#1a1a18"/>`;
+  if (o.splitLine) s += `<line x1="${g.split}" x2="${g.split}" y1="0" y2="${h}" stroke="var(--line)"/>`;
+  s += `<text x="${px((g.wx0 + g.wx1) / 2)}" y="${h - (o.labB ?? 5)}" text-anchor="middle" font-size="${o.labFs ?? 15}" fill="var(--dim)" font-family="var(--mono)">waveform</text>`;
+  s += `<text x="${g.vx}" y="${h - (o.labB ?? 5)}" text-anchor="middle" font-size="${o.labFs ?? 15}" fill="var(--dim)" font-family="var(--mono)">vectorscope</text>`;
+  return head(spec, data) + `<canvas class="scopecv" width="${w}" height="${h}" style="position:absolute;left:0;top:0;width:${w}px;height:${h}px"></canvas>` +
+    `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
 }
+function scopeGeom(o, w, h) {
+  return { wx0: o.wx0 ?? 44, wx1: o.wx1 ?? 680, wy0: o.wy0 ?? 20, wy1: o.wy1 ?? 222, split: o.split ?? 701, vx: o.vx ?? 894, vy: o.vy ?? 122, vr: o.vr ?? 110 };
+}
+const DIG = '0123456789abcdefghijklmnopqrstuvwxyz';
+// After-mount painters (canvas): called by the render loop right after a panel's markup lands.
+export const POST = {
+  scopes(el, { spec, data, w, h }) {
+    const cv = el.querySelector('canvas.scopecv'); if (!cv || !data.wave) return;
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    const c = cv.getContext('2d'); c.scale(dpr, dpr);
+    const g = scopeGeom(spec.opts || {}, w, h);
+    const cols = data.wave.cols, nb = data.wave.bins, cw = (g.wx1 - g.wx0) / cols.length, bh = (g.wy1 - g.wy0) / nb;
+    const paint = (alpha) => {
+      for (let i = 0; i < cols.length; i++) {
+        const col = cols[i];
+        for (let b = 0; b < nb; b++) {
+          const v = DIG.indexOf(col[b]); if (v <= 0) continue;
+          c.fillStyle = `rgba(236,214,196,${(v / 35 * alpha).toFixed(3)})`;
+          c.fillRect(g.wx0 + i * cw, g.wy1 - (b + 1) * bh, cw + .4, bh + .4);
+        }
+      }
+    };
+    c.globalCompositeOperation = 'lighter';
+    c.filter = 'blur(2px)'; paint(.35); c.filter = 'none'; paint(.72);
+    c.globalCompositeOperation = 'source-over';
+    // vectorscope
+    const V = data.vec || {}, X = q => g.vx + q[0] * g.vr, Y = q => g.vy + q[1] * g.vr;
+    c.strokeStyle = '#2c2b29'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(g.vx - g.vr, g.vy); c.lineTo(g.vx + g.vr, g.vy); c.moveTo(g.vx, g.vy - g.vr); c.lineTo(g.vx, g.vy + g.vr); c.stroke();
+    c.strokeStyle = '#b98d77'; c.lineWidth = 2; c.beginPath(); c.arc(g.vx, g.vy, g.vr, 0, Math.PI * 2); c.stroke();
+    c.filter = 'blur(3px)';
+    for (const q of V.pts || []) { c.fillStyle = q[2]; c.globalAlpha = .3; c.beginPath(); c.arc(X(q), Y(q), 4.5, 0, Math.PI * 2); c.fill(); }
+    c.filter = 'none'; c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
+    if (V.skin) { c.strokeStyle = '#efe7da'; c.lineWidth = 2; c.beginPath(); c.moveTo(X(V.skin[0]), Y(V.skin[0])); c.lineTo(X(V.skin[1]), Y(V.skin[1])); c.stroke(); }
+    c.strokeStyle = '#a88a76'; c.lineWidth = 1.3;
+    for (const q of V.targets || []) { c.beginPath(); c.arc(X(q), Y(q), 3.4, 0, Math.PI * 2); c.stroke(); }
+  },
+};
 
 // ---------- CIE 1931 ----------
 const LOCUS = [[.1741, .0050], [.1740, .0050], [.1738, .0049], [.1736, .0049], [.1733, .0048], [.1730, .0048], [.1726, .0048], [.1721, .0048], [.1714, .0051], [.1703, .0058], [.1689, .0069], [.1669, .0086], [.1644, .0109], [.1611, .0138], [.1566, .0177], [.1510, .0227], [.1440, .0297], [.1355, .0399], [.1241, .0578], [.1096, .0868], [.0913, .1327], [.0687, .2007], [.0454, .2950], [.0235, .4127], [.0082, .5384], [.0039, .6548], [.0139, .7502], [.0389, .8120], [.0743, .8338], [.1142, .8262], [.1547, .8059], [.1929, .7816], [.2296, .7543], [.2658, .7243], [.3016, .6923], [.3373, .6589], [.3731, .6245], [.4087, .5896], [.4441, .5547], [.4788, .5202], [.5125, .4866], [.5448, .4544], [.5752, .4242], [.6029, .3965], [.6270, .3725], [.6482, .3514], [.6658, .3340], [.6801, .3197], [.6915, .3083], [.7006, .2993], [.7079, .2920], [.7140, .2859], [.7190, .2809], [.7230, .2770], [.7260, .2740], [.7283, .2717], [.7300, .2700], [.7311, .2689], [.7320, .2680], [.7327, .2673], [.7334, .2666], [.7340, .2660], [.7344, .2656], [.7346, .2654], [.7347, .2653]];
@@ -460,18 +513,25 @@ function cie({ spec, data, w, h }) {
   const o = spec.opts || {};
   const pad = o.pad ?? [16, 16, 30, 16];
   const W = w - pad[1] - pad[3], H = h - pad[0] - pad[2];
-  const sc = Math.min(W / .8, H / .9);
-  const ox = pad[3] + (W - .8 * sc) / 2, oy = pad[0] + .9 * sc;
-  const P = ([x, y]) => [px(ox + x * sc), px(oy - y * sc)];
+  const sc0 = Math.min(W / .8, H / .9);
+  const scx = o.scx ?? sc0, scy = o.scy ?? sc0;
+  const ox = o.ox ?? pad[3] + (W - .8 * scx) / 2, oy = o.oy ?? pad[0] + .9 * scy;
+  const P = ([x, y]) => [px(ox + x * scx), px(oy - y * scy)];
   const path = LOCUS.map((p, i) => (i ? 'L' : 'M') + P(p).join(' ')).join('') + 'Z';
+  const bx = ox, by = oy - .9 * scy, bw = .8 * scx, bh = .9 * scy;
   let s = `<defs><clipPath id="hs"><path d="${path}"/></clipPath>
     <linearGradient id="cx" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#2a3cff"/><stop offset=".35" stop-color="#25c8d0"/><stop offset=".55" stop-color="#7fe05a"/><stop offset=".75" stop-color="#f3d23c"/><stop offset="1" stop-color="#ff3a2a"/></linearGradient>
-    <linearGradient id="cy" x1="0" x2="0" y1="1" y2="0"><stop offset="0" stop-color="#5a2bff" stop-opacity=".9"/><stop offset=".5" stop-color="#ffffff" stop-opacity=".0"/><stop offset="1" stop-color="#30ff60" stop-opacity=".7"/></linearGradient></defs>`;
-  s += `<g clip-path="url(#hs)" opacity=".85"><rect x="${ox}" y="${oy - .9 * sc}" width="${.8 * sc}" height="${.9 * sc}" fill="url(#cx)"/><rect x="${ox}" y="${oy - .9 * sc}" width="${.8 * sc}" height="${.9 * sc}" fill="url(#cy)"/></g>`;
+    <linearGradient id="cy" x1="0" x2="0" y1="1" y2="0"><stop offset="0" stop-color="#5a2bff" stop-opacity=".9"/><stop offset=".5" stop-color="#ffffff" stop-opacity=".0"/><stop offset="1" stop-color="#30ff60" stop-opacity=".7"/></linearGradient>
+    <radialGradient id="cw" cx="${px(P([.3127, .329])[0])}" cy="${px(P([.3127, .329])[1])}" r="${px(.16 * scx)}" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity=".4"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>`;
+  if (o.grid) { for (let v = 0; v <= .9001; v += .1) { const [x] = P([v, 0]), [, y] = P([0, v]); if (v <= .8001) s += `<line x1="${x}" x2="${x}" y1="${px(by)}" y2="${px(oy)}" stroke="${o.gridC || '#24241f'}"/>`; s += `<line x1="${px(bx)}" x2="${px(bx + (o.gridW ?? bw))}" y1="${y}" y2="${y}" stroke="${o.gridC || '#24241f'}"/>`; } }
+  s += `<g clip-path="url(#hs)" opacity="${o.fillOp ?? .85}"><rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="url(#cx)"/><rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="url(#cy)"/>${o.white ? `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="url(#cw)"/>` : ''}</g>`;
   s += `<path d="${path}" fill="none" stroke="#d9d4c9" stroke-width="1"/>`;
-  for (const g of (data.gamuts || [])) s += `<polygon points="${g.pts.map(p => P(p).join(',')).join(' ')}" fill="none" stroke="${g.color || 'var(--cream)'}" stroke-width="1.3"${g.dash ? ' stroke-dasharray="3 3"' : ''}/>` + (g.label ? `<text x="${P(g.pts[1])[0] + 6}" y="${P(g.pts[1])[1] + 2}" font-size="9.5" fill="var(--text)">${E(g.label)}</text>` : '');
-  for (const p of (data.points || [])) s += `<circle cx="${P(p)[0]}" cy="${P(p)[1]}" r="3.5" fill="var(--ember)"/>`;
-  s += `<text x="${w / 2}" y="${h - 12}" font-size="10.5" fill="var(--dim)" text-anchor="middle">${E(data.label || 'CIE 1931')}</text>`;
+  for (const g of (data.gamuts || [])) {
+    const lp = g.lpt ? P(g.lpt) : [P(g.pts[1])[0] + 6, P(g.pts[1])[1] + 2];
+    s += `<polygon points="${g.pts.map(p => P(p).join(',')).join(' ')}" fill="none" stroke="${g.color || 'var(--cream)'}" stroke-width="${g.w ?? 1.3}"${g.dash ? ' stroke-dasharray="3 3"' : ''}/>` + (g.label ? `<text x="${lp[0]}" y="${lp[1]}" font-size="${o.gFs ?? 9.5}" fill="var(--text)">${E(g.label)}</text>` : '');
+  }
+  for (const p of (data.points || [])) s += p[2] === 'ring' ? `<circle cx="${P(p)[0]}" cy="${P(p)[1]}" r="3" fill="none" stroke="#f4f0e8" stroke-width="1.4"/>` : `<circle cx="${P(p)[0]}" cy="${P(p)[1]}" r="3.5" fill="var(--ember)"/>`;
+  s += `<text x="${o.labX ?? w / 2}" y="${h - (o.labB ?? 12)}" font-size="${o.labFs ?? 10.5}" fill="var(--dim)" text-anchor="middle" font-family="${o.labFont ?? 'inherit'}">${E(data.label || 'CIE 1931')}</text>`;
   return head(spec, data) + `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
 }
 

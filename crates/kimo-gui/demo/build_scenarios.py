@@ -112,8 +112,8 @@ scen("m05", "color", "dune_film.kimo", "codex", hms("00:26:51"),
    ["render_ocio_display_view", ["ACES2", "PQ"], 600], ["render_scope", ["clip_07", "cie1931"], 300], ["hdr_validate", ["clip_07", "PQ 1000"], 400], ["render_gamut_excursions", ["clip_07"], 900]],
   {"viewer": {"src": F("m05"), "tags": [{"text": "source"}, {"text": "false color", "pos": "tr"}], "tc": "01:00:42:19", "res": "3840 x 2160 24p"},
    "pipe": {"blocks": [K("input", "ARRI LogC4"), K("working", "ACEScg"), K("view", "ACES 2.0", emb=True, bar=True), K("output", "Rec.2100 PQ"), S("HDR"),
-             K("MaxCLL", "812 nits"), K("MaxFALL", "214 nits"), K("Peak", "1000 nits"), K("Out of gamut", "2.4%"), K("PQ check", "pass")]},
-   "scopes": {}, "cie": {"gamuts": [{"pts": [[.68, .32], [.265, .69], [.15, .06]], "label": "P3", "color": "#d9d4c9"}, {"pts": [[.64, .33], [.30, .60], [.15, .06]], "label": "Rec.709", "color": "#8a867d"}], "points": [[.44, .40]]}})
+             K("MaxCLL", "812 nits", h=34), K("MaxFALL", "214 nits", h=34), K("Peak", "1000 nits", h=34), K("Out of gamut", "2.4%", h=34), K("PQ check", "pass", h=34)]},
+   "scopes": json.load(open(os.path.join(HERE, "m05_scopes.json"))), "cie": {"gamuts": [{"pts": [[.68, .32], [.265, .69], [.15, .06]], "label": "P3", "color": "#efe9dd", "w": 2, "lpt": [.255, .715]}, {"pts": [[.64, .33], [.30, .60], [.15, .06]], "label": "Rec.709", "color": "#ffffff", "w": 1.6, "lpt": [.13, .2]}], "points": [[.3127, .329, "ring"]]}})
 
 # ---------------------------------------------------------------- m06 effects
 scen("m06", "effects", "neon_run.kimo", "claude", hms("00:18:22"),

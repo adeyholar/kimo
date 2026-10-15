@@ -3,7 +3,7 @@
 // object; a single rAF-batched render paints the current mode.
 import { connect } from './bridge.js';
 import { MODES, inferMode } from './modes.js';
-import { KINDS, tickRunning } from './panels.js';
+import { KINDS, POST, tickRunning } from './panels.js';
 
 const DESIGN_W = 1376, DESIGN_H = 768;
 
@@ -240,7 +240,9 @@ function render() {
     const fn = KINDS[spec.kind];
     if (!fn) continue;
     const w = el.clientWidth, h = el.clientHeight;
-    el.innerHTML = fn({ spec, data: V[name] || {}, view: V, state, w, h, mode: state.mode });
+    const args = { spec, data: V[name] || {}, view: V, state, w, h, mode: state.mode };
+    el.innerHTML = fn(args);
+    if (POST[spec.kind]) POST[spec.kind](el, args);
   }
 }
 
