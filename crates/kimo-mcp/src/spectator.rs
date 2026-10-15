@@ -213,9 +213,14 @@ fn clip_label(clip: &Value) -> Option<String> {
     pick(src).or_else(|| src.as_object().and_then(|o| o.values().find_map(pick)))
 }
 
+/// Dotted paths to leaf values; arrays of objects carrying an `id` (effects, masks, keys with ids) are keyed by
+/// that id, so `effects[fx5].params.amount.base` names one effect parameter however the list is ordered.
 fn flatten(prefix: &str, v: &Value, d: usize, out: &mut Map<String, Value>) {
+    let join = |k: &str| if prefix.is_empty() { k.to_string() } else { format!("{prefix}.{k}") };
     match v {
-        Value::Object(o) if d < 3 => for (k, x) in o { flatten(&if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") }, x, d + 1, out) },
+        Value::Object(o) if d < 6 => for (k, x) in o { flatten(&join(k), x, d + 1, out) },
+        Value::Array(a) if d < 6 && !a.is_empty() && a.iter().all(|x| x.get("id").and_then(|i| i.as_str()).is_some()) =>
+            for x in a { flatten(&format!("{prefix}[{}]", x["id"].as_str().unwrap_or("")), x, d + 1, out) },
         _ => { out.insert(prefix.to_string(), v.clone()); }
     }
 }
@@ -422,6 +427,8 @@ mod tests {
         assert_eq!(d["clip"]["fx.temp"], json!([5600, 6050]));
         assert_eq!(d["clips_added"][0]["clip_id"], "c2");
         assert_eq!(d["duration"], json!([2.0, 3.0]));
+        let fx = |v: f64| Snap { clip: Some(json!({"effects": [{"id": "fx5", "kind": "temperature", "params": {"amount": {"base": v}}}]})), ..Snap::default() };
+        assert_eq!(diff(&fx(0.0), &fx(0.35))["clip"], json!({"effects[fx5].params.amount.base": [0.0, 0.35]}));
     }
     #[test]
     fn base64_matches_rfc4648() {

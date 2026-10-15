@@ -222,6 +222,17 @@ Entries and sizes were measured on the v3.0.0 static Linux release build (`initi
 
 Set it like this: `claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -- /home/you/.local/bin/kimo-mcp`, or `[mcp_servers.kimo.env] KIMO_TOOLS = "core"` for Codex. For JSON configs add `"env": { "KIMO_TOOLS": "core" }` (OpenCode: `"environment": { ... }`).
 
+## Watching it work: spectator telemetry
+
+Set `KIMO_SPECTATOR=tcp://127.0.0.1:7421` (or `on`) on the server entry and every tool call streams live to the
+Kimo spectator app (`crates/kimo-gui`), which listens on that loopback port: a `start` event with the arguments,
+`progress` for long calls such as `export`, and `complete` with what changed in the project (or `error`), all
+under one `call_id`. `file:/path/events.jsonl` writes the same lines to a file. Unset, nothing runs. The stream is
+out of band: `tools/list`, results and stdout are byte-identical with it on or off, it never waits for the app,
+and with no app listening events are dropped. To watch in a plain browser instead of the app, run
+`python3 crates/kimo-mcp/tools/spectator_sse_relay.py` and open the UI with `?feed=sse`. Event fields:
+`crates/kimo-mcp/src/spectator.rs`.
+
 ## How an AI sees the tools
 
 Call a group with `{"action": "<tool name>", "args": {...}}`, for example `{"name": "vfx3d", "action": "add_scene3d", "args": {...}}`. Calling a tool by its own name also works.

@@ -138,6 +138,27 @@ fn stdout_is_byte_identical_with_telemetry_off_on_or_unreachable() {
 }
 
 #[test]
+fn effect_param_change_is_a_from_to() {
+    let p = tmp("fx.jsonl"); let _ = std::fs::remove_file(&p);
+    let mut reqs = requests()[..4].to_vec();
+    reqs.push(json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"add_effect","arguments":{"clip_id":"clip2","kind":"temperature","params":{"amount":0.0}}}}));
+    reqs.push(json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"set_effect_param","arguments":{"clip_id":"clip2","effect_id":"fx3","param":"amount","value":0.35}}}));
+    reqs.push(json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"effects","arguments":{"action":"set_effect_param","args":{"clip_id":"clip2","effect_id":"fx3","param":"amount","value":0.5}}}}));
+    run(Some(&format!("file:{}", p.display())), &reqs);
+    let evs = events_of(&std::fs::read_to_string(&p).unwrap());
+    let add = tool_events(&evs, "add_effect");
+    assert_eq!(add[1]["payload"]["effect"], "temperature");
+    assert_eq!(add[1]["payload"]["result"]["effect_id"], "fx3");
+    let set = tool_events(&evs, "set_effect_param");
+    assert_eq!(set.len(), 4, "direct call and group call both report under the resolved tool name");
+    assert_eq!(set[1]["payload"]["from"], 0.0); assert_eq!(set[1]["payload"]["to"], 0.35);
+    assert_eq!(set[1]["payload"]["changed"]["clip"]["effects[fx3].params.amount.base"], json!([0.0, 0.35]));
+    assert_eq!(set[2]["group"], "effects");
+    assert_eq!(set[3]["payload"]["from"], 0.35); assert_eq!(set[3]["payload"]["to"], 0.5);
+    let _ = std::fs::remove_file(&p);
+}
+
+#[test]
 fn render_frame_reaches_the_viewer() {
     let p = tmp("frame.jsonl"); let _ = std::fs::remove_file(&p);
     let png = tmp("frame.png");
