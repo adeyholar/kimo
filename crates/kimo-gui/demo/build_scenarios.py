@@ -148,10 +148,10 @@ scen("m07", "tracking", "city_billboard.kimo", "claude", hms("00:44:51"),
 scen("m08", "modelling", "amphora_study.kimo", "claude", hms("00:34:12"),
   [["generate_mesh_primitive", [], 100], ["mesh_lathe", ["profile", 96], 400], ["mesh_subdivide", ["vase", 2], 900], ["inspect_sdf_graph", ["vase"], 100], ["contour_sdf_graph", ["vase"], 100], ["mesh_boolean", ["vase", "slot"], 600]],
   {"viewer": {"src": F("m08"), "left": "wireframe on shaded", "res": "persp"},
-   "stack": {"nodes": [{"name": "lathe"}, {"name": "subdivide"}, {"name": "boolean diff", "em": True}, {"name": "contour_sdf"}]},
+   "stack": {"nodes": [{"name": "lathe"}, {"name": "subdivide"}, {"name": "boolean diff"}, {"name": "contour_sdf"}]},
    "insp": {"sub": "vase", "blocks": [S("Mesh"), K("Vertices", "24,576"), K("Triangles", "49,152", ch=True), K("Normals", "smooth"), K("Manifold", "yes"), S("Bounds"), K("Height", "1.42 m"), K("Radius", "0.38 m"), S("Export"), K("Format", "gltf")]},
-   "prof": {"pts": [[0, .1], [.15, .55], [.3, .8], [.45, .62], [.6, .3], [.75, .35], [.9, .7], [1, .9]], "cursor": .55,
-            "thumbs": [{"label": "cylinder", "src": F("m08_t1")}, {"label": "lathe", "src": F("m08_t2")}, {"label": "subdiv", "src": F("m08_t3")}, {"label": "boolean", "src": F("m08_t4"), "sel": True}]}})
+   "prof": {"pts": [[0, 0], [.2417, .089], [.4914, .357], [.6936, .634], [.7812, .853], [1, 1]], "cursor": .4914,
+            "thumbs": [{"label": "cylinder", "src": F("m08_t1")}, {"label": "lathe", "src": F("m08_t2")}, {"label": "subdiv", "src": F("m08_t3")}, {"label": "boolean", "src": F("m08_t4")}]}})
 
 # ---------------------------------------------------------------- m09 graphics
 scen("m09", "graphics", "drone_hud.kimo", "cursor", hms("00:27:40"),

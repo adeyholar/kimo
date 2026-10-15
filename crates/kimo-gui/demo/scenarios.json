@@ -5757,8 +5757,7 @@
       "name": "subdivide"
      },
      {
-      "name": "boolean diff",
-      "em": true
+      "name": "boolean diff"
      },
      {
       "name": "contour_sdf"
@@ -5812,38 +5811,30 @@
     "pts": [
      [
       0,
-      0.1
+      0
      ],
      [
-      0.15,
-      0.55
+      0.2417,
+      0.089
      ],
      [
-      0.3,
-      0.8
+      0.4914,
+      0.357
      ],
      [
-      0.45,
-      0.62
+      0.6936,
+      0.634
      ],
      [
-      0.6,
-      0.3
-     ],
-     [
-      0.75,
-      0.35
-     ],
-     [
-      0.9,
-      0.7
+      0.7812,
+      0.853
      ],
      [
       1,
-      0.9
+      1
      ]
     ],
-    "cursor": 0.55,
+    "cursor": 0.4914,
     "thumbs": [
      {
       "label": "cylinder",
@@ -5859,8 +5850,7 @@
      },
      {
       "label": "boolean",
-      "src": "../demo/frames/m08_t4.jpg",
-      "sel": true
+      "src": "../demo/frames/m08_t4.jpg"
      }
     ]
    }

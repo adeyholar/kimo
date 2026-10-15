@@ -87,7 +87,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 /* ---------- agent call log ---------- */
 .calls{position:absolute;inset:0;overflow:hidden}
 .call{position:absolute;left:0;right:0;height:var(--row);display:flex;align-items:center;
-  padding:0 var(--call-pr,14px) 0 var(--call-pl,15px);gap:var(--call-gap,9px);border-bottom:1px solid var(--line2);font-family:var(--call-font);
+  padding:0 var(--call-pr,14px) 0 var(--call-pl,15px);gap:var(--call-gap,9px);border-bottom:1px solid var(--call-line,var(--line2));font-family:var(--call-font);
   font-size:var(--call-fs,15px);font-weight:var(--call-w,400);letter-spacing:var(--call-ls,-.02em);white-space:nowrap;color:var(--text)}
 .call .ck{width:var(--ck-w,13px);font-weight:var(--ck-wt,400);flex:none;color:var(--ck-c,var(--dim));font-size:var(--ck-fs,13px);text-align:center;letter-spacing:0}
 .call .fn{color:var(--fn,inherit)}
@@ -99,7 +99,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .call.cur{background:var(--ember-tint);color:var(--cream)}
 .call.cur::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--ember)}
 .call.cur{color:var(--cur-text,#f6e2d3)}
-.call.cur .dur{color:var(--ember-text)}
+.call.cur .dur{color:var(--cur-dur,var(--ember-text))}
 .calls.chips .call{border:none;left:var(--chip-inset,10px);right:var(--chip-inset,10px);border-radius:var(--chiprow-r,4px);background:var(--raise)}
 .calls.chips .call.cur{background:var(--ember-tint)}
 .call.faded .fn,.call.faded .args{color:var(--faded,#8e8a82)}
@@ -271,3 +271,16 @@ body.calls-sans{--call-font:var(--sans)}
 /* keyframe diamonds on a clip (clip-local times placed on the ruler) */
 .clip .ckey{position:absolute;bottom:3px;width:7px;height:7px;margin-left:-3.5px;background:var(--cream);transform:rotate(45deg);box-shadow:0 0 0 1px #141412}
 .clip .ckey.em{background:var(--ember)}
+
+/* m08 modelling: centred Stack nodes, full-width section rules in the inspector, Profile/History tiles */
+.snode{display:flex;align-items:center;padding:0 10px;white-space:nowrap;border-radius:6px;border:1px solid var(--snode-b,#3e3d38);background:var(--snode-bg,#2b2a26);font-family:var(--mono);color:var(--cream)}
+.snode.em{border-color:var(--ember);background:var(--ember-tint)}
+.snode.flash{animation:kflash .7s ease-out 1}
+.kv.secrule .sec{border-top:1px solid var(--line);margin:0 -15px;padding-left:15px;padding-right:15px}
+.kv.secrule .sec:not(:first-child){margin-top:11px}
+.ptile{position:absolute;border-radius:6px;overflow:hidden;background:#2b2a27}
+.ptile img{width:100%;height:100%;object-fit:cover;display:block}
+.ptile.sel{box-shadow:inset 0 0 0 1px var(--ember)}
+.ptlab{position:absolute;text-align:center;font-family:var(--sans);font-size:var(--ptlab-fs,17px);line-height:22px;color:var(--cream)}
+
+.sig.noargs .pp{display:var(--empty-pp,inline)}

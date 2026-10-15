@@ -54,7 +54,7 @@ function agent({ spec, state, data, w, h }) {
     const recent = o.boldLast && i >= calls.length - o.boldLast;
     html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}${recent ? ' recent' : ''}${c.status === 'error' ? ' err' : ''}" style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
       (o.checkRight ? '' : ckEl) +
-      `<span class="sig"><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
+      `<span class="sig${args ? '' : ' noargs'}"><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
       (o.checkRight ? ckEl : '') +
       `<span class="dur" ${c.status === 'running' ? `data-run="${E(c.id)}"` : ''}>${dur}</span></div>`;
     if (cur && c.progress && o.progress) {
@@ -199,7 +199,7 @@ function gizmo(g, w, h, S, age) {
 function kv({ spec, data, w, h }) {
   const o = spec.opts || {};
   let html = head(spec, data);
-  html += `<div class="kv ${o.lines ? 'lines' : ''} ${o.topLine ? 'topline' : ''}" style="top:${o.top ?? (data.sub ? 69 : 46)}px${o.pad != null ? `;padding:0 ${o.pad}px` : ''}">`;
+  html += `<div class="kv ${o.lines ? 'lines' : ''} ${o.topLine ? 'topline' : ''} ${o.secRule ? 'secrule' : ''}" style="top:${o.top ?? (data.sub ? 69 : 46)}px${o.pad != null ? `;padding:0 ${o.pad}px` : ''}">`;
   for (const b of (data.blocks || [])) html += block(b, w - 30);
   return html + '</div>';
 }
@@ -761,9 +761,14 @@ function wheels({ spec, data, w, h }) {
 function stack({ spec, data, w, h }) {
   const o = spec.opts || {};
   let html = head(spec, data);
-  const y0 = o.y0 ?? 56, step = o.step ?? 64, cw = o.cw ?? 150;
+  const y0 = o.y0 ?? 56, step = o.step ?? 64, cw = o.cw ?? 150, nh = o.nodeH ?? 30;
   (data.nodes || []).forEach((n, i) => {
     const y = y0 + i * step;
+    if (o.center) {   // m08: nodes sized to their name, centred, joined by a hairline
+      if (i) html += `<div style="position:absolute;left:${px(w / 2 - .5)}px;top:${y - step + nh}px;width:1px;height:${step - nh}px;background:var(--stack-line,#45443f)"></div>`;
+      html += `<div class="snode${n.em ? ' em' : ''}${F(n)}" style="position:absolute;left:50%;transform:translateX(-50%);top:${y}px;height:${nh}px;font-size:${o.fs ?? 12}px">${E(n.name)}</div>`;
+      return;
+    }
     if (i) html += `<div style="position:absolute;left:${15 + cw / 2}px;top:${y - step + 30}px;width:1px;height:${step - 30}px;background:var(--faint)"></div>`;
     html += `<div style="position:absolute;left:15px;top:${y}px;width:${cw}px;height:30px;border:1px solid ${n.em ? 'var(--ember)' : 'var(--line)'};border-radius:4px;background:${n.em ? 'var(--ember-tint)' : 'var(--raise)'};display:flex;align-items:center;padding:0 10px;font-family:var(--mono);font-size:12px;color:var(--cream)">${E(n.name)}</div>`;
   });
@@ -772,6 +777,19 @@ function stack({ spec, data, w, h }) {
 // ---------- profile / history (modelling) ----------
 function profile({ spec, data, w, h }) {
   const o = spec.opts || {};
+  if (o.ax != null) {   // m08 measured layout: axis, baseline, smooth profile with hollow diamonds, cursor, 80px history tiles
+    const X = x => o.ax + x * (o.x1 - o.ax), Y = y => o.base - y * (o.base - o.top);
+    const pts = (data.pts || []).map(([x, y]) => [X(x), Y(y)]);
+    let s = `<line x1="${o.ax}" x2="${o.ax}" y1="${o.top - 6}" y2="${o.base}" stroke="var(--prof-axis,#24241f)" stroke-width="1"/><line x1="${o.ax}" x2="${o.x1}" y1="${o.base}" y2="${o.base}" stroke="var(--prof-base,#363531)" stroke-width="1.5"/>`;
+    if (data.cursor != null) s += `<line x1="${px(X(data.cursor))}" x2="${px(X(data.cursor))}" y1="${o.top - 6}" y2="${o.base}" stroke="#55534d" stroke-width="1"/>`;
+    if (pts.length > 1) s += `<path d="${o.smooth ? catmull(pts) : pts.map((q, i) => (i ? 'L' : 'M') + px(q[0]) + ' ' + px(q[1])).join('')}" fill="none" stroke="var(--cream)" stroke-width="1.5"/>`;
+    pts.forEach(q => s += `<path d="M${px(q[0])} ${px(q[1] - 4.5)}l4.5 4.5-4.5 4.5-4.5-4.5z" fill="${o.hollow ? 'var(--panel)' : 'var(--cream)'}" stroke="var(--cream)" stroke-width="1.3"/>`);
+    let html = head(spec, data) + `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
+    (data.thumbs || []).forEach((t, i) => { const x = o.tx + i * (o.tw + o.gap);
+      html += `<div class="ptile${t.sel ? ' sel' : ''}${F(t)}" style="left:${px(x)}px;top:${o.ty}px;width:${o.tw}px;height:${o.th}px">${t.src ? `<img src="${E(t.src)}" alt="">` : ''}</div>` +
+        `<div class="ptlab" style="left:${px(x - 10)}px;width:${o.tw + 20}px;top:${o.labY - 11}px">${E(t.label)}</div>`; });
+    return html;
+  }
   const gw = o.gw ?? Math.round(w * .38);
   let s = `<line x1="40" x2="40" y1="40" y2="${h - 14}" stroke="#2a2a28"/>`;
   const pts = (data.pts || []).map(([x, y]) => [40 + x * (gw - 60), h - 18 - y * (h - 60)]);

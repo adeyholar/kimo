@@ -20,7 +20,7 @@ export const FAMILIES = [
   ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut)/],
   ['audio', /^(set_|add_|apply_|auto_|measure_|normalize_|analyze_)?(mix|audio|gain|fader|mute|solo|pan|compress|eq|limiter|limit|loudness|duck|stem|bus|route_)|^track_beats$/],
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
-  ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf)/],
+  ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents)/],
   ['export', /^(export|render|queue_render|encode|deliver)/],
 ];
 export function family(name) {
@@ -537,9 +537,9 @@ function sceneOps(state, MODES, ev) {
       }
     }
     // mesh ops: a node on the Stack (modelling), newest in ember
-    if (/^mesh_/.test(tn) && ev.phase === 'complete') {
+    if (/^(mesh_|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents)/.test(tn) && ev.phase === 'complete') {
       const stk = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'stack');
-      if (stk) { const S = V[stk[0]] || (V[stk[0]] = {}); S.nodes = S.nodes || []; for (const n of S.nodes) n.em = false; const nm = { mesh_lathe: 'lathe', mesh_subdivide: 'subdivide', mesh_boolean: 'boolean ' + (A.op ?? A.operation ?? 'diff'), mesh_extrude_path: 'extrude path' }[tn] || tn.replace(/^mesh_/, ''); S.nodes.push({ name: nm, em: true, _flash: now() }); if (S.nodes.length > 7) S.nodes.splice(0, S.nodes.length - 7); hit = true; }
+      if (stk) { const S = V[stk[0]] || (V[stk[0]] = {}); S.nodes = S.nodes || []; for (const n of S.nodes) n.em = false; const nm = { mesh_lathe: 'lathe', mesh_subdivide: 'subdivide', mesh_boolean: 'boolean ' + (A.op ?? A.operation ?? 'diff'), mesh_extrude_path: 'extrude path', generate_mesh_primitive: String(A.shape ?? A.primitive ?? A.kind ?? 'primitive'), contour_sdf_graph: 'contour', set_mesh_pin: 'pin', derive_vertex_tangents: 'tangents' }[tn] || tn.replace(/^mesh_/, ''); S.nodes.push({ name: nm, em: true, _flash: now() }); if (S.nodes.length > 7) S.nodes.splice(0, S.nodes.length - 7); hit = true; }
     }
     // camera (m13): orbit ring with the camera on it at its pan, a frustum wedge opening at its fov,
     // a diamond per keyframed pan, the axis triad turned by the pan; scene objects into the Scene tree
