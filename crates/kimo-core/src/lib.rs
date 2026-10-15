@@ -80,4 +80,5 @@ pub mod uv_math;
 pub mod transition_raw;
 pub mod particle_fields;
 pub mod particle_advect;
+pub mod particle_flow;
 pub mod threed;
