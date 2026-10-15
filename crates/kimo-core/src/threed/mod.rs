@@ -7,6 +7,7 @@ pub mod flat_sah;
 pub mod sdf_graph;
 pub mod contour_wrapped;
 pub mod node_ingest;
+pub mod scene;
 pub mod offscreen_wgpu;
 pub mod texture_material;
 pub mod mikk_adapter;

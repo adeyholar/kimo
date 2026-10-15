@@ -64,6 +64,7 @@ clear_path_keys f99ff5da3693043a
 collect_project 689e1f8dd545e887
 compare_aces2_reference 59ec416ff6c4de21
 compare_linear_exposure afcdd34f6dab8f45
+compile_scene3d_descriptor 4bb1f8788eb01144
 compute_text_bounds a1e565a4cc3fe0e4
 connect_nodes b6edfff20b9c6d1f
 contact_sheet 4c3841fa11139b4c
