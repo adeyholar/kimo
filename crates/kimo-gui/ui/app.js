@@ -3,7 +3,7 @@
 // object; a single rAF-batched render paints the current mode.
 import { connect } from './bridge.js';
 import { MODES, inferMode } from './modes.js';
-import { KINDS, POST, tickRunning } from './panels.js';
+import { KINDS, POST, tickRunning, pickedRows } from './panels.js';
 import { route } from './router.js';
 
 const DESIGN_W = 1376, DESIGN_H = 768;
@@ -60,7 +60,7 @@ export function apply(ev) {
     }
     case 'tool_end': {
       const c = [...state.calls].reverse().find(x => x.id === ev.id) || state.calls[state.calls.length - 1];
-      if (c) { c.dur_ms = ev.dur_ms !== undefined ? ev.dur_ms : (performance.now() - c.t); /* null = the harness gave no latency: hidden */ c.status = ev.status || 'ok'; if (ev.args) c.args = ev.args; }
+      if (c) { c.dur_ms = ev.dur_ms !== undefined ? ev.dur_ms : (performance.now() - c.t); /* null = the harness gave no latency: hidden */ c.status = ev.status || 'ok'; if (ev.args) c.args = ev.args; if (ev.result !== undefined) c.result = ev.result; if (ev.error) c.error = ev.error; }
       break;
     }
     case 'tool_progress': {
@@ -286,18 +286,25 @@ function render() {
   renderTop();
   renderFooter();
   const M = MODES[state.mode], V = view(state.mode);
+  const pickCall = state.pick != null ? state.calls.find(c => c.id === state.pick) : null;
+  const kvs = Object.entries(M.panels).filter(([, sp]) => sp.kind === 'kv'), pickPanel = pickCall ? ((kvs.find(([, sp]) => sp.title === 'Inspector') || kvs[0] || [])[0]) : null;
   for (const [name, spec] of Object.entries(M.panels)) {
     const el = nodes[name]; if (!el) continue;
     const fn = KINDS[spec.kind];
     if (!fn) continue;
     const w = el.clientWidth, h = el.clientHeight;
-    const args = { spec, data: V[name] || {}, view: V, state, w, h, mode: state.mode };
+    let data = V[name] || {};
+    if (name === pickPanel && pickCall) data = { sub: `${pickCall.name}${pickCall.status === 'running' ? '' : ''}`, blocks: pickedRows(pickCall) };   // a clicked rail row, in the existing inspector
+    const args = { spec, data, view: V, state, w, h, mode: state.mode };
     el.innerHTML = fn(args);
     if (POST[spec.kind]) POST[spec.kind](el, args);
   }
 }
 
 window.addEventListener('resize', () => { layoutDirty = true; schedule(); });
+// click a rail row: its args / latency / result in the existing inspector; click it again or Esc to go back
+main.addEventListener('click', e => { const r = e.target.closest && e.target.closest('.call[data-call]'); if (!r) return; const id = r.dataset.call, c = state.calls.find(x => String(x.id) === id); state.pick = c && state.pick !== c.id ? c.id : null; schedule(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.pick != null) { state.pick = null; schedule(); } });
 window.__kimo = { state, apply: enqueue, metrics, setHidden };
 
 // Tauri: a minimized window keeps document.visibilityState on some

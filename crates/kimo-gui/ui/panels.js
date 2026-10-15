@@ -66,7 +66,7 @@ function agent({ spec, state, data, w, h }) {
     const faded = !cur && o.fade != null && i < calls.length - 1 - o.fade;
     const ch = cur && o.curH ? o.curH : rowH;
     const recent = o.boldLast && i >= calls.length - o.boldLast;
-    html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}${recent ? ' recent' : ''}${c.status === 'error' ? ' err' : ''}" style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
+    html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}${recent ? ' recent' : ''}${c.status === 'error' ? ' err' : ''}${state.pick != null && state.pick === c.id ? ' picked' : ''}"${c.id != null ? ` data-call="${E(c.id)}"` : ''} style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
       (o.checkRight ? '' : ckEl) +
       `<span class="sig${args ? '' : ' noargs'}"><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
       (o.checkRight && showCk ? ckEl : '') +
@@ -654,6 +654,19 @@ function paintFalseColor(cv, im) {
 }
 
 // After-mount painters (canvas): called by the render loop right after a panel's markup lands.
+// A rail row the person clicked: its own args, latency and result, as rows for the mode's EXISTING
+// inspector (no new panel). Only what the call carried; nested values are summarised, never invented.
+export function pickedRows(c) {
+  const short = v => v == null ? '' : typeof v === 'object' ? (Array.isArray(v) ? `[${v.length}]` : `{${Object.keys(v).slice(0, 3).join(', ')}${Object.keys(v).length > 3 ? ', …' : ''}}`) : typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : String(v);
+  const rows = [{ sec: 'Call' }, { k: 'Status', v: c.status === 'running' ? 'running' : c.status === 'error' ? 'error' : 'ok', ch: c.status === 'error' }];
+  const d = fmtDur(c.dur_ms); if (c.status !== 'running' && d) rows.push({ k: 'Latency', v: d });
+  if (c.error) rows.push({ k: 'Error', v: String(c.error).slice(0, 80), ch: true });
+  const A = c.args && typeof c.args === 'object' && !Array.isArray(c.args) ? Object.entries(c.args) : Array.isArray(c.args) ? c.args.map((v, i) => [`#${i + 1}`, v]) : c.args != null ? [['args', c.args]] : [];
+  if (A.length) { rows.push({ sec: 'Args' }); for (const [k, v] of A.slice(0, 12)) if (v != null && v !== '') rows.push({ k, v: short(v) }); }
+  const R = c.result && typeof c.result === 'object' ? Object.entries(c.result).filter(([, v]) => v != null && v !== '') : [];
+  if (R.length) { rows.push({ sec: 'Result' }); for (const [k, v] of R.slice(0, 8)) rows.push({ k, v: short(v) }); }
+  return rows;
+}
 export const POST = {
   cie(el, { spec, w, h }) {
     const cv = el.querySelector('canvas.ciecv'); if (!cv) return;

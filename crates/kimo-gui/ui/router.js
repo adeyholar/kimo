@@ -773,7 +773,7 @@ export function route(ev, state, MODES) {
     const dur = numOf(P.dur_ms) ?? numOf(ev.duration_ms) ?? (t0 != null && ev.ts_ms != null && ev.ts_ms >= t0 ? ev.ts_ms - t0 : null); ev._dur = dur;
     // the landed value replaces the rail's start-time args: "scale: 104% → 112%"
     const landed = !err && param && val != null ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
-    out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(landed ? { args: railArgs(state, landed) } : {}) });
+    out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(P.result !== undefined ? { result: P.result } : {}), ...(landed ? { args: railArgs(state, landed) } : {}) });
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
       if (/false_?colou?r/.test(String(ev.tool_name).toLowerCase())) { v.viewer = v.viewer || {}; v.viewer.falsecolor = { split: P.split ?? .5 }; }
