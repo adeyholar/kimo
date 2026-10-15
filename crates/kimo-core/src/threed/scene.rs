@@ -63,6 +63,20 @@ pub fn render_cpu(c:&Compiled,w:usize,h:usize)->Result<super::lit_raster::Output
  let materials:Vec<super::pbr::Material>=c.draws.iter().map(|d|surface_to_material(&d.surface)).collect();
  let refs:Vec<(&Stream,&super::pbr::Material)>=baked.iter().zip(materials.iter()).map(|(s,m)|(s,m)).collect();
  super::lit_raster::render_multi(&refs,&c.camera,w,h,&c.lights)}
+#[cfg(all(feature="mesh-import",feature="material-textures",feature="flat-sah"))]
+/// CP3: wgpu multi-draw executor bridge. Draws convert field-by-field to the pbr_offscreen
+/// contract (same shape by design): ONE shared Depth32Float, depth_compare Less - an exact
+/// depth tie keeps the EARLIER draw, matching the CPU painter tiebreak. The draw cap here is
+/// 64 (pbr_offscreen bound), tighter than the CPU executor's 256. Without the gpu3d feature
+/// this returns the typed "native gpu3d not compiled" error; with allow_cpu it falls back to
+/// the flat-SAH textured reference (gpu_rendered=false, reason reported). Output is UNORM
+/// clamped linear, NOT the ACES display-referred frame of render_cpu: CPU-vs-wgpu agreement
+/// is by tolerance metrics (pbr_offscreen::compare vs the flat-SAH reference; coverage IoU
+/// vs render_cpu), never bit-exact.
+pub fn render_wgpu(c:&Compiled,images:&[super::texture_material::Image],w:usize,h:usize,ambient:[f64;3],time:f64,software_only:bool,allow_cpu:bool)->Result<(crate::effects::Frame,super::pbr_offscreen::Status),String>{
+ if c.draws.len()>64{return Err(format!("wgpu executor max64 draws per scene pass (got {}); the CPU executor allows 256 - split the scene or use render_cpu",c.draws.len()));}
+ let draws:Vec<super::pbr_offscreen::Draw>=c.draws.iter().map(|d|super::pbr_offscreen::Draw{stream:d.stream.clone(),world:d.world,surface:d.surface.clone()}).collect();
+ super::pbr_offscreen::render(&draws,images,&c.camera,w,h,&c.lights,ambient,time,software_only,allow_cpu)}
 fn check_affine(m:&Matrix,what:&str)->Result<(),String>{if m[3]!=[0.,0.,0.,1.]||m.iter().flatten().any(|v|!v.is_finite()){return Err(format!("{what}: finite affine transform required (last row 0,0,0,1)"));}Ok(())}
 
 /// Structural validation only - no geometry is built. Unreferenced sources are
@@ -175,8 +189,99 @@ pub fn compile(s:&Scene,cache:&mut Cache)->Result<Compiled,String>{
   let far=render_cpu(&compile(&s_far,&mut Cache::new()).unwrap(),64,36).unwrap();
   let cx=(18*64+32)*4;assert!(multi.frame.d[cx]>far.frame.d[cx],"center pixel: near red out-radiances far blue channel (occlusion), {} vs {}",multi.frame.d[cx],far.frame.d[cx]);
   assert!(multi.frame.d.iter().zip(&far.frame.d).any(|(a,b)|a!=b),"multi differs from far-only baseline");}
+ #[cfg(all(feature="mesh-import",feature="material-textures",feature="flat-sah",not(feature="gpu3d")))]
+ #[test]fn render_wgpu_combo_without_gpu3d_typed_error_or_honest_fallback(){
+  let s=Scene{sources:vec![sphere_source()],nodes:vec![Node{source:0,world:ident(),material:0}],materials:vec![surf()],lights:vec![Light::Directional{travel_direction:[0.,0.,1.],radiance:[1.;3]}],camera:cam()};
+  let c=compile(&s,&mut Cache::new()).unwrap();
+  assert!(render_wgpu(&c,&[],64,36,[0.2;3],0.,true,false).unwrap_err().contains("native gpu3d not compiled"),"no gpu3d: typed error, never silent");
+  let(_,st)=render_wgpu(&c,&[],64,36,[0.2;3],0.,true,true).unwrap();assert!(!st.gpu_rendered);assert!(st.fallback_reason.is_some(),"allow_cpu: honest labeled fallback");}
  #[test]fn scene_json_roundtrip_deterministic(){let s=Scene{sources:vec![sphere_source()],nodes:vec![Node{source:0,world:ident(),material:0}],materials:vec![surf()],lights:vec![Light::Point{position:[0.,0.,3.],intensity:[1.;3],min_distance:0.01}],camera:cam()};
   let j=serde_json::to_string(&s).unwrap();let back:Scene=serde_json::from_str(&j).unwrap();assert_eq!(serde_json::to_string(&back).unwrap(),j,"JSON round-trip stable");}
+ #[cfg(all(feature="gpu3d",feature="mesh-import",feature="material-textures",feature="flat-sah",feature="surface-contour"))]
+ #[test]fn render_wgpu_mixed_scene_parity_llvmpipe(){
+  // mixed glTF + SDF contour + primitive through the wgpu executor (software adapter),
+  // VOLUMETRICALLY SEPARATED (screen-space overlap only): (a) gpu_rendered, (b) occlusion
+  // order matches the CPU executor, (c) tight tolerance parity vs the flat-SAH reference
+  // via pbr_offscreen::compare, (d) coverage IoU vs render_cpu. Intersecting surfaces are
+  // covered separately below - f32 raster vs f64 references disagree on a thin band there.
+  let cube=Stream{vertices:generate(&Primitive::Cube{size:[1.2;3],subdivisions:1}).unwrap().vertices,indices:generate(&Primitive::Cube{size:[1.2;3],subdivisions:1}).unwrap().indices};
+  let glb=crate::threed::gltf_export::to_glb(&cube).unwrap();
+  let graph=Graph{nodes:vec![crate::threed::sdf_graph::Field::Sphere{center:[0.;3],radius:0.8}],output:0};
+  let blue=Surface{albedo:[0.15,0.25,0.95],metallic:0.,roughness:0.5,base:None,metal_rough:None,occlusion:None,normal:None,ao_strength:1.,normal_scale:1.,double_sided:false};
+  let green=Surface{albedo:[0.15,0.85,0.25],metallic:0.,roughness:0.5,base:None,metal_rough:None,occlusion:None,normal:None,ao_strength:1.,normal_scale:1.,double_sided:false};
+  let s=Scene{
+   sources:vec![Source::Primitive{primitive:Primitive::Sphere{radius:0.8,longitude_slices:24,latitude_slices:12}},Source::GltfScene{bytes:glb,buffers:vec![],derive_tangents:false,scene_index:0},Source::SdfContour{graph,config:contour_wrapped::Config{bounds:[[-1.2;3],[1.2;3]],resolution:16,normal_epsilon:0.001}}],
+   nodes:vec![Node{source:0,world:{let mut m=ident();m[0][3]=-0.5;m[2][3]=2.5;m},material:0},Node{source:1,world:{let mut m=ident();m[0][3]=0.6;m[2][3]=4.0;m},material:2},Node{source:2,world:{let mut m=ident();m[0][3]=0.2;m[1][3]=0.55;m[2][3]=5.5;m},material:1},
+    Node{source:0,world:{let mut m=ident();m[0][0]=0.5;m[1][1]=0.5;m[2][2]=0.5;m[0][3]=0.75;m[1][3]=-0.8;m[2][3]=2.9;m},material:3},
+    Node{source:1,world:[[-0.45,0.,0.,-0.85],[0.,0.45,0.,-0.75],[0.,0.,0.45,4.4],[0.,0.,0.,1.]],material:3},
+    Node{source:1,world:[[-0.45,0.,0.,1.05],[0.,0.45,0.,0.75],[0.,0.,0.45,3.0],[0.,0.,0.,1.]],material:2}],
+   materials:vec![surf(),blue,green,Surface{albedo:[0.9,0.8,0.15],metallic:0.,roughness:0.5,base:None,metal_rough:None,occlusion:None,normal:None,ao_strength:1.,normal_scale:1.,double_sided:true}],
+   lights:vec![Light::Directional{travel_direction:[0.2,0.3,1.],radiance:[2.;3]}],
+   camera:Camera{eye:[0.,0.,0.],pan:0.,tilt:0.,roll:0.,sensor_height:24.,focal_length:35.,near:0.5}};
+  let (w,h)=(96,54);
+  let compiled=compile(&s,&mut Cache::new()).unwrap();assert_eq!(compiled.stats.draws,6);
+  // all 4 pipeline branches exercised: (double_sided x reflected-world) across the 6 draws
+  let branches:std::collections::BTreeSet<(bool,bool)>=compiled.draws.iter().map(|d|{let m=d.world;let det=m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1])-m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0])+m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0]);(d.surface.double_sided,det<0.)}).collect();
+  assert_eq!(branches.len(),4,"all (double,reflect) pipeline branches present: {branches:?}");
+  let(gpu,status)=render_wgpu(&compiled,&[],w,h,[0.2;3],0.,true,false).unwrap();
+  assert!(status.gpu_rendered,"llvmpipe adapter must render: {:?}",status.fallback_reason);
+  // (b) occlusion: center-left pixel is the NEAR red sphere, not anything behind it
+  let cid=((27*96)+40)*4;assert!(gpu.d[cid]>gpu.d[cid+1]&&gpu.d[cid]>gpu.d[cid+2],"near red wins at center-left: {:?}",&gpu.d[cid..cid+4]);
+  // (c) tolerance parity vs the flat-SAH reference on identical draws
+  let draws:Vec<crate::threed::pbr_offscreen::Draw>=compiled.draws.iter().map(|d|crate::threed::pbr_offscreen::Draw{stream:d.stream.clone(),world:d.world,surface:d.surface.clone()}).collect();
+  let reference=crate::threed::pbr_offscreen::cpu(&draws,&[],&s.camera,w,h,&s.lights,[0.2;3]).unwrap();
+  let cmp=crate::threed::pbr_offscreen::compare(&gpu,&reference,w,h).unwrap();
+  if let Ok(dir)=std::env::var("KIMO_GPU_PBR_FRAMES"){crate::render::write_image(&gpu,&format!("{dir}/cp3_gpu.png")).unwrap();crate::render::write_image(&reference,&format!("{dir}/cp3_ref.png")).unwrap();}
+  assert!(cmp.passed,"gpu vs flat-SAH reference parity: {cmp:?}");
+  // (d) coverage IoU vs the CPU scene executor (different shading path: metric, not bit-exact)
+  let cpu=render_cpu(&compiled,w,h).unwrap();
+  let cov=|f:&crate::effects::Frame|(0..w*h).map(|i|f.d[i*4+3]>0.5).collect::<Vec<_>>();
+  let(a,b)=(cov(&gpu),cov(&cpu.frame));
+  let inter=a.iter().zip(&b).filter(|(x,y)|**x&&**y).count();let union=a.iter().zip(&b).filter(|(x,y)|**x||**y).count();
+  let iou=inter as f64/union as f64;assert!(iou>0.98,"coverage IoU gpu vs render_cpu {iou:.4}");
+  println!("SCENE-WGPU parity: compare={cmp:?} iou_vs_render_cpu={iou:.4}");}
+ #[cfg(all(feature="gpu3d",feature="mesh-import",feature="material-textures",feature="flat-sah",feature="surface-contour"))]
+ #[test]fn render_wgpu_intersecting_surfaces_band_is_bounded_and_layering_holds(){
+  // DOCUMENTED LIMIT, pinned honestly: where surfaces genuinely intersect, the f32 wgpu
+  // rasterizer and the f64 flat-SAH raycast reference disagree on a thin band around the
+  // intersection curve (measured: one scanline, ~0.5% coverage, full material flips inside
+  // the band). Not a shading bug: coarse layering must hold everywhere else. We pin the
+  // bounded-band behavior + coarse layering, and REPORT the metrics rather than hiding them.
+  let blue=Surface{albedo:[0.15,0.25,0.95],metallic:0.,roughness:0.5,base:None,metal_rough:None,occlusion:None,normal:None,ao_strength:1.,normal_scale:1.,double_sided:false};
+  let green=Surface{albedo:[0.15,0.85,0.25],metallic:0.,roughness:0.5,base:None,metal_rough:None,occlusion:None,normal:None,ao_strength:1.,normal_scale:1.,double_sided:false};
+  let s=Scene{
+   sources:vec![Source::Primitive{primitive:Primitive::Sphere{radius:1.,longitude_slices:24,latitude_slices:12}},Source::Primitive{primitive:Primitive::Sphere{radius:1.,longitude_slices:24,latitude_slices:12}}],
+   nodes:vec![Node{source:0,world:{let mut m=ident();m[2][3]=3.4;m},material:0},Node{source:1,world:{let mut m=ident();m[0][3]=0.4;m[2][3]=4.0;m},material:1}],
+   materials:vec![green,blue],
+   lights:vec![Light::Directional{travel_direction:[0.2,0.3,1.],radiance:[2.;3]}],
+   camera:Camera{eye:[0.,0.,0.],pan:0.,tilt:0.,roll:0.,sensor_height:24.,focal_length:35.,near:0.5}};
+  let (w,h)=(96,54);
+  let compiled=compile(&s,&mut Cache::new()).unwrap();
+  let(gpu,status)=render_wgpu(&compiled,&[],w,h,[0.2;3],0.,true,false).unwrap();assert!(status.gpu_rendered);
+  let draws:Vec<crate::threed::pbr_offscreen::Draw>=compiled.draws.iter().map(|d|crate::threed::pbr_offscreen::Draw{stream:d.stream.clone(),world:d.world,surface:d.surface.clone()}).collect();
+  let reference=crate::threed::pbr_offscreen::cpu(&draws,&[],&s.camera,w,h,&s.lights,[0.2;3]).unwrap();
+  let cmp=crate::threed::pbr_offscreen::compare(&gpu,&reference,w,h).unwrap();
+  let(gd,rd)=(&gpu.d,&reference.d);
+  let rows:std::collections::BTreeSet<usize>=(1..h-1).flat_map(|y|(1..w-1).filter_map(move |x|{let id=(y*w+x)*4;let e=(0..3).map(|j|(gd[id+j]-rd[id+j]).abs()).fold(0f32,f32::max);(e>8./255.).then_some(y)})).collect();
+  assert!(rows.len()<=3,"intersection disagreement confined to a thin band, rows={rows:?}");
+  assert!((cmp.coverage_mismatches as f64/(w*h) as f64)<0.02,"coverage disagreement bounded: {}",cmp.coverage_mismatches);
+  // coarse layering: left-of-center the NEAR green sphere wins in BOTH executors
+  let cid=((27*96)+34)*4;assert!(gpu.d[cid+1]>gpu.d[cid]&&gpu.d[cid+1]>gpu.d[cid+2],"gpu near green at left: {:?}",&gpu.d[cid..cid+4]);
+  assert!(reference.d[cid+1]>reference.d[cid]&&reference.d[cid+1]>reference.d[cid+2],"ref near green at left");
+  println!("SCENE-WGPU intersecting: band_rows={} coverage_mismatches={} max_rgb={:.3} (documented f32-vs-f64 band)",rows.len(),cmp.coverage_mismatches,cmp.max_rgb_error);}
+ #[cfg(all(feature="mesh-import",feature="material-textures",feature="flat-sah"))]
+ #[test]fn render_wgpu_over_64_draws_is_a_descriptive_typed_error(){
+  let s=Scene{sources:vec![sphere_source()],nodes:(0..65).map(|_|Node{source:0,world:ident(),material:0}).collect(),materials:vec![surf()],lights:vec![],camera:cam()};
+  let c=compile(&s,&mut Cache::new()).unwrap();assert_eq!(c.draws.len(),65);
+  let e=match render_wgpu(&c,&[],64,36,[0.2;3],0.,true,true){Err(e)=>e,Ok(_)=>panic!("65 draws must be rejected")};
+  assert_eq!(e,"wgpu executor max64 draws per scene pass (got 65); the CPU executor allows 256 - split the scene or use render_cpu");
+  // at exactly 64 the error must NOT fire (dispatch proceeds to the backend)
+  let s=Scene{sources:vec![sphere_source()],nodes:(0..64).map(|_|Node{source:0,world:ident(),material:0}).collect(),materials:vec![surf()],lights:vec![],camera:cam()};
+  let c=compile(&s,&mut Cache::new()).unwrap();
+  #[cfg(not(feature="gpu3d"))]
+  assert!(render_wgpu(&c,&[],64,36,[0.2;3],0.,true,false).unwrap_err().contains("native gpu3d not compiled"),"64 draws: past the cap check, fails only at backend dispatch");
+  #[cfg(feature="gpu3d")]
+  {let(_,st)=render_wgpu(&c,&[],64,36,[0.2;3],0.,true,false).unwrap();assert!(st.gpu_rendered,"64 draws render on the adapter");}}
  #[cfg(all(feature="mesh-import",feature="surface-contour"))]
  #[test]fn render_cpu_mixed_gltf_and_sdf_sources_matches_argmin_oracle(){
   // in-memory glTF scene (round-tripped cube) + SDF contour sphere, overlapping: the
