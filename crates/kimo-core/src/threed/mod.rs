@@ -5,6 +5,7 @@ pub mod flat_sah;
 pub mod sdf_graph;
 pub mod contour_wrapped;
 pub mod node_ingest;
+pub mod offscreen_wgpu;
 pub mod sdf;
 pub mod pbr;
 pub mod cpu;
