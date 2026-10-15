@@ -173,6 +173,8 @@ match_color 7826baef90c3deb6
 match_events ccd11b0e9f67e25e
 match_grade d8125018a0c24142
 measure_loudness 54d9c472309111d9
+mesh_extrude_path 5a29070026fdaaed
+mesh_lathe 24a15bfc8857aa04
 motion_diff daa6747b3e2f0f44
 motion_extract 9bb3ed6ee01657a4
 move_clip 7a2fedebbc66bea9
