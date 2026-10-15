@@ -48,7 +48,7 @@ function agent({ spec, state, data, w, h }) {
     const faded = !cur && o.fade != null && i < calls.length - 1 - o.fade;
     html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}" style="top:${y}px;height:${rowH}px">` +
       (o.checkRight ? '' : ckEl) +
-      `<span class="sig"><span class="fn">${E(c.name)}</span><span class="args">(${E(args)})</span></span>` +
+      `<span class="sig"><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
       (o.checkRight ? ckEl : '') +
       `<span class="dur" ${c.status === 'running' ? `data-run="${E(c.id)}"` : ''}>${dur}</span></div>`;
     if (cur && c.progress && o.progress) {
@@ -114,7 +114,7 @@ function overlay(ov, w, h) {
 function kv({ spec, data, w, h }) {
   const o = spec.opts || {};
   let html = head(spec, data);
-  html += `<div class="kv ${o.lines ? 'lines' : ''}" style="top:${o.top ?? (data.sub ? 69 : 46)}px">`;
+  html += `<div class="kv ${o.lines ? 'lines' : ''} ${o.topLine ? 'topline' : ''}" style="top:${o.top ?? (data.sub ? 69 : 46)}px${o.pad != null ? `;padding:0 ${o.pad}px` : ''}">`;
   for (const b of (data.blocks || [])) html += block(b, w - 30);
   return html + '</div>';
 }
@@ -203,7 +203,7 @@ function ruler(r, X, y, o = {}) {
   const last = r.last ?? r.t1;
   for (let t = r.t0; t <= last + 1e-6; t += r.step) {
     const x = X(t);
-    const tr = r.align === 'right' ? 'translateX(-100%) translateX(-5px)' : r.align === 'left' ? `translateX(${r.lx ?? 4}px)` : 'translateX(-50%)';
+    const tr = r.edge && t === r.t0 ? 'none' : r.edge && t + r.step > last + 1e-6 ? 'translateX(-100%)' : r.align === 'right' ? 'translateX(-100%) translateX(-5px)' : r.align === 'left' ? `translateX(${r.lx ?? 4}px)` : 'translateX(-50%)';
     s += `<span style="left:${px(x)}px;transform:${tr}">${fmtT(Math.round(t * 100) / 100, r.fmt)}</span>`;
     if (r.ticks !== false) s += `<i style="left:${px(x)}px"></i>`;
   }
@@ -220,8 +220,9 @@ function wave(w, h, seed, amp = .8, dens = 1, sym = true) {
   return `M${up.join(' L')} L${dn.reverse().join(' L')}Z`;
 }
 function smoothArea(w, h, a) {
-  const R = rng(a.seed || 1); const n = 9; const pts = [];
-  for (let i = 0; i <= n; i++) pts.push([i / n * w, h * (a.base ?? .5) + (R() - .5) * h * (a.amp ?? .35)]);
+  const R = rng(a.seed || 1); const pts = [];
+  if (a.pts) a.pts.forEach((v, i) => pts.push([i / (a.pts.length - 1) * w, v * h]));  // explicit envelope (0 = top)
+  else { const n = 9; for (let i = 0; i <= n; i++) pts.push([i / n * w, h * (a.base ?? .5) + (R() - .5) * h * (a.amp ?? .35)]); }
   let d = `M0 ${h} L${px(pts[0][0])} ${px(pts[0][1])}`;
   for (let i = 1; i < pts.length; i++) { const [x0, y0] = pts[i - 1], [x1, y1] = pts[i], mx = (x0 + x1) / 2; d += ` C${px(mx)} ${px(y0)} ${px(mx)} ${px(y1)} ${px(x1)} ${px(y1)}`; }
   return d + ` L${px(w)} ${h}Z`;
@@ -239,7 +240,7 @@ function timeline({ spec, data, w, h }) {
     html += `<div class="trk" style="top:${y}px;height:${th}px">`;
     if (t.area) html += `<svg style="position:absolute;left:${px(X(t.area.s ?? r.t0))}px;top:0;width:${px((x1) - X(t.area.s ?? r.t0))}px;height:${th}px" viewBox="0 0 ${px(x1 - X(t.area.s ?? r.t0))} ${th}"><rect width="100%" height="100%" rx="7" fill="${t.area.bg || '#2a2824'}"/><path d="${smoothArea(x1 - X(t.area.s ?? r.t0), th, t.area)}" fill="${t.area.fill || '#4a4741'}"/></svg>`;
     if (t.label) html += t.chip ? `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? 120}px">${E(t.label)}</span>` : `<span class="lab">${E(t.label)}</span>`;
-    if (t.lane) html += `<div style="position:absolute;left:${x0}px;right:${w - x1}px;top:3px;bottom:3px;border-radius:5px;background:${t.lane}"></div>`;
+    if (t.lane) { const li = t.laneInset ?? o.laneInset ?? 3; html += `<div class="lane" style="position:absolute;left:${x0}px;right:${w - x1}px;top:${li}px;bottom:${li}px;background:${t.lane}"></div>`; }
     if (t.wave) {
       const a = X(t.wave.s ?? r.t0), b = X(t.wave.e ?? r.t1), wh = th - 6;
       html += `<svg style="position:absolute;left:${px(a)}px;top:3px;width:${px(b - a)}px;height:${wh}px" viewBox="0 0 ${px(b - a)} ${wh}"><path d="${wave(b - a, wh, t.wave.seed || 3, t.wave.amp ?? .8, t.wave.dens ?? 1)}" fill="${t.wave.color || '#5f5c56'}"/>` +
@@ -333,8 +334,8 @@ function transcript({ spec, data, w, h }) {
   const o = spec.opts || {};
   let html = head(spec, data);
   (data.lines || []).forEach((L, i) => {
-    html += `<div style="position:absolute;left:15px;top:${(o.y0 ?? 50) + i * (o.step ?? 40)}px;height:24px;display:flex;align-items:center;gap:14px;white-space:nowrap;font-size:13px">` +
-      `<span class="mono dim" style="font-size:11.5px">${E(L.spk)}</span><span class="mono dim" style="font-size:11.5px">${E(L.tc)}</span><span>${L.html || E(L.text)}</span></div>`;
+    html += `<div class="tline" style="top:${px((o.y0 ?? 47) + i * (o.step ?? 40))}px">` +
+      `<span class="spk">${E(L.spk)}</span><span class="ttc">${E(L.tc)}</span><span class="tx">${L.html || E(L.text)}</span></div>`;
   });
   return html;
 }

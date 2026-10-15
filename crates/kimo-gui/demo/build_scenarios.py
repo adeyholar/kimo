@@ -49,15 +49,15 @@ scen("m01", "captions", "dune_film.kimo", "codex", hms("00:18:36"),
    "insp": {"sub": "title_01 · DUNE", "blocks": [K("Font", "Geist 500"), K("Size", "96"), K("Tracking", "+40"), K("Animator", "fade_up"), K("Range", "0 – 100%"),
             K("Offset Y", "24px"), K("Opacity", "0 – 100"), K("Stagger", "2f"), S("Captions"), K("Style", "kinetic_pop"), K("Max chars", "32"), K("Check", "0 issues")]},
    "trans": {"lines": [{"spk": "S1", "tc": "00:09", "text": "The desert keeps time."},
-                       {"spk": "S1", "tc": "00:14", "html": "Every step <s class=\"dim\">erase</s> <span class=\"em\" style=\"text-decoration:underline;text-underline-offset:3px\">erased</span>."},
+                       {"spk": "S1", "tc": "00:14", "html": "Every step <s>erase</s> <span class=\"fix\">erased</span> ."},
                        {"spk": "S1", "tc": "00:19", "text": "Walk anyway."}]},
-   "tl": {"ruler": {"t0": 0, "t1": 20, "step": 5}, "playhead": 12.2, "tracks": [
-      {"label": "V2", "clips": [{"s": 0, "e": 9.6, "label": "walk_ridge", "cls": "mauve"}, {"s": 9.8, "e": 20, "label": "dune_ridge", "cls": "mauve"}]},
-      {"label": "V1", "clips": []},
-      {"label": "A1", "wave": {"seed": 5, "amp": .8}},
-      {"label": "CAP", "clips": [{"s": 0, "e": 1.6, "label": "The", "cls": "cap"}, {"s": 1.7, "e": 3.8, "label": "desert", "cls": "cap"}, {"s": 3.9, "e": 5.7, "label": "keeps", "cls": "cap"}, {"s": 5.8, "e": 7.8, "label": "time.", "cls": "cap"},
-                                 {"s": 8.2, "e": 9.9, "label": "Every", "cls": "cap"}, {"s": 10.0, "e": 11.6, "label": "step", "cls": "cap"}, {"s": 11.7, "e": 13.9, "label": "erased.", "cls": "cap emb"},
-                                 {"s": 14.4, "e": 16.6, "label": "Walk", "cls": "cap"}, {"s": 16.7, "e": 19.6, "label": "anyway.", "cls": "cap"}]}]}},
+   "tl": {"ruler": {"t0": 0, "t1": 20, "step": 5, "ticks": False, "edge": True}, "playhead": 9.67, "tracks": [
+      {"label": "V2", "clips": [{"s": 0, "e": 10.17, "label": "walk_ridge", "cls": "mauve", "thumb": F("m01_t1")}, {"s": 10.36, "e": 20, "label": "dune_ridge", "cls": "mauve", "thumb": F("m01_t2")}]},
+      {"label": "V1", "lane": "#252422", "clips": []},
+      {"label": "A1", "area": {"pts": [1.0, 0.83, 0.49, 0.34, 0.57, 0.63, 0.43, 0.23, 0.4, 0.66, 0.86, 0.86, 0.91, 1.0], "bg": "#252422", "fill": "#5f5f59"}},
+      {"label": "CAP", "clips": [{"s": 0, "e": 1.64, "label": "The", "cls": "cap"}, {"s": 1.78, "e": 4.03, "label": "desert", "cls": "cap"}, {"s": 4.19, "e": 6.33, "label": "keeps", "cls": "cap"}, {"s": 6.47, "e": 8.38, "label": "time.", "cls": "cap"},
+                                 {"s": 8.52, "e": 10.58, "label": "Every", "cls": "cap"}, {"s": 10.74, "e": 12.52, "label": "step", "cls": "cap"}, {"s": 12.68, "e": 15.12, "label": "erased.", "cls": "cap emb"},
+                                 {"s": 15.29, "e": 17.21, "label": "Walk", "cls": "cap"}, {"s": 17.34, "e": 20.0, "label": "anyway.", "cls": "cap"}]}]}},
   stats={"cpu": 58, "ffmpeg": "7.1", "saved_s": 1})
 
 # ---------------------------------------------------------------- m02 batch
