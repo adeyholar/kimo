@@ -241,6 +241,7 @@ ripple_delete af7455d513b9e3c9
 ripple_trim 67fb9388eed31127
 roll_edit 0e15462a35d306ee
 roto_propagate d82172bedca52a94
+sample_advection_field ab3eee077d0b8488
 sample_diffuse_sh_raw 7d79d4f10018ecab
 sample_direct_lighting ea9833caf846de5b
 sample_field 00e7b2d0d2c14a73
