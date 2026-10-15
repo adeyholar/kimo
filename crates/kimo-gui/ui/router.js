@@ -10,6 +10,8 @@
 // still get the rail, an inspector diff of their payload and a HUD pulse, so
 // no tool call is ever invisible. Pure data: nothing here touches the DOM.
 
+import { READONLY } from './modes.js';
+
 export const FAMILIES = [
   ['ingest', /^(import|ingest|add_media|relink|load_media|add_clip|add_track|insert)/],
   ['edit', /^(cut|split|blade|razor|trim|extend|ripple|slip|slide|move_clip|delete_clip|lift|roll)/],
@@ -23,6 +25,7 @@ export const FAMILIES = [
 ];
 export function family(name) {
   const n = String(name || '').toLowerCase();
+  if (READONLY.test(n)) return 'inspect';
   for (const [f, re] of FAMILIES) if (re.test(n)) return f;
   return 'other';
 }
@@ -347,6 +350,7 @@ export function route(ev, state, MODES) {
   if (!ev || ev.type || !ev.tool_name) return [ev];        // legacy or non-tool event: unchanged
   const fam = family(ev.tool_name), id = ev.call_id ?? ev.tool_name + '@' + (ev.ts ?? '');
   const out = [];
+  if (fam === 'inspect') return inspectOps(state, MODES, ev, id);
   const T = ev.target || {}, P = ev.payload || {};
   const param = T.param || P.param, val = P.to ?? P.value;
   const args = { ...(T.clip_id ? { clip: T.clip_id } : {}), ...(param && val != null ? { [param]: fmtVal(val, param) } : {}) };
@@ -376,4 +380,49 @@ export function route(ev, state, MODES) {
     } else { if (fam === 'export') exportOps(state, MODES, ev); hud(state, ev, fam, ev.tool_name + ' failed'); }
   }
   return out;
+}
+
+
+// Read-only family (get_/list_/inspect_/probe_/sample_/query…): the call changes nothing, so nothing
+// on the canvas or timeline is mutated and the workspace does not move. What the spectator sees: the
+// rail entry, the HUD pill in its quiet "read" state with what came back ("get_transform · x 40, y 0"),
+// and a cream peek ring on the element the call read (its clip, track label or inspector row).
+const summary = r => {
+  if (r == null || r === '') return '';
+  if (Array.isArray(r)) return r.length + (r.length === 1 ? ' item' : ' items');
+  if (typeof r !== 'object') { const s = String(r); return s.length > 36 ? s.slice(0, 35) + '…' : s; }
+  const parts = [];
+  for (const [k, v] of Object.entries(r)) {
+    if (v == null || /^(ok|path|kimo_build|build|ts|ts_ms|dur_ms)$/.test(k)) continue;
+    if (Array.isArray(v)) parts.push(`${k.replace(/_/g, ' ')} ×${v.length}`);
+    else if (typeof v !== 'object') { const f = fmtVal(v, k); if (f !== '' && f.length <= 18) parts.push(`${k.replace(/_/g, ' ')} ${f}`); }
+    if (parts.length === 2) break;
+  }
+  return parts.join(', ');
+};
+function inspectOps(state, MODES, ev, id) {
+  const P = ev.payload || {}, T = ev.target || {}, A = P.args || {};
+  const out = [];
+  if (ev.phase === 'start') {
+    out.push({ type: 'tool_start', id, name: ev.tool_name, args: Object.keys(A).length ? A : undefined, read: true });
+    hud(state, ev, 'inspect', ev.tool_name);
+    peek(state, MODES, { clip_id: T.clip_id ?? A.clip_id, track_id: T.track_id ?? A.track_id, param: T.param ?? A.param ?? A.property });
+  } else if (ev.phase === 'progress') {
+    const pct = P.pct;
+    out.push({ type: 'tool_progress', id, progress: { pct } });
+  } else {
+    const err = ev.phase === 'error', dur = P.dur_ms ?? ev.duration_ms, sm = err ? '' : summary(P.result);
+    out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, read: true });
+    hud(state, ev, 'inspect', ev.tool_name + (err ? ' failed' : sm ? ' · ' + sm : ' ✓'));
+  }
+  return out;
+}
+function peek(state, MODES, t) {
+  const tl = state.liveTL || panels(state, MODES, ['timeline'])[0];
+  if (t.clip_id != null) { const [tr, i] = findClip(tl, { clip_id: t.clip_id, track_id: t.track_id }); if (tr) tr.clips[i]._peek = now(); }
+  else if (t.track_id != null) { const tr = findTrack(tl, t.track_id); if (tr) tr._peek = now(); }
+  if (t.param != null) {
+    const kv = panels(state, MODES, ['kv'])[0], k = String(t.param).toLowerCase().replace(/_/g, ' ');
+    const row = kv && (kv.blocks || []).find(b => b.k && b.k.toLowerCase() === k); if (row) row._peek = now();
+  }
 }

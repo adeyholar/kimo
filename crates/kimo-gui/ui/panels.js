@@ -2,7 +2,7 @@
 // returns markup; geometry comes from the measured panel box and fixed row
 // heights, so a value changing never changes a box.
 import { flashing, METER_MS } from './router.js';
-const F = o => (o && flashing(o._flash) ? ' flash' : '');
+const F = o => (o && flashing(o._flash) ? ' flash' : '') + (o && flashing(o._peek) ? ' peek' : '');
 const E = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const px = n => Math.round(n * 10) / 10;
 
@@ -87,7 +87,7 @@ function viewer({ spec, data, w, h, state }) {
     html += `<span class="tag" style="${pos};top:${t.y ?? 10}px">${E(t.text)}</span>`;
   }
   const hd = state && state.hud;
-  if (hd && performance.now() - hd.t < 1600) html += `<span class="hud${hd.phase === 'error' ? ' err' : ''}" style="right:${o.hudX ?? 10}px;top:${o.hudY ?? 10}px"><i></i>${E(hd.fam)} · ${E(hd.text)}</span>`;
+  if (hd && performance.now() - hd.t < 1600) html += `<span class="hud${hd.phase === 'error' ? ' err' : hd.fam === 'inspect' ? ' read' : ''}" style="right:${o.hudX ?? 10}px;top:${o.hudY ?? 10}px"><i></i>${E(hd.fam)} · ${E(hd.text)}</span>`;
   html += '</div>';
   if (data.progress) {
     const p = data.progress, y = pt + fh + (o.progY ?? 14);

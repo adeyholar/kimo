@@ -116,8 +116,12 @@ const RULES = [
   [/grade|white_balance|match_shot|analyze_frame/, 'grading'],
   [/trim|cut|add_clip|split|ripple/, 'edit'],
 ];
+// Read-only tools (queries, probes, samples, listings, descriptions): they change nothing, so they
+// never move the workspace; the router gives them the "inspect" HUD state instead.
+export const READONLY = /^(get_|list_|inspect_|probe_|sample_|query|describe_|read_|find$|search_tools$|job_status$|session_stats$|cache_stats$|kimo_info$|kimo_describe$|history_list$|ext_list$|recipe_list$|template_list$|path_info$|fit_info$|explain_)|_describe$/;
 export function inferMode(name) {
   if (!name) return null;
+  if (READONLY.test(String(name).toLowerCase())) return null;
   for (const [re, m] of RULES) if (re.test(name)) return m;
   return null;
 }

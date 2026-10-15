@@ -100,6 +100,26 @@ async def main():
         if not idle: fails.append('idle')
         if errs: print('page errors:', errs); fails.append('pageerror')
 
+        # ---- read-only family: quiet HUD read state + result pill + peek ring, nothing mutated, no mode hop ----
+        snap = "() => JSON.stringify([__kimo.state.mode, [...document.querySelectorAll('[data-panel=tl] .clip')].length, [...document.querySelectorAll('[data-panel=insp] .row, [data-panel=insp] .sec')].map(e => e.textContent)])"
+        s0 = await pg.evaluate(snap)
+        await pg.evaluate('e => __kimo.apply(e)', {'tool_name': 'get_transform', 'call_id': 'r1', 'phase': 'start', 'target': {'track_id': 'V1', 'clip_id': 'dune_ridge', 'param': 'Scale'}, 'payload': {'args': {'clip_id': 'dune_ridge'}}})
+        await frame()
+        peek = await pg.evaluate("[document.querySelectorAll('[data-panel=tl] .clip.peek').length, document.querySelectorAll('[data-panel=insp] .row.peek').length]")
+        await pg.evaluate('e => __kimo.apply(e)', {'tool_name': 'get_transform', 'call_id': 'r1', 'phase': 'complete', 'target': {'track_id': 'V1', 'clip_id': 'dune_ridge'}, 'payload': {'dur_ms': 3.2, 'result': {'x': 40, 'y': 0, 'scale': 1.04}}, 'duration_ms': 3.2})
+        await frame()
+        h1 = await pg.evaluate("(() => { const h = document.querySelector('[data-panel=viewer] .hud'); return h ? [h.className, h.textContent] : ['', ''] })()")
+        for k, (nm, res) in enumerate([('list_masks', [{'id': 'm1'}, {'id': 'm2'}]), ('sample_pbr_raw', [0.1, 0.2, 0.3]), ('inspect_color_pipeline', {'working': 'ACEScct', 'view': 'sRGB'})]):
+            await pg.evaluate('e => __kimo.apply(e)', {'tool_name': nm, 'call_id': f'r{k + 2}', 'phase': 'start', 'target': {}, 'payload': {}})
+            await pg.evaluate('e => __kimo.apply(e)', {'tool_name': nm, 'call_id': f'r{k + 2}', 'phase': 'complete', 'target': {}, 'payload': {'dur_ms': 1.0, 'result': res}, 'duration_ms': 1.0})
+        await frame()
+        h2 = await pg.evaluate("document.querySelector('[data-panel=viewer] .hud') ? document.querySelector('[data-panel=viewer] .hud').textContent : ''")
+        s1 = await pg.evaluate(snap); bad = await pg.evaluate(BAD); railn = await pg.evaluate(rail)
+        ok_r = (peek[0] >= 1 and 'read' in h1[0] and 'get_transform · x 40, y 0' in h1[1] and s0 == s1 and not bad
+                and all(n in railn for n in ['get_transform', 'list_masks', 'sample_pbr_raw', 'inspect_color_pipeline']) and 'working ACEScct, view sRGB' in h2)
+        print(f"{'PASS' if ok_r else 'FAIL'}  read-only inspect state: peek clip={peek[0]} row={peek[1]} hud '{h1[1]}' ({h1[0]}) last '{h2}' unchanged mode/clips/inspector={s0 == s1}")
+        if not ok_r: fails.append('inspect')
+
         # ---- cold real-engine session (?feed=off): events shaped like kimo-mcp's (no `type`) ----
         pg2 = await ctx.new_page(); errs2 = []; pg2.on('pageerror', lambda e: errs2.append(str(e)))
         await pg2.goto(url.replace('feed=sim&scenario=m16&still=1', 'feed=off')); await pg2.wait_for_timeout(300)
