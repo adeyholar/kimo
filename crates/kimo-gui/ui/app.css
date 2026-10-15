@@ -298,3 +298,5 @@ body.calls-sans{--call-font:var(--sans)}
 .kv .row + .sec{margin-top:var(--sec-mt,0)}
 
 .panel.vis{overflow:visible}
+.kv .row.tight{height:var(--tight-h,25.5px);border-bottom:none}
+.kv .gapv{height:var(--gapv,0)}

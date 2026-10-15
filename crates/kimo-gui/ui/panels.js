@@ -231,7 +231,7 @@ function block(b, w) {
   if (b.cap) return `<div class="cap"><span>${E(b.cap[0])}</span><span>${E(b.cap[1] || '')}</span></div>`;
   if (b.widget) return `<div class="widget${b.src ? ' img' : ''}" style="height:${b.h || 90}px${b.style ? ';' + b.style : ''}">${b.src ? `<img src="${E(b.src)}" alt="">` : (WIDGETS[b.widget] || (() => ''))(b, w, b.h || 90)}</div>`;
   if (b.html) return b.html;
-  const cls = ['row', b.from != null || b.ch ? 'ch' : '', b.chip ? 'chip' : '', b.emb ? 'emb' : '', b.bar ? 'bar' : '', b.dim ? 'dim' : ''].join(' ');
+  const cls = ['row', b.from != null || b.ch ? 'ch' : '', b.chip ? 'chip' : '', b.emb ? 'emb' : '', b.bar ? 'bar' : '', b.dim ? 'dim' : '', b.tight ? 'tight' : ''].join(' ');
   const v = b.from != null ? `<span class="from">${E(b.from)}</span><span class="arr">→</span>${E(b.v)}` : E(b.v);
   return `<div class="${cls}${F(b)}"${b.h ? ` style="height:${b.h}px"` : ''}><span class="k"${b.kStyle ? ` style="${b.kStyle}"` : ''}>${E(b.k)}</span><span class="v"${b.vStyle ? ` style="${b.vStyle}"` : ''}>${v}</span></div>`;
 }
@@ -407,6 +407,7 @@ function keys({ spec, data, w, h }) {
       `<path d="${d}" fill="none" stroke="var(--cream)" stroke-width="1.3"/></svg>`;
   }
   html += ruler(r, X, o.rulerY ?? 6);
+  if (o.sepX != null) html += `<i style="position:absolute;left:${o.sepX}px;top:${o.sepY ?? 5}px;height:${o.sepH ?? 25}px;width:1px;background:var(--line)"></i>`;
   let y = o.laneY ?? 32;
   for (const L of data.lanes || []) {
     const lh = L.h ?? o.laneH ?? 32;
@@ -414,10 +415,10 @@ function keys({ spec, data, w, h }) {
     html += `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? (x0 - 20)}px">${L.html ? L.label : E(L.label)}</span>`;
     const mid = lh / 2;
     let s = '';
-    if (o.laneBg) s += `<rect x="${px(x0 - 6)}" y="${px(mid - (o.laneBgH ?? lh - 4) / 2)}" width="${px(x1 - x0 + 10)}" height="${o.laneBgH ?? lh - 4}" rx="4" fill="${o.laneBg}"/>`;
+    if (o.laneBg) s += `<rect x="${px(x0 - 6)}" y="${px(mid - (o.laneBgH ?? lh - 4) / 2)}" width="${px(x1 - x0 + 10)}" height="${o.laneBgH ?? lh - 4}" rx="${o.laneBgR ?? 4}" fill="${o.laneBg}"/>`;
     if (L.bar) for (const [a, b, c] of L.bar) s += `<rect x="${px(X(a))}" y="${px(mid - (o.barH ?? 9))}" width="${px(X(b) - X(a))}" height="${(o.barH ?? 9) * 2}" rx="3" fill="${c || '#6b665d'}"/>`;
     if (L.cache) { const [done, total] = L.cache, ch = o.cacheH ?? 18; s += `<rect x="${px(X(done))}" y="${mid - ch / 2}" width="${px(x1 - X(done))}" height="${ch}" rx="3" fill="#070707" stroke="#2a2a28"/><rect x="${x0}" y="${mid - ch / 2}" width="${px(X(done) - x0)}" height="${ch}" rx="4" fill="${o.cacheC ?? '#bdb8ae'}"/>`; for (let f = done + 2; f < total; f += 2) s += `<line x1="${px(X(f))}" x2="${px(X(f))}" y1="${mid - 4}" y2="${mid + 4}" stroke="#2a2a28"/>`; }
-    if (L.area) { const pts = L.area; s += `<path d="M${px(X(pts[0][0]))} ${mid + 9} ${pts.map(p => `L${px(X(p[0]))} ${px(mid + 9 - p[1] * 18)}`).join(' ')} L${px(X(pts[pts.length - 1][0]))} ${mid + 9}Z" fill="${L.color || '#5a5650'}"/>`; }
+    if (L.area) { const pts = L.area, ah = o.areaH ?? 18, ab = mid + ah / 2; s += `<path d="M${px(X(pts[0][0]))} ${ab} ${pts.map(p => `L${px(X(p[0]))} ${px(ab - p[1] * ah)}`).join(' ')} L${px(X(pts[pts.length - 1][0]))} ${ab}Z" fill="${L.color || '#5a5650'}"${L.stroke ? ` stroke="${L.stroke}" stroke-width="1"` : ''}${o.areaR ? ` stroke-linejoin="round"` : ''}/>`; }
     if (L.dots) for (const t of L.dots) s += `<circle cx="${px(X(t))}" cy="${mid}" r="${L.r || 2.6}" fill="${L.dotColor || '#77736b'}"/>`;
     if (L.keys) for (const k of L.keys) { const t = typeof k === 'number' ? k : k.t; const em = typeof k === 'object' && k.em; const d = L.size || 5.5; s += `<path d="M${px(X(t))} ${mid - d} L${px(X(t) + d)} ${mid} L${px(X(t))} ${mid + d} L${px(X(t) - d)} ${mid}Z" fill="${em ? 'var(--ember)' : (L.keyColor || 'var(--cream)')}"/>`; }
     html += `<svg style="position:absolute;left:0;top:0;width:${w}px;height:${lh}px" viewBox="0 0 ${w} ${lh}">${s}</svg></div>`;
