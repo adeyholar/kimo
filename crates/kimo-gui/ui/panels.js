@@ -305,6 +305,15 @@ function keys({ spec, data, w, h }) {
 }
 
 // ---------- graph editor (curves) ----------
+function catmull(P) { // smooth path through points (uniform Catmull-Rom as cubic beziers)
+  let d = `M${px(P[0][0])} ${px(P[0][1])}`;
+  for (let i = 0; i < P.length - 1; i++) {
+    const p0 = P[i - 1] || P[i], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2] || p2;
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6], c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += ` C${px(c1[0])} ${px(c1[1])} ${px(c2[0])} ${px(c2[1])} ${px(p2[0])} ${px(p2[1])}`;
+  }
+  return d;
+}
 function curves({ spec, data, w, h }) {
   const o = spec.opts || {};
   const x0 = o.x0 ?? 196, x1 = w - (o.xr ?? 12);
@@ -312,22 +321,29 @@ function curves({ spec, data, w, h }) {
   const gy0 = o.gy0 ?? 72, gy1 = h - (o.gyb ?? 10);
   let html = head(spec, data) + '<div class="tl">';
   let s = '';
-  for (let i = 0; i <= 4; i++) { const y = gy0 + i * (gy1 - gy0) / 4; s += `<line x1="${x0}" x2="${x1}" y1="${px(y)}" y2="${px(y)}" stroke="#1a1a19"/>`; }
-  for (let t = r.t0; t <= r.t1; t += r.step) s += `<line x1="${px(X(t))}" x2="${px(X(t))}" y1="${gy0 - 6}" y2="${gy1}" stroke="#1a1a19"/>`;
-  if (data.beats) for (let t = data.beats.t0; t <= r.t1; t += data.beats.step) { const x = X(t), y = o.beatY ?? 14; s += `<path d="M${px(x)} ${y - 4} L${px(x + 4)} ${y} L${px(x)} ${y + 4} L${px(x - 4)} ${y}Z" fill="#d9d4c9"/>`; }
+  const gl = o.gridC || '#1a1a19';
+  if (o.band != null) s += `<rect x="${o.bandX ?? x0}" y="${o.band[0]}" width="${w - (o.bandX ?? x0)}" height="${o.band[1] - o.band[0]}" fill="${o.bandC || '#171715'}"/>`;
+  const hl = o.hlines || 4;
+  for (let i = 0; i <= hl; i++) { const y = gy0 + i * (gy1 - gy0) / hl; s += `<line x1="${o.bandX ?? x0}" x2="${w}" y1="${px(y)}" y2="${px(y)}" stroke="${gl}"/>`; }
+  for (let t = r.first ?? r.t0; t <= r.t1; t += r.step) s += `<line x1="${px(X(t))}" x2="${px(X(t))}" y1="${o.vTop ?? gy0 - 6}" y2="${gy1}" stroke="${gl}"/>`;
+  const bs = o.beatS ?? 4;
+  if (data.beats) for (let t = data.beats.t0; t <= r.t1; t += data.beats.step) { const x = X(t), y = o.beatY ?? 14; s += `<path d="M${px(x)} ${y - bs} L${px(x + bs)} ${y} L${px(x)} ${y + bs} L${px(x - bs)} ${y}Z" fill="#d9d4c9"/>`; }
   const V = v => gy1 - v * (gy1 - gy0);
+  const ks = o.keyS ?? 7;
   for (const c of data.curves || []) {
-    const d = c.pts.map((p, i) => (i ? 'L' : 'M') + px(X(p[0])) + ' ' + px(V(p[1]))).join('');
-    s += `<path d="${d}" fill="none" stroke="${c.em ? 'var(--ember)' : c.color || 'var(--cream)'}" stroke-width="${c.em ? 1.8 : 1.4}"/>`;
-    for (const k of (c.keys || [])) s += `<rect x="${px(X(k[0]) - 3.5)}" y="${px(V(k[1]) - 3.5)}" width="7" height="7" fill="${c.em ? 'var(--ember)' : c.color || 'var(--cream)'}"/>`;
-    for (const hd of (c.handles || [])) { const [a, b] = hd; s += `<line x1="${px(X(a[0]))}" y1="${px(V(a[1]))}" x2="${px(X(b[0]))}" y2="${px(V(b[1]))}" stroke="var(--ember)" stroke-width="1"/><circle cx="${px(X(a[0]))}" cy="${px(V(a[1]))}" r="3" fill="var(--ink)" stroke="var(--ember)"/><circle cx="${px(X(b[0]))}" cy="${px(V(b[1]))}" r="3" fill="var(--ink)" stroke="var(--ember)"/>`; }
+    const P = c.pts.map(p => [X(p[0]), V(p[1])]);
+    const d = c.smooth ? catmull(P) : P.map((q, i) => (i ? 'L' : 'M') + px(q[0]) + ' ' + px(q[1])).join('');
+    const col = c.em ? 'var(--ember)' : c.color || 'var(--cream)';
+    s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${c.em ? (o.emW ?? 1.8) : (c.w ?? o.lineW ?? 1.4)}"/>`;
+    for (const hd of (c.handles || [])) { const [a, b] = hd; s += `<line x1="${px(X(a[0]))}" y1="${px(V(a[1]))}" x2="${px(X(b[0]))}" y2="${px(V(b[1]))}" stroke="var(--ember)" stroke-width="1"/>` + [a, b].map(q => `<circle cx="${px(X(q[0]))}" cy="${px(V(q[1]))}" r="${o.hR ?? 3}" fill="${o.hFill ? 'var(--ember)' : 'var(--ink)'}" stroke="var(--ember)"/>`).join(''); }
+    for (const k of (c.keys || [])) s += `<rect x="${px(X(k[0]) - ks / 2)}" y="${px(V(k[1]) - ks / 2)}" width="${ks}" height="${ks}" fill="${k[2] || col}" stroke="${o.keyStroke || 'none'}"/>`;
   }
   html += `<svg style="position:absolute;left:0;top:0;width:${w}px;height:${h}px" viewBox="0 0 ${w} ${h}">${s}</svg>`;
   html += ruler(r, X, o.rulerY ?? 34);
   (data.lanes || []).forEach((L, i) => {
     html += `<span class="labchip" style="position:absolute;transform:none;left:${o.chipX ?? 10}px;width:${o.chipW ?? 176}px;top:${(o.laneY ?? 76) + i * (o.laneStep ?? 34)}px">${E(L)}</span>`;
   });
-  if (data.playhead != null) html += `<div class="playhead both" style="left:${px(X(data.playhead))}px;top:${o.phTop ?? 26}px;bottom:${o.phBot ?? 6}px"></div>`;
+  if (data.playhead != null) html += `<div class="playhead ${o.phCls ?? 'both'}" style="left:${px(X(data.playhead))}px;top:${o.phTop ?? 26}px;bottom:${o.phBot ?? 6}px"></div>`;
   return html + '</div>';
 }
 
