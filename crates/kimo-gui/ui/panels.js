@@ -247,7 +247,7 @@ function timeline({ spec, data, w, h }) {
     const th = t.h ?? o.trackH ?? 38;
     html += `<div class="trk ${t.cls || ''}${t.mute ? ' muted' : ''}${F(t)}" style="top:${y}px;height:${th}px">`;
     if (t.area) html += `<svg style="position:absolute;left:${px(X(t.area.s ?? r.t0))}px;top:0;width:${px((x1) - X(t.area.s ?? r.t0))}px;height:${th}px" viewBox="0 0 ${px(x1 - X(t.area.s ?? r.t0))} ${th}"><rect width="100%" height="100%" rx="7" fill="${t.area.bg || '#2a2824'}"/><path d="${smoothArea(x1 - X(t.area.s ?? r.t0), th, t.area)}" fill="${t.area.fill || '#4a4741'}"/></svg>`;
-    if (t.mute || t.solo) html += `<span class="ms" style="left:${o.msX ?? 30}px">${t.mute ? '<b class="m">M</b>' : ''}${t.solo ? '<b class="s">S</b>' : ''}</span>`;
+    if (t.mute || t.solo) html += `<span class="ms" style="left:${o.msX ?? 34}px">${t.mute ? '<b class="m">M</b>' : ''}${t.solo ? '<b class="s">S</b>' : ''}</span>`;
     if (t.label) html += t.chip ? `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? 120}px">${E(t.label)}</span>` : `<span class="lab">${E(t.label)}</span>`;
     if (t.lane) { const li = t.laneInset ?? o.laneInset ?? 3; html += `<div class="lane" style="position:absolute;left:${x0}px;right:${w - x1}px;top:${li}px;bottom:${li}px;background:${t.lane}"></div>`; }
     if (t.wave) {

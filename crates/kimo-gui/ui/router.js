@@ -85,7 +85,12 @@ function timelineOps(state, MODES, ev, fam) {
   if (fam === 'ingest' && (P.s != null || P.clip || n.startsWith('add_track'))) {
     let t = findTrack(tl, T.track_id || P.track);
     if (!t) { t = { label: T.track_id || P.track || 'V' + (tl.tracks.length + 1), clips: [] }; tl.tracks.unshift(t); }
-    if (P.s != null) { t.clips = t.clips || []; t.clips.push({ id: T.clip_id || P.clip, label: P.label || T.clip_id || P.clip, s: +P.s, e: +(P.e ?? +P.s + 4), thumb: P.thumb, _flash: now() }); }
+    if (P.s != null) {
+      t.clips = t.clips || []; const s = +P.s, e = +(P.e ?? s + 4);
+      // overwrite edit: whatever sat under the new clip is trimmed back to it
+      t.clips = t.clips.filter(c => !(c.s >= s && c.e <= e));
+      for (const c of t.clips) { if (c.s < s && c.e > s) c.e = s; else if (c.s < e && c.e > e) c.s = e; }
+      t.clips.push({ id: T.clip_id || P.clip, label: P.label || T.clip_id || P.clip, s: +P.s, e: +(P.e ?? +P.s + 4), thumb: P.thumb, _flash: now() }); }
     t._flash = now(); return true;
   }
   const [t, i] = findClip(tl, T);
