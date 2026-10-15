@@ -34,6 +34,7 @@ export function apply(ev) {
     case 'session':
       if (ev.reset) { state.calls = []; state.callCount = 0; state.views = {}; state.stats = {}; state.explicitActivity = false; state.explicitMode = false; state.activity = null; }
       for (const k of ['project', 'agent', 'read_only']) if (ev[k] !== undefined) state.session[k] = ev[k];
+      if (ev.width > 0 && ev.height > 0) { state.session.width = ev.width; state.session.height = ev.height; }   // project size: the transform gizmo places x/y pixels with it
       if (ev.elapsed_s !== undefined) { state.session.elapsed_s = ev.elapsed_s; state.session.t0 = performance.now(); }
       if (ev.still !== undefined) state.session.still = !!ev.still;
       break;
@@ -85,6 +86,7 @@ export function apply(ev) {
     }
     case 'project_changed':
       state.stats.saved_at = performance.now(); state.stats.rev = ev.rev;
+      if (ev.width > 0 && ev.height > 0) { state.session.width = ev.width; state.session.height = ev.height; }
       break;
     default: return;
   }

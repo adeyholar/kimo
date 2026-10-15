@@ -351,6 +351,7 @@ export function route(ev, state, MODES) {
   const fam = family(ev.tool_name), id = ev.call_id ?? ev.tool_name + '@' + (ev.ts ?? '');
   const out = [];
   if (fam === 'inspect') return inspectOps(state, MODES, ev, id);
+  if (fam === 'transform' && (ev.phase === 'start' || ev.phase === 'complete')) xfOps(state, MODES, ev);
   const T = ev.target || {}, P = ev.payload || {};
   const param = T.param || P.param, val = P.to ?? P.value;
   const args = { ...(T.clip_id ? { clip: T.clip_id } : {}), ...(param && val != null ? { [param]: fmtVal(val, param) } : {}) };
@@ -425,4 +426,54 @@ function peek(state, MODES, t) {
     const kv = panels(state, MODES, ['kv'])[0], k = String(t.param).toLowerCase().replace(/_/g, ' ');
     const row = kv && (kv.blocks || []).find(b => b.k && b.k.toLowerCase() === k); if (row) row._peek = now();
   }
+}
+
+
+// Transform family (set_property/set_transform x y scale rotation opacity, keyframes, bezier ease,
+// motion path, motion blur, nulls, parenting, expressions): a gizmo on the viewer — the layer's
+// bounding box with 8 handles and its anchor, the previous pose dashed, an arrow when it moved, and a
+// readout of the change — plus keyframe diamonds on the clip in the timeline. Geometry comes only from
+// the call: x/y are project pixels, placed when the project size is known (session/frame events'
+// width/height), otherwise the move is shown in the readout and the box stays centred.
+export const GIZMO_MS = 2400;
+const XF = { x: 'x', y: 'y', pos_x: 'x', pos_y: 'y', scale: 'scale', rotation: 'rotation', rot_z: 'rotation', rotate: 'rotation', opacity: 'opacity' };
+const numOf = v => { if (v == null || typeof v === 'object') return null; const s = String(v).trim(), n = parseFloat(s); return Number.isFinite(n) ? (s.endsWith('%') ? n / 100 : n) : null; };
+function xfOps(state, MODES, ev) {
+  const P = ev.payload || {}, T = ev.target || {}, A = P.args || (state._xfArgs && state._xfArgs[ev.call_id]) || {};
+  if (ev.phase === 'start') { (state._xfArgs || (state._xfArgs = {}))[ev.call_id] = A; }
+  const tn = String(ev.tool_name).toLowerCase(), clip = T.clip_id ?? A.clip_id ?? A.clip ?? A.id ?? null;
+  const store = state.xform || (state.xform = {}), key = clip ?? '_';
+  const cur = store[key] || (store[key] = { x: 0, y: 0, scale: 1, rotation: 0 });
+  const prev = { ...cur };
+  const g = { t: now(), tool: ev.tool_name, phase: ev.phase, clip, prev, next: cur, read: [] };
+  const param = String(T.param ?? P.param ?? A.property ?? A.param ?? '').toLowerCase(), k = XF[param];
+  if (ev.phase === 'complete') {
+    delete (state._xfArgs || {})[ev.call_id];
+    // a single field change (set_property / set_transform param=…, set_keyframe value)
+    if (k) {
+      const f = numOf(P.from), to = numOf(P.to ?? P.value ?? A.value);
+      if (f != null) prev[k] = f;
+      if (to != null) cur[k] = to;
+      if (to != null) g.read.push(`${param} ${P.from != null ? fmtVal(P.from, param) + ' → ' : ''}${fmtVal(P.to ?? P.value ?? A.value, param)}`);
+    }
+    // a pose in the args (set_transform {x, y, scale, rotation}, add_null starting pose)
+    for (const [ak, sk] of Object.entries(XF)) if (ak !== param && A[ak] != null && numOf(A[ak]) != null && !/keyframe/.test(tn)) { cur[sk] = numOf(A[ak]); g.read.push(`${ak} ${fmtVal(A[ak], ak)}`); }
+  }
+  // the family's own marks
+  if (/add_null/.test(tn)) { g.null = true; g.read.unshift('null'); }
+  if (/set_parent/.test(tn)) { const pid = A.parent_id ?? A.parent; g.parent = pid ? store[pid] || { x: 0, y: 0, scale: 1, rotation: 0 } : null; g.read.unshift(pid ? `parent → ${pid}` : 'unparented'); }
+  if (/motion_blur/.test(tn)) { const sa = numOf(A.shutter_angle ?? A.shutter ?? A.angle); if (sa != null) { g.blur = sa; g.read.unshift(`shutter ${sa}°`); } }
+  if (/expression/.test(tn)) { const op = A.op ?? A.expression ?? A.kind; const ps = ['freq', 'amp', 'mode', 'phase'].filter(x => A[x] != null).map(x => `${x} ${fmtVal(A[x], x)}`).join(', '); if (op) g.read.unshift(`${param ? param + ' = ' : ''}${op}(${ps})`); g.expr = true; }
+  if (/bezier/.test(tn)) { const b = A.bezier ?? A.curve ?? A.handles; if (Array.isArray(b) && b.length === 4 && b.every(v => numOf(v) != null)) { g.bez = b.map(numOf); g.read.unshift(`ease [${b.map(v => fmtVal(v)).join(', ')}]`); } }
+  if (/motion_path/.test(tn) && Array.isArray(A.points)) { g.path = A.points.filter(p => Array.isArray(p) && p.length >= 2).map(p => [numOf(p[0]), numOf(p[1])]).filter(p => p[0] != null && p[1] != null); g.read.unshift(`motion path · ${g.path.length} points`); }
+  // keyframe diamonds on the clip lane (clip-local times)
+  if (/keyframe/.test(tn) && ev.phase === 'complete') {
+    const times = Array.isArray(A.keys) ? A.keys.map(q => numOf(q && (q.time ?? q.t))).filter(v => v != null) : [numOf(A.time ?? A.t ?? A.at)].filter(v => v != null);
+    const tl = state.liveTL || panels(state, MODES, ['timeline'])[0];
+    const [tr, i] = clip != null ? findClip(tl, { clip_id: clip, track_id: T.track_id }) : [null, -1];
+    if (tr && times.length) { const c = tr.clips[i]; c.keys = c.keys || []; for (const tt of times) if (!c.keys.some(q => Math.abs(q.t - (c.s + tt)) < 1e-6)) c.keys.push({ t: c.s + tt, em: !!g.bez }); else if (g.bez) c.keys.find(q => Math.abs(q.t - (c.s + tt)) < 1e-6).em = true; c._flash = now(); }
+    if (!g.read.length || !k) g.read.push(`${times.length} key${times.length === 1 ? '' : 's'}${param ? ' · ' + param : ''}`);
+  }
+  if (!g.read.length) g.read.push(ev.tool_name);
+  state.gizmo = g;   // nothing animates in JS: the viewer draws it while fresh and CSS fades it
 }

@@ -120,6 +120,33 @@ async def main():
         print(f"{'PASS' if ok_r else 'FAIL'}  read-only inspect state: peek clip={peek[0]} row={peek[1]} hud '{h1[1]}' ({h1[0]}) last '{h2}' unchanged mode/clips/inspector={s0 == s1}")
         if not ok_r: fails.append('inspect')
 
+        # ---- transform family: viewer gizmo (box, handles, anchor, previous pose, arrow, readout) + keyframe diamonds ----
+        await pg.evaluate('e => __kimo.apply(e)', {'type': 'project_changed', 'rev': 1, 'width': 1920, 'height': 1080})
+        X = lambda name, cid, ph, tg, pl: pg.evaluate('e => __kimo.apply(e)', {'tool_name': name, 'call_id': cid, 'phase': ph, 'target': tg, 'payload': pl})
+        tgt = {'track_id': 'V1', 'clip_id': 'dune_ridge', 'param': 'scale'}
+        await X('set_property', 'g1', 'start', tgt, {'args': {'clip_id': 'dune_ridge', 'property': 'scale', 'value': 1.25}})
+        await X('set_property', 'g1', 'complete', tgt, {'dur_ms': 2, 'from': 1, 'to': 1.25, 'param': 'scale'}); await frame()
+        g1 = await pg.evaluate("(() => { const v = document.querySelector('[data-panel=viewer]'); const r = v.querySelector('.gzread'); return [v.querySelectorAll('svg.gz rect').length, r ? r.textContent : '', v.querySelectorAll('svg.gz rect[stroke-dasharray]').length]; })()")
+        tgx = {'track_id': 'V1', 'clip_id': 'dune_ridge', 'param': 'x'}
+        await X('set_property', 'g2', 'start', tgx, {'args': {'clip_id': 'dune_ridge', 'property': 'x', 'value': 480}})
+        await X('set_property', 'g2', 'complete', tgx, {'dur_ms': 2, 'from': 0, 'to': 480, 'param': 'x'}); await frame()
+        g2 = await pg.evaluate("(() => { const v = document.querySelector('[data-panel=viewer]'); const r = v.querySelector('.gzread'); return [v.querySelectorAll('svg.gz rect[stroke-dasharray]').length, v.querySelectorAll('svg.gz path').length, r ? r.textContent : '']; })()")
+        tk = {'track_id': 'V1', 'clip_id': 'dune_ridge', 'param': 'opacity'}
+        await X('set_keyframes', 'g3', 'start', tk, {'args': {'clip_id': 'dune_ridge', 'property': 'opacity', 'keys': [{'time': 0.5, 'value': 0}, {'time': 1.5, 'value': 1}]}})
+        await X('set_keyframes', 'g3', 'complete', tk, {'dur_ms': 1})
+        await X('set_keyframe_bezier', 'g4', 'start', tk, {'args': {'clip_id': 'dune_ridge', 'property': 'opacity', 'time': 0.5, 'bezier': [0.34, 1.56, 0.64, 1]}})
+        await X('set_keyframe_bezier', 'g4', 'complete', tk, {'dur_ms': 1}); await frame()
+        g3 = await pg.evaluate("(() => { const keys = document.querySelectorAll('[data-panel=tl] .clip .ckey'); const r = document.querySelector('[data-panel=viewer] .gzread'); return [keys.length, document.querySelectorAll('[data-panel=tl] .clip .ckey.em').length, r ? r.textContent : '', r ? r.querySelectorAll('svg path').length : 0]; })()")
+        await X('set_motion_path', 'g5', 'start', {'clip_id': 'dune_ridge'}, {'args': {'clip_id': 'dune_ridge', 'points': [[-400, 100], [0, -150], [400, 100]]}})
+        await X('set_motion_path', 'g5', 'complete', {'clip_id': 'dune_ridge'}, {'dur_ms': 1}); await frame()
+        g5 = await pg.evaluate("(() => { const r = document.querySelector('[data-panel=viewer] .gzread'); return [r ? r.textContent : '', document.querySelectorAll('[data-panel=viewer] svg.gz path[fill=\"var(--cream)\"]').length]; })()")
+        bad = await pg.evaluate(BAD)
+        rr0 = await pg.evaluate('__raf'); await pg.wait_for_timeout(3000); rr1 = await pg.evaluate('__raf')
+        ok_g = (g1[0] >= 9 and 'scale 100% → 125%' in g1[1] and g1[2] == 1 and g2[0] == 1 and g2[1] >= 3 and 'x 0 → 480' in g2[2]
+                and g3[0] >= 2 and g3[1] >= 1 and 'ease [0.34, 1.56, 0.64, 1]' in g3[2] and g3[3] >= 3 and 'motion path · 3 points' in g5[0] and g5[1] >= 3 and not bad and rr1 == rr0)
+        print(f"{'PASS' if ok_g else 'FAIL'}  transform gizmo: scale {g1} move {g2} keys {g3} path {g5} rAF after {rr1 - rr0}")
+        if not ok_g: fails.append('transform-gizmo')
+
         # ---- cold real-engine session (?feed=off): events shaped like kimo-mcp's (no `type`) ----
         pg2 = await ctx.new_page(); errs2 = []; pg2.on('pageerror', lambda e: errs2.append(str(e)))
         await pg2.goto(url.replace('feed=sim&scenario=m16&still=1', 'feed=off')); await pg2.wait_for_timeout(300)

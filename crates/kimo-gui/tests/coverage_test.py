@@ -48,6 +48,7 @@ async def main(strict):
     # families whose router code changes a panel beyond the rail / inspector diff / HUD that every call gets
     PANEL = {'ingest': 'timeline insert', 'edit': 'timeline split/trim/ripple', 'effects': 'fx badge + wipe', 'text': 'caption chip',
              'audio': 'EQ / comp / pan / meters / M-S', 'color': 'grade wipe + false colour', 'export': 'job card: progress bar, settings, renders row',
+             'transform': 'viewer gizmo: box + 8 handles + anchor, previous pose, move arrow, readout; keyframe diamonds on the clip; motion path, bezier ease, null, parent link',
              'inspect': 'read-only: quiet HUD read state + result pill + peek ring on the target (no mutation, no mode hop)'}
     by = {}
     for n, fam, mode in res: by.setdefault(fam, []).append((n, mode))

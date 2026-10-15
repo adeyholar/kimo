@@ -259,3 +259,13 @@ body.calls-sans{--call-font:var(--sans)}
 .trk.peek .lab{animation:kpeekrow .7s ease-out 1}
 .kv .row.peek{animation:kpeekrow .7s ease-out 1}
 .call.err{box-shadow:inset 0 0 0 1px var(--ember)} .call.err .ck{color:#ff4d3a} .call.err .dur{color:#ff6a50}
+
+/* transform gizmo (router xfOps): fades on its own, a re-render resumes it at its age */
+@keyframes kgz{0%{opacity:0}8%{opacity:1}72%{opacity:1}100%{opacity:0}}
+.frame .gz{animation:kgz 2.4s ease-out 1 both;pointer-events:none}
+.frame svg.gz{position:absolute;inset:0;width:100%;height:100%;overflow:visible;z-index:3}
+.frame .gzread{position:absolute;z-index:3;display:flex;align-items:center;gap:8px;min-height:24px;padding:3px 9px;border-radius:5px;background:rgba(10,10,11,.74);border:1px solid rgba(255,90,35,.4);font:500 12px/18px var(--mono);color:var(--cream);white-space:nowrap}
+.frame .gzread i{width:1px;height:12px;background:#3a3935}
+/* keyframe diamonds on a clip (clip-local times placed on the ruler) */
+.clip .ckey{position:absolute;bottom:3px;width:7px;height:7px;margin-left:-3.5px;background:var(--cream);transform:rotate(45deg);box-shadow:0 0 0 1px #141412}
+.clip .ckey.em{background:var(--ember)}

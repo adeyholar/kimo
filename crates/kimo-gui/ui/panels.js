@@ -1,7 +1,7 @@
 // Panel renderers. Each kind is a pure function of (spec, data, w, h) that
 // returns markup; geometry comes from the measured panel box and fixed row
 // heights, so a value changing never changes a box.
-import { flashing, METER_MS } from './router.js';
+import { flashing, METER_MS, GIZMO_MS } from './router.js';
 const F = o => (o && flashing(o._flash) ? ' flash' : '') + (o && flashing(o._peek) ? ' peek' : '');
 const E = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const px = n => Math.round(n * 10) / 10;
@@ -82,6 +82,8 @@ function viewer({ spec, data, w, h, state }) {
   // false colour: the frame's right side through the exposure LUT (painted by POST.viewer), split edge in ember
   if (data.src && data.falsecolor) { const sp = data.falsecolor.split ?? .5; html += `<canvas class="fc" width="${Math.round(fw)}" height="${Math.round(fh)}" style="clip-path:inset(0 0 0 ${px(sp * 100)}%)"></canvas><i class="split" style="left:${px(sp * fw)}px"></i>`; }
   if (data.overlay) html += `<svg class="ov" viewBox="0 0 ${fw} ${fh}">${overlay(data.overlay, fw, fh)}</svg>`;
+  const gz = state && state.gizmo, gage = gz ? performance.now() - gz.t : Infinity;
+  if (gage < GIZMO_MS) html += gizmo(gz, fw, fh, state.session || {}, gage);
   for (const t of (data.tags || (data.tag ? [{ text: data.tag }] : []))) {
     const pos = t.pos === 'tr' ? `right:${t.x ?? 10}px` : `left:${t.x ?? 10}px`;
     html += `<span class="tag" style="${pos};top:${t.y ?? 10}px">${E(t.text)}</span>`;
@@ -120,6 +122,40 @@ function overlay(ov, w, h) {
     if (o.vline != null) s += `<line x1="${o.vline * w}" x2="${o.vline * w}" y1="0" y2="${h}" stroke="var(--ember)" stroke-width="2"/>`;
   }
   return s;
+}
+
+// ---------- transform gizmo (router xfOps) ----------
+// The layer's box (a layer at scale 1 fills the frame), 8 handles, anchor crosshair, the previous pose
+// dashed, a move arrow, plus the family's marks (null, parent link, motion path, bezier ease inset).
+// It fades in CSS; a re-render mid-fade resumes at its age (negative animation-delay), no timers.
+function gizmo(g, w, h, S, age) {
+  const W = S.width, H = S.height;
+  const P = p => { const s = p.scale ?? 1; return { cx: w / 2 + (W ? (p.x || 0) / W * w : 0), cy: h / 2 + (H ? (p.y || 0) / H * h : 0), bw: g.null ? 44 * s : w * s, bh: g.null ? 44 * s : h * s, r: p.rotation || 0 }; };
+  const rot = (q, x, y) => { const a = q.r * Math.PI / 180, dx = x - q.cx, dy = y - q.cy; return [q.cx + dx * Math.cos(a) - dy * Math.sin(a), q.cy + dx * Math.sin(a) + dy * Math.cos(a)]; };
+  const rect = (q, a) => `<rect x="${px(q.cx - q.bw / 2 + .5)}" y="${px(q.cy - q.bh / 2 + .5)}" width="${px(Math.max(1, q.bw - 1))}" height="${px(Math.max(1, q.bh - 1))}" transform="rotate(${px(q.r)} ${px(q.cx)} ${px(q.cy)})" ${a}/>`;
+  const a = P(g.prev), b = P(g.next);
+  let s = '';
+  const moved = Math.abs(a.cx - b.cx) + Math.abs(a.cy - b.cy) + Math.abs(a.bw - b.bw) + Math.abs(a.r - b.r) > 1;
+  if (moved) s += rect(a, 'fill="none" stroke="rgba(245,241,231,.45)" stroke-width="1" stroke-dasharray="4 4"');
+  s += rect(b, 'fill="rgba(255,90,35,.05)" stroke="var(--ember)" stroke-width="1.25"');
+  if (g.null) { const [x1, y1] = rot(b, b.cx - b.bw / 2, b.cy - b.bh / 2), [x2, y2] = rot(b, b.cx + b.bw / 2, b.cy + b.bh / 2), [x3, y3] = rot(b, b.cx + b.bw / 2, b.cy - b.bh / 2), [x4, y4] = rot(b, b.cx - b.bw / 2, b.cy + b.bh / 2); s += `<path d="M${px(x1)} ${px(y1)}L${px(x2)} ${px(y2)}M${px(x3)} ${px(y3)}L${px(x4)} ${px(y4)}" stroke="var(--ember)" stroke-width="1"/>`; }
+  for (const [u, v] of [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]]) { const [x, y] = rot(b, b.cx + u * b.bw / 2, b.cy + v * b.bh / 2); s += `<rect x="${px(Math.min(w - 7, Math.max(0, x - 3.5)))}" y="${px(Math.min(h - 7, Math.max(0, y - 3.5)))}" width="7" height="7" fill="var(--cream)" stroke="#141412" stroke-width="1"/>`; }
+  s += `<circle cx="${px(b.cx)}" cy="${px(b.cy)}" r="5" fill="none" stroke="var(--cream)" stroke-width="1.2"/><path d="M${px(b.cx - 9)} ${px(b.cy)}h18M${px(b.cx)} ${px(b.cy - 9)}v18" stroke="var(--cream)" stroke-width="1"/>`;
+  if (moved && Math.hypot(a.cx - b.cx, a.cy - b.cy) > 3) { const ang = Math.atan2(b.cy - a.cy, b.cx - a.cx), hx = b.cx - 9 * Math.cos(ang), hy = b.cy - 9 * Math.sin(ang); s += `<path d="M${px(a.cx)} ${px(a.cy)}L${px(hx)} ${px(hy)}" stroke="var(--ember)" stroke-width="1.5"/><path d="M${px(b.cx)} ${px(b.cy)}L${px(hx - 6 * Math.cos(ang - .5))} ${px(hy - 6 * Math.sin(ang - .5))}M${px(b.cx)} ${px(b.cy)}L${px(hx - 6 * Math.cos(ang + .5))} ${px(hy - 6 * Math.sin(ang + .5))}" stroke="var(--ember)" stroke-width="1.5"/>`; }
+  if (g.parent) { const q = P(g.parent); s += `<path d="M${px(b.cx)} ${px(b.cy)}L${px(q.cx)} ${px(q.cy)}" stroke="var(--cream)" stroke-width="1" stroke-dasharray="3 3"/><circle cx="${px(q.cx)}" cy="${px(q.cy)}" r="4" fill="var(--cream)"/>`; }
+  if (g.path && g.path.length) {
+    let pts;
+    if (W && H) pts = g.path.map(([x, y]) => [w / 2 + x / W * w, h / 2 + y / H * h]);
+    else { const xs = g.path.map(p => p[0]), ys = g.path.map(p => p[1]), mx = Math.min(...xs), my = Math.min(...ys), sx = Math.max(...xs) - mx || 1, sy = Math.max(...ys) - my || 1, k = Math.min(w * .6 / sx, h * .6 / sy); pts = g.path.map(([x, y]) => [w / 2 + (x - mx - sx / 2) * k, h / 2 + (y - my - sy / 2) * k]); }
+    s += `<path d="${catmull(pts)}" fill="none" stroke="var(--ember)" stroke-width="1.5"${W && H ? '' : ' stroke-dasharray="6 4"'}/>` + pts.map(([x, y]) => `<path d="M${px(x)} ${px(y - 5)}l5 5-5 5-5-5z" fill="var(--cream)"/>`).join('');
+  }
+  // readout pill at the box's top-left, kept inside the frame
+  const rx = Math.max(8, Math.min(w - 240, b.cx - b.bw / 2 + 10)), ry = Math.max(8, Math.min(h - 34, b.cy - b.bh / 2 + 10));
+  let html = `<svg class="ov gz" viewBox="0 0 ${w} ${h}" style="animation-delay:-${Math.round(age)}ms">${s}</svg>`;
+  let bez = '';
+  if (g.bez) { const [x1, y1, x2, y2] = g.bez, S2 = 36; bez = `<svg width="${S2}" height="${S2}" viewBox="-2 -2 ${S2 + 4} ${S2 + 4}" style="margin-left:2px;overflow:visible"><path d="M0 ${S2}L${S2} 0" stroke="#3a3935" stroke-width="1"/><path d="M0 ${S2}L${px(x1 * S2)} ${px(S2 - y1 * S2)}M${S2} 0L${px(x2 * S2)} ${px(S2 - y2 * S2)}" stroke="#8a867d" stroke-width="1"/><path d="M0 ${S2}C${px(x1 * S2)} ${px(S2 - y1 * S2)} ${px(x2 * S2)} ${px(S2 - y2 * S2)} ${S2} 0" fill="none" stroke="var(--ember)" stroke-width="1.5"/><circle cx="${px(x1 * S2)}" cy="${px(S2 - y1 * S2)}" r="2.5" fill="var(--cream)"/><circle cx="${px(x2 * S2)}" cy="${px(S2 - y2 * S2)}" r="2.5" fill="var(--cream)"/></svg>`; }
+  html += `<span class="gzread gz" style="left:${px(rx)}px;top:${px(ry)}px;animation-delay:-${Math.round(age)}ms">${g.read.slice(0, 2).map(E).join('<i></i>')}${bez}</span>`;
+  return html;
 }
 
 // ---------- key/value inspector ----------
@@ -280,6 +316,7 @@ function timeline({ spec, data, w, h }) {
       html += `<div class="clip ${c.cls || ''}${F(c)}" style="left:${px(a)}px;width:${px(b - a)}px${c.bg ? ';background:' + c.bg : ''}">` +
         (c.thumb ? `<span class="ct"><img src="${E(c.thumb)}" alt=""></span>` : '') + (c.cover ? `<img src="${E(c.cover)}" alt="">` : '') + (c.label ? `<span class="cl">${E(c.label)}</span>` : '') +
         (c.pill ? `<span class="cpill">${E(c.pill)}</span>` : '') +
+        (c.keys ? c.keys.map(k => `<i class="ckey${k.em ? ' em' : ''}" style="left:${px(X(k.t) - a)}px"></i>`).join('') : '') +
         (c.fx ? (o.fxRow ? `<span class="fxrow">${c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')}</span>` : c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')) : '') + '</div>';
     }
     html += '</div>';
