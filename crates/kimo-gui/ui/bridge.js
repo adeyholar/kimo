@@ -23,6 +23,7 @@ export function connect(onEvent, onStatus) {
   const forced = params.get('feed');
   const sim = () => { onStatus('sim', 'simulated'); startSimulated(onEvent, params, onStatus); return { kind: 'sim' }; };
   if (forced === 'sim') return sim();
+  if (forced === 'off') { onStatus('down', 'no feed'); return { kind: 'off' }; }   // tests inject through window.__kimo.apply
 
   const port = params.get('sse') || '7422';
   const es = new EventSource(`http://127.0.0.1:${port}/events`);

@@ -51,6 +51,48 @@ three.js 0.180.0 (MIT, vendored with LICENSE).
 - **Call log / pass stack / inspector / timeline**: all derive from the same
   event stream; the timeline parks its playhead at the end (zero idle).
 
+## Unified tool events (engine → spectator contract)
+
+Every MCP tool call the engine runs is streamed as JSON lines (loopback TCP
+127.0.0.1:7421 into the shell, or SSE in a browser) in one shape:
+
+    {"tool_name": "split_clip", "call_id": "c42", "phase": "start",
+     "target": {"track_id": "V1", "clip_id": "dune_wide", "param": null},
+     "payload": {}, "ts": 1739.218}
+
+- `phase`: `start` | `progress` | `complete` | `error`, all with the same `call_id`.
+- `target` (all optional): `track_id`, `clip_id`, `param`: what the call touches.
+- `payload` by phase:
+  - start: `args` (optional, shown in the rail)
+  - progress: `pct` (0-100) or `done` + `total`
+  - complete: `dur_ms`, plus the change. A parameter change is `from` / `to`
+    (or `value`). Timeline edits use `at` (split time), `s` / `e` / `in` / `out` (bounds), `ripple`.
+    Inserts use `track`, `s`, `e`, `label`, `thumb`. Effects use `effect`. Mute/solo use `on`.
+    Captions use `text`, `s`, `e`.
+  - error: `error` (message), `dur_ms`
+- `ts`: engine seconds, informational.
+
+`ui/router.js` maps each call by tool family (name prefix): ingest, edit, effects,
+transform, color, audio, text, 3d, export, other.
+- Every call gets a rail entry: ember with live elapsed time while running, then a pinned
+  ✓ or ✕ with its duration. `error` outlines the row in ember.
+- Every call gets a HUD pulse in the viewer.
+- Every call gets its family effect:
+  - clip inserted / split at the playhead with a razor flash (and ripple) / trimmed / moved
+  - fx badge snapped onto the clip
+  - track header M/S state
+  - caption chip added
+  - inspector row flipped to `from → to` with a flash
+  - colour progress wiping across the viewer
+- A tool with no specific mapping still shows its payload as an inspector diff, so no
+  call is invisible.
+- Legacy events (`{"type": "tool_start" ...}`, `view`, `mode`, `stats`, `frame_rendered`)
+  are still accepted unchanged; the demo feed uses them.
+
+`python3 crates/kimo-gui/tests/router_test.py` replays one call per family plus an
+unknown tool and a failing one. It asserts a rail entry, DOM changes on start and on
+completion, the family effect and the HUD, and that the loop idles afterwards.
+
 ## Idle proof (tests/idle_proof.py)
 
 The render loop must cost nothing when nothing happens. One command proves it

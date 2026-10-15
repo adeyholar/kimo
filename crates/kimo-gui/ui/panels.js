@@ -1,6 +1,8 @@
 // Panel renderers. Each kind is a pure function of (spec, data, w, h) that
 // returns markup; geometry comes from the measured panel box and fixed row
 // heights, so a value changing never changes a box.
+import { flashing } from './router.js';
+const F = o => (o && flashing(o._flash) ? ' flash' : '');
 const E = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const px = n => Math.round(n * 10) / 10;
 
@@ -48,7 +50,7 @@ function agent({ spec, state, data, w, h }) {
     const faded = !cur && o.fade != null && i < calls.length - 1 - o.fade;
     const ch = cur && o.curH ? o.curH : rowH;
     const recent = o.boldLast && i >= calls.length - o.boldLast;
-    html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}${recent ? ' recent' : ''}" style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
+    html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}${recent ? ' recent' : ''}${c.status === 'error' ? ' err' : ''}" style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
       (o.checkRight ? '' : ckEl) +
       `<span class="sig"><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
       (o.checkRight ? ckEl : '') +
@@ -65,7 +67,7 @@ function agent({ spec, state, data, w, h }) {
 }
 
 // ---------- viewer ----------
-function viewer({ spec, data, w, h }) {
+function viewer({ spec, data, w, h, state }) {
   const o = spec.opts || {};
   const [pt, pr, pb, pl] = o.pad || [12, 12, 44, 12];
   const fw = w - pl - pr, fh = h - pt - pb;
@@ -80,6 +82,8 @@ function viewer({ spec, data, w, h }) {
     const pos = t.pos === 'tr' ? `right:${t.x ?? 10}px` : `left:${t.x ?? 10}px`;
     html += `<span class="tag" style="${pos};top:${t.y ?? 10}px">${E(t.text)}</span>`;
   }
+  const hd = state && state.hud;
+  if (hd && performance.now() - hd.t < 1600) html += `<span class="hud${hd.phase === 'error' ? ' err' : ''}" style="right:${o.hudX ?? 10}px;top:${o.hudY ?? 10}px"><i></i>${E(hd.fam)} · ${E(hd.text)}</span>`;
   html += '</div>';
   if (data.progress) {
     const p = data.progress, y = pt + fh + (o.progY ?? 14);
@@ -132,7 +136,7 @@ function block(b, w) {
   if (b.html) return b.html;
   const cls = ['row', b.from != null || b.ch ? 'ch' : '', b.chip ? 'chip' : '', b.emb ? 'emb' : '', b.bar ? 'bar' : ''].join(' ');
   const v = b.from != null ? `<span class="from">${E(b.from)}</span><span class="arr">→</span>${E(b.v)}` : E(b.v);
-  return `<div class="${cls}"${b.h ? ` style="height:${b.h}px"` : ''}><span class="k"${b.kStyle ? ` style="${b.kStyle}"` : ''}>${E(b.k)}</span><span class="v"${b.vStyle ? ` style="${b.vStyle}"` : ''}>${v}</span></div>`;
+  return `<div class="${cls}${F(b)}"${b.h ? ` style="height:${b.h}px"` : ''}><span class="k"${b.kStyle ? ` style="${b.kStyle}"` : ''}>${E(b.k)}</span><span class="v"${b.vStyle ? ` style="${b.vStyle}"` : ''}>${v}</span></div>`;
 }
 
 // ---------- small inspector widgets (SVG from data) ----------
@@ -241,8 +245,9 @@ function timeline({ spec, data, w, h }) {
   let y = o.trackY ?? 30;
   for (const t of (data.tracks || [])) {
     const th = t.h ?? o.trackH ?? 38;
-    html += `<div class="trk ${t.cls || ''}" style="top:${y}px;height:${th}px">`;
+    html += `<div class="trk ${t.cls || ''}${t.mute ? ' muted' : ''}${F(t)}" style="top:${y}px;height:${th}px">`;
     if (t.area) html += `<svg style="position:absolute;left:${px(X(t.area.s ?? r.t0))}px;top:0;width:${px((x1) - X(t.area.s ?? r.t0))}px;height:${th}px" viewBox="0 0 ${px(x1 - X(t.area.s ?? r.t0))} ${th}"><rect width="100%" height="100%" rx="7" fill="${t.area.bg || '#2a2824'}"/><path d="${smoothArea(x1 - X(t.area.s ?? r.t0), th, t.area)}" fill="${t.area.fill || '#4a4741'}"/></svg>`;
+    if (t.mute || t.solo) html += `<span class="ms" style="left:${o.msX ?? 30}px">${t.mute ? '<b class="m">M</b>' : ''}${t.solo ? '<b class="s">S</b>' : ''}</span>`;
     if (t.label) html += t.chip ? `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? 120}px">${E(t.label)}</span>` : `<span class="lab">${E(t.label)}</span>`;
     if (t.lane) { const li = t.laneInset ?? o.laneInset ?? 3; html += `<div class="lane" style="position:absolute;left:${x0}px;right:${w - x1}px;top:${li}px;bottom:${li}px;background:${t.lane}"></div>`; }
     if (t.wave) {
@@ -254,7 +259,7 @@ function timeline({ spec, data, w, h }) {
     }
     for (const c of (t.clips || [])) {
       const a = X(c.s), b = X(c.e);
-      html += `<div class="clip ${c.cls || ''}" style="left:${px(a)}px;width:${px(b - a)}px${c.bg ? ';background:' + c.bg : ''}">` +
+      html += `<div class="clip ${c.cls || ''}${F(c)}" style="left:${px(a)}px;width:${px(b - a)}px${c.bg ? ';background:' + c.bg : ''}">` +
         (c.thumb ? `<span class="ct"><img src="${E(c.thumb)}" alt=""></span>` : '') + (c.cover ? `<img src="${E(c.cover)}" alt="">` : '') + (c.label ? `<span class="cl">${E(c.label)}</span>` : '') +
         (c.pill ? `<span class="cpill">${E(c.pill)}</span>` : '') +
         (c.fx ? (o.fxRow ? `<span class="fxrow">${c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')}</span>` : c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')) : '') + '</div>';
@@ -263,6 +268,7 @@ function timeline({ spec, data, w, h }) {
     y += th + (o.trackGap ?? 0);
   }
   if (data.playhead != null) html += `<div class="playhead" style="left:${px(X(data.playhead))}px;top:${o.phTop ?? 4}px;bottom:${o.phBot ?? 8}px"></div>`;
+  if (data.razor && flashing(data.razor.t)) html += `<div class="razor" style="left:${px(X(data.razor.at))}px;top:${o.trackY ?? 30}px;bottom:4px"></div>`;
   return html + '</div>';
 }
 

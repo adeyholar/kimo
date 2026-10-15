@@ -4,6 +4,7 @@
 import { connect } from './bridge.js';
 import { MODES, inferMode } from './modes.js';
 import { KINDS, POST, tickRunning } from './panels.js';
+import { route } from './router.js';
 
 const DESIGN_W = 1376, DESIGN_H = 768;
 
@@ -152,7 +153,7 @@ function enqueue(ev) {
   // Hidden: fold the event into state right away (the reducer never touches
   // the DOM) so the queue cannot grow without bound; the one paint happens
   // when the window comes back.
-  if (hidden) { apply(ev); return; }
+  if (hidden) { for (const e of route(ev, state, MODES)) apply(e); return; }
   queue.push(ev); requestFrame();
 }
 function schedule() { dirty = true; requestFrame(); }
@@ -160,7 +161,7 @@ function requestFrame() { if (!rafId && !hidden) rafId = requestAnimationFrame(f
 function frame() {
   rafId = 0; metrics.raf++;
   if (queue.length > 1) metrics.coalesced += queue.length - 1;
-  for (const ev of queue.splice(0)) apply(ev);
+  for (const ev of queue.splice(0)) for (const e of route(ev, state, MODES)) apply(e);
   if (dirty) { dirty = false; render(); metrics.renders++; }
   armTicker();
 }

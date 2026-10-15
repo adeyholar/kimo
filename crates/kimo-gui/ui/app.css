@@ -227,3 +227,21 @@ body.calls-sans{--call-font:var(--sans)}
 .frame .wipe{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--ember);box-shadow:0 0 0 1px rgba(255,90,35,.25)}
 .kv .row.emb.bar{background:var(--emb-row-bg,transparent);margin:0 -15px;padding:0 15px}
 .call.recent .fn,.call.recent .args,.call.recent .pp{font-weight:600}
+
+/* ---------- live tool feedback (router) ---------- */
+@keyframes kflash{0%{box-shadow:inset 0 0 0 2px var(--ember),0 0 0 2px rgba(255,90,35,.35)}100%{box-shadow:inset 0 0 0 2px rgba(255,90,35,0),0 0 0 2px rgba(255,90,35,0)}}
+@keyframes kflashrow{0%{background:rgba(255,90,35,.22)}100%{background:rgba(255,90,35,0)}}
+.clip.flash{animation:kflash .7s ease-out 1}
+.trk.flash .lab{animation:kflashrow .7s ease-out 1}
+.kv .row.flash{animation:kflashrow .7s ease-out 1}
+.trk.muted .clip{opacity:.45}
+.trk .ms{position:absolute;top:50%;transform:translateY(-50%);display:flex;gap:3px;z-index:2}
+.trk .ms b{font:600 11px/16px var(--mono);width:16px;text-align:center;border-radius:3px;background:#2a2926;color:var(--text)}
+.trk .ms b.m{background:#3a2a20;color:var(--ember-text)} .trk .ms b.s{background:#e9e4d8;color:#111}
+@keyframes krazor{0%{opacity:1;transform:scaleX(1.6)}100%{opacity:0;transform:scaleX(1)}}
+.razor{position:absolute;width:2px;margin-left:-1px;background:#fff6ea;box-shadow:0 0 8px 2px rgba(255,90,35,.8);z-index:6;pointer-events:none;animation:krazor .7s ease-out 1 forwards}
+@keyframes khud{0%{opacity:0;transform:translateY(-3px)}12%{opacity:1;transform:none}75%{opacity:1}100%{opacity:0}}
+.frame .hud{position:absolute;z-index:4;display:flex;align-items:center;gap:7px;height:24px;padding:0 10px;border-radius:12px;background:rgba(10,10,11,.72);border:1px solid rgba(255,90,35,.45);font:500 12.5px/24px var(--mono);color:var(--cream);animation:khud 1.6s ease-out 1 forwards;pointer-events:none}
+.frame .hud i{width:6px;height:6px;border-radius:50%;background:var(--ember)}
+.frame .hud.err{border-color:#ff4d3a} .frame .hud.err i{background:#ff4d3a}
+.call.err{box-shadow:inset 0 0 0 1px var(--ember)} .call.err .ck{color:#ff4d3a} .call.err .dur{color:#ff6a50}
