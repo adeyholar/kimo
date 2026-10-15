@@ -160,27 +160,29 @@ function buildLayout() {
     const f = old[name]; if (!f) continue;
     const t = [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight];
     if (!t[2] || !t[3] || f.every((v, i) => Math.abs(v - t[i]) < .5)) continue;
-    springs.push({ el, d: [f[0] - t[0], f[1] - t[1], f[2] / t[2], f[3] / t[3]], x: 1, v: 0 });
+    springs.push({ el, d: [f[0] - t[0], f[1] - t[1], f[2] / t[2], f[3] / t[3]], D: Math.max(Math.abs(f[0] - t[0]), Math.abs(f[1] - t[1]), Math.abs(f[2] - t[2]), Math.abs(f[3] - t[3])) });
     el.dataset.anim = '1'; el.style.transformOrigin = '0 0';
   }
-  if (springs.length) { lastSpringT = 0; stepSprings(0); }
+  if (springs.length) { springT0 = performance.now(); stepSprings(0); }
   builtMode = state.mode;
   layoutDirty = false;
 }
-// One spring per hop (all moving panels share it): stiffness 420, damping ratio 0.86 -> settles in ~0.4 s with a
-// hint of overshoot. Driven by the render loop's own rAF only while a spring is moving; hidden -> snapped.
-const springs = []; let builtMode = null, lastSpringT = 0;
-const SK = 420, SC = 2 * Math.sqrt(SK) * .86;
+// One spring per hop (all moving panels share it), critically damped (ratio 1.0, w = 60 rad/s, i.e. stiffness
+// 3600): x(t) = (1 + wt) e^-wt runs 1 -> 0 with no overshoot by construction. A panel lands when its residual is
+// under 0.5 px (~125 ms for a 100 px move, ~170 ms for 1000 px) and never later than 185 ms. Evaluated in closed form
+// from the hop's start, so a slow frame cannot make it ring. Driven by the render loop's own rAF only while a
+// spring is moving; hidden -> snapped.
+const springs = []; let builtMode = null, springT0 = 0;
+const SW = 60, SMAX = .185;
 function stepSprings(now) {
   if (!springs.length) return false;
-  const dt = lastSpringT ? Math.min((now - lastSpringT) / 1000, 1 / 30) : 0; lastSpringT = now;
+  const t = now ? Math.max(0, (now - springT0) / 1000) : 0, x = (1 + SW * t) * Math.exp(-SW * t);
   let live = false;
   for (const s of springs) {
-    if (dt) { s.v += (-SK * s.x - SC * s.v) * dt; s.x += s.v * dt; }
-    const done = Math.abs(s.x) < .002 && Math.abs(s.v) < .02;
-    if (done || hidden) { s.el.style.transform = ''; delete s.el.dataset.anim; s.x = 0; continue; }
-    live = true; const [dx, dy, sx, sy] = s.d, p = s.x;
-    s.el.style.transform = `translate(${dx * p}px, ${dy * p}px) scale(${1 + (sx - 1) * p}, ${1 + (sy - 1) * p})`;
+    if (!s.el) continue;
+    if (hidden || t >= SMAX || x * s.D < .5) { s.el.style.transform = ''; delete s.el.dataset.anim; s.el = null; continue; }
+    live = true; const [dx, dy, sx, sy] = s.d;
+    s.el.style.transform = `translate(${dx * x}px, ${dy * x}px) scale(${1 + (sx - 1) * x}, ${1 + (sy - 1) * x})`;
   }
   if (!live) springs.length = 0;
   return live;
