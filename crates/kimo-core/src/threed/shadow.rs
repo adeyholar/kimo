@@ -100,12 +100,50 @@ pub fn visibility(map:&DirectionalShadowMap,world:[f64;3],normal:[f64;3],n_dot_l
   taps+=1;}}
  lit as f64/taps as f64}
 
+// Rotated-disk soft shadows (PL1b). Tap positions are the D3D standard MSAA sample points
+// with their Gaussian PDF weights, and per-pixel rotation by interleaved gradient noise -
+// both adapted from Bevy (github.com/bevyengine/bevy,
+// crates/bevy_pbr/src/render/shadow_sampling.wgsl, MIT OR Apache-2.0). Bevy cites
+// https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_standard_multisample_quality_levels
+// for the positions. Weights are NOT normalized in Bevy's table (they sum ~1.0); we normalize.
+pub const DISK_TAPS:[(f64,f64);8]=[(0.125,-0.375),(-0.125,0.375),(0.625,0.125),(-0.375,-0.625),(-0.625,0.625),(-0.875,-0.125),(0.375,0.875),(0.875,-0.875)];
+pub const DISK_WEIGHTS:[f64;8]=[0.157112,0.157112,0.138651,0.130251,0.114946,0.110269,0.098503,0.093156];
+/// Jimenez 2014 interleaved gradient noise - stable per-pixel rotation seed (no temporal crawl in stills).
+pub fn interleaved_gradient_noise(x:usize,y:usize)->f64{let v=52.9829189*(0.06711056*x as f64+0.00583715*y as f64).fract();v.fract()}
+/// visibility() with a rotated Gaussian disk instead of the 3x3 grid: same bias contract,
+/// same compare, dithered soft edges. radius_texels scales the disk in map texels.
+pub fn visibility_disk(map:&DirectionalShadowMap,world:[f64;3],normal:[f64;3],n_dot_l:f64,radius_texels:f64,px:usize,py:usize)->f64{
+ if n_dot_l<=0.||radius_texels<=0.{return if n_dot_l<=0.{0.}else{visibility(map,world,normal,n_dot_l,0)};}
+ let(no,dnb)=bias(map,n_dot_l);
+ let p=std::array::from_fn(|j|world[j]+normal[j]*no);
+ let Some((u,v,d))=shadow_uvz(map,p) else{return 1.};
+ let d=d-dnb;
+ let angle=interleaved_gradient_noise(px,py)*std::f64::consts::TAU;let(sn,cs)=angle.sin_cos();
+ let(du,dv)=(1./map.width as f64,1./map.height as f64);
+ let(mut lit,mut wsum)=(0.,0.);
+ for k in 0..8{let(tx,ty)=DISK_TAPS[k];let rx=cs*tx-sn*ty;let ry=sn*tx+cs*ty;
+  let stored=sample_map(map,u+rx*radius_texels*du,v+ry*radius_texels*dv);
+  lit+=DISK_WEIGHTS[k]*if d<=stored{1.}else{0.};wsum+=DISK_WEIGHTS[k];}
+ lit/wsum}
+fn sample_map(map:&DirectionalShadowMap,u:f64,v:f64)->f64{
+ if !(0.0..=1.0).contains(&u)||!(0.0..=1.0).contains(&v){return f64::INFINITY;} // off-map taps count lit
+ // pinned texel addressing: identical to visibility()/raster_depth (u*width truncated)
+ let x=(u*map.width as f64).min(map.width as f64-1e-9) as usize;
+ let y=(v*map.height as f64).min(map.height as f64-1e-9) as usize;
+ map.depth[y*map.width+x]}
+
 /// CPU light-POV depth rasterizer: world-space triangles -> nearest normalized depth.
 /// Same edge-function convention as lit_raster (top-left fill via positive barycentrics).
 pub fn raster_depth(positions:&[[f64;3]],indices:&[[u32;3]],map:&mut DirectionalShadowMap)->Result<(),String>{
  if map.width==0||map.height==0||map.width>4096||map.height>4096{return Err("shadow map 1..4096 per axis".into());}
  if map.depth.len()!=map.width*map.height{return Err("shadow map depth buffer size mismatch".into());}
  for d in map.depth.iter_mut(){*d=f64::INFINITY;}
+ raster_depth_into(positions,indices,map)}
+/// Accumulate one draw's casters into the map WITHOUT clearing (nearest wins across calls).
+/// raster_depth = clear + into; build multi-draw maps with one clear then into() per draw.
+pub fn raster_depth_into(positions:&[[f64;3]],indices:&[[u32;3]],map:&mut DirectionalShadowMap)->Result<(),String>{
+ if map.width==0||map.height==0||map.width>4096||map.height>4096{return Err("shadow map 1..4096 per axis".into());}
+ if map.depth.len()!=map.width*map.height{return Err("shadow map depth buffer size mismatch".into());}
  let edge=|a:[f64;2],b:[f64;2],x:f64,y:f64|(b[0]-a[0])*(y-a[1])-(b[1]-a[1])*(x-a[0]);
  for t in indices{
   let mut p=[[0.;3];3];
