@@ -56,6 +56,15 @@ fn check_events(evs: &[Value]) {
         assert!(s["target"].is_object() && s["payload"]["args"].is_object());
     }
     assert_eq!(evs[0]["type"], "session", "a session reset leads the stream");
+    // project size in pixels on the session event (the fresh project) and on every project_changed (after the call)
+    assert_eq!((evs[0]["width"].as_u64(), evs[0]["height"].as_u64()), (Some(1280), Some(720)), "session carries the starting project size: {}", evs[0]);
+    let pcs: Vec<&Value> = evs.iter().filter(|e| e["type"] == "project_changed").collect();
+    assert!(pcs.len() >= 3, "project_set, add_track, add_text and set_property change the project: {pcs:#?}");
+    for pc in &pcs {
+        assert_eq!((pc["width"].as_u64(), pc["height"].as_u64()), (Some(320), Some(180)), "project_changed carries the size after the call: {pc}");
+    }
+    let set_id = starts.iter().find(|s| s["tool_name"] == "project_set").unwrap()["call_id"].clone();
+    assert!(pcs.iter().any(|pc| pc["call_id"] == set_id), "a size change alone is a project change");
     for e in evs { assert!(e.get("tool_name").is_some() != e.get("type").is_some(), "tool event xor engine event: {e}"); }
     let ids: std::collections::HashSet<&str> = starts.iter().map(|s| s["call_id"].as_str().unwrap()).collect();
     assert_eq!(ids.len(), 7, "call ids are unique");

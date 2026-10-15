@@ -21,7 +21,8 @@
 //!            effect, on (mute/solo), text/s/e (captions)
 //!   error    {dur_ms, error, code, param, hint}
 //! Engine-level events use the shell's plain `type` form, which the router passes through:
-//!   {"type":"session"} once at startup, {"type":"project_changed","rev"} after a mutating call,
+//!   {"type":"session","width","height"} once at startup, {"type":"project_changed","rev","width","height"} after a
+//!   mutating call (project size in pixels, so the GUI can place x/y moves on the viewer),
 //!   {"type":"frame_rendered","png_b64"|"jpg_b64"} when a call writes a small frame image.
 use kimo_core::commands::Session;
 use kimo_core::toolgroups;
@@ -87,7 +88,8 @@ fn init_with(dest: Option<Dest>) {
     if SINK.set(sink).is_ok() && on {
         kimo_core::telemetry::set_progress_hook(Box::new(on_progress));
         since_start();
-        emit(&json!({"type": "session", "reset": true, "agent": format!("kimo-mcp {}", kimo_core::buildinfo::VERSION), "read_only": true, "elapsed_s": 0, "ts_ms": ts_ms()}));
+        let p0 = kimo_core::model::Project::default(); // the project Session::new() starts with
+        emit(&json!({"type": "session", "reset": true, "width": p0.width, "height": p0.height, "agent": format!("kimo-mcp {}", kimo_core::buildinfo::VERSION), "read_only": true, "elapsed_s": 0, "ts_ms": ts_ms()}));
     }
 }
 
@@ -259,14 +261,14 @@ pub fn target_of(args: &Value) -> Value {
 type ClipPos = (String, f64, f64); // clip id, start, end (seconds)
 
 #[derive(Default)]
-struct Snap { ids: Vec<(String, Vec<ClipPos>)>, clip: Option<Value>, duration: f64, undo: usize }
+struct Snap { ids: Vec<(String, Vec<ClipPos>)>, clip: Option<Value>, duration: f64, undo: usize, w: u32, h: u32 }
 
 fn snapshot(ss: &Arc<Mutex<Session>>, clip_id: Option<&str>) -> Snap {
     let g = ss.lock().unwrap_or_else(|e| e.into_inner());
     let p = &g.project;
     let ids = p.tracks.iter().map(|t| (t.id.clone(), t.clips.iter().map(|c| (c.id.clone(), c.start, c.start + c.duration)).collect())).collect();
     let clip = clip_id.and_then(|id| p.tracks.iter().flat_map(|t| t.clips.iter()).find(|c| c.id == id)).and_then(|c| serde_json::to_value(&**c).ok());
-    Snap { ids, clip, duration: p.duration(), undo: g.undo.len() }
+    Snap { ids, clip, duration: p.duration(), undo: g.undo.len(), w: p.width, h: p.height }
 }
 
 impl Snap {
@@ -468,7 +470,7 @@ pub fn call_end(result: &Value, ss: &Arc<Mutex<Session>>) {
     }
     let after = snapshot(ss, a.target["clip_id"].as_str());
     let changed = diff(&a.snap, &after);
-    let mutated = after.undo != a.snap.undo || changed.as_object().map_or(false, |o| !o.is_empty());
+    let mutated = after.undo != a.snap.undo || (after.w, after.h) != (a.snap.w, a.snap.h) || changed.as_object().map_or(false, |o| !o.is_empty());
     let res = serde_json::from_str::<Value>(text).unwrap_or_else(|_| json!(text));
     let images = result.get("content").and_then(|c| c.as_array()).map_or(0, |c| c.iter().filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("image")).count());
     let mut p = json!({"dur_ms": dur_ms, "result": summarize(&res), "changed": changed, "mutated": mutated});
@@ -480,7 +482,7 @@ pub fn call_end(result: &Value, ss: &Arc<Mutex<Session>>) {
     emit(&ev);
     let hint = playhead_hint(&a.args, &a.target, &changed, &after);
     if let Some(f) = frame_event(&a.call_id, &a.args, &res) { emit(&f); crate::preview::shown_by_agent(); }
-    if mutated { emit(&json!({"type": "project_changed", "rev": REV.fetch_add(1, Ordering::Relaxed) + 1, "call_id": a.call_id, "ts_ms": ts_ms()})); }
+    if mutated { emit(&json!({"type": "project_changed", "rev": REV.fetch_add(1, Ordering::Relaxed) + 1, "call_id": a.call_id, "width": after.w, "height": after.h, "ts_ms": ts_ms()})); }
     // live preview: any call that changed the project (or is declared mutating) queues one frame at the playhead
     let live = mutated || declared_mutating(&a.tool);
     crate::preview::call_finished(ss, &a.call_id, REV.load(Ordering::Relaxed), live, hint, after.duration, connected());
@@ -557,8 +559,8 @@ mod tests {
     }
     #[test]
     fn diff_reports_clip_fields() {
-        let a = Snap { ids: vec![("t1".into(), vec![("c1".into(), 0.0, 2.0)])], clip: Some(json!({"x": 1, "fx": {"temp": 5600}})), duration: 2.0, undo: 0 };
-        let b = Snap { ids: vec![("t1".into(), vec![("c1".into(), 0.0, 2.0), ("c2".into(), 2.0, 3.0)])], clip: Some(json!({"x": 1, "fx": {"temp": 6050}})), duration: 3.0, undo: 1 };
+        let a = Snap { ids: vec![("t1".into(), vec![("c1".into(), 0.0, 2.0)])], clip: Some(json!({"x": 1, "fx": {"temp": 5600}})), duration: 2.0, undo: 0, w: 1280, h: 720 };
+        let b = Snap { ids: vec![("t1".into(), vec![("c1".into(), 0.0, 2.0), ("c2".into(), 2.0, 3.0)])], clip: Some(json!({"x": 1, "fx": {"temp": 6050}})), duration: 3.0, undo: 1, w: 1280, h: 720 };
         let d = diff(&a, &b);
         assert_eq!(d["clip"]["fx.temp"], json!([5600, 6050]));
         assert_eq!(d["clips_added"][0]["clip_id"], "c2");

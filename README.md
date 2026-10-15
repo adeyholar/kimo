@@ -243,6 +243,8 @@ its own decode cache, so tool calls never wait for it. The playhead moves to an 
 the cut), else into the clip the call touched, and otherwise stays put. Frames are only rendered while an app is
 connected (one that opens mid-session gets the current frame at once); with telemetry off or nobody listening
 there is no render thread at all, and `KIMO_SPECTATOR_FRAMES=0` keeps the call events but turns the frames off.
+The `{"type":"session"}` event and every `{"type":"project_changed"}` carry the project `width` and `height` in pixels
+(the size after the call), so the app can place x/y transform moves on the viewer.
 `export` progress events carry `current_frame` (frames finished, so the index of the next frame), `total_frames`,
 `fps` (the instantaneous rate over the time since the previous progress report) and `eta_ms` (null until the first
 frame is done) beside `pct` and `elapsed_ms`. To watch in a plain browser instead of the app, run
