@@ -6306,7 +6306,9 @@
   "views": {
    "viewer": {
     "src": "../demo/frames/m11.jpg",
-    "tag": "relight rig_key"
+    "tag": "relight rig_key",
+    "tc": "00:00:02:00",
+    "res": "pbr 1920 x 1080"
    },
    "lights": {
     "rows": [
@@ -6333,29 +6335,35 @@
     "blocks": [
      {
       "widget": "swatches",
-      "h": 58,
-      "style": "border:none;background:none",
+      "h": 81,
+      "d": 60,
+      "gap2": 8,
+      "style": "border:none;border-bottom:1px solid var(--line2);border-radius:0;background:none;margin:12px 0 0 -2px",
       "items": [
        {
         "hi": "#ffffff",
         "mid": "#8d8d8d",
-        "lo": "#1a1a1a"
+        "lo": "#1a1a1a",
+        "src": "../demo/frames/m11_sw1.jpg"
        },
        {
         "hi": "#f4efe6",
         "mid": "#b9b2a6",
         "lo": "#3a3631",
-        "sel": true
+        "sel": true,
+        "src": "../demo/frames/m11_sw2.jpg"
        },
        {
         "hi": "#bdb8ae",
         "mid": "#6f6b64",
-        "lo": "#2a2825"
+        "lo": "#2a2825",
+        "src": "../demo/frames/m11_sw3.jpg"
        },
        {
         "hi": "#5a5a5a",
         "mid": "#202020",
-        "lo": "#050505"
+        "lo": "#050505",
+        "src": "../demo/frames/m11_sw4.jpg"
        }
       ]
      },

@@ -57,7 +57,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 #topbar .slash{margin:0 8px;color:var(--faint);font-size:var(--brand-fs,17px)}
 #topbar .proj{font-size:var(--proj-fs,16px);color:var(--dim);font-family:var(--proj-font,var(--sans))}
 #livepill{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-  display:flex;align-items:center;gap:7px;height:var(--pill-h,30px);padding:0 15px;
+  display:flex;align-items:center;gap:var(--pill-gap,7px);height:var(--pill-h,30px);padding:0 15px;
   border-radius:var(--pill-r,15px);background:var(--pill-bg,#1c1b19);border:1px solid var(--pill-line,#242321);
   font-size:var(--pill-fs,16px);color:var(--cream)}
 #livepill .dot{width:8px;height:8px;margin-right:2px;border-radius:50%;background:var(--ember);flex:none}
@@ -68,7 +68,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 #topbar .ro{color:var(--dim)}
 #topbar .vsep{display:none;width:1px;height:16px;background:#3a3936}
 #topbar .right.sep .vsep{display:block}
-#topbar .clock{font-family:var(--mono);color:var(--cream);font-size:var(--clock-fs,16px);min-width:8ch;text-align:right}
+#topbar .clock{font-family:var(--clock-font,var(--mono));color:var(--clock-c,var(--cream));font-size:var(--clock-fs,16px);min-width:8ch;text-align:right}
 #topbar .chip{padding:4px 9px;border-radius:5px;background:var(--raise);border:1px solid var(--line)}
 
 /* ---------- workspace grid ---------- */
@@ -134,7 +134,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .kv .row .k{color:var(--klabel,var(--text));font-family:var(--label-font);font-size:var(--klabel-fs,inherit)}
 .kv .row .v{font-family:var(--kv-vfont,var(--mono));color:var(--cream);text-align:right}
 .kv .row .v .from{color:var(--text)} .kv .row .v .arr{color:var(--dim);margin:0 6px}
-.kv .row.ch .v{color:var(--ember-text)}
+.kv .row.ch .v{color:var(--ember-text);text-decoration:var(--ch-ul,none);text-underline-offset:5px;text-decoration-thickness:1.5px}
 .kv .row.chip{background:var(--raise);border-radius:4px;padding:0 8px;margin:0 -8px 4px}
 .kv .row.chip.emb{background:var(--ember-tint)}
 .kv .row.emb .v{color:var(--ember-text)}
@@ -296,3 +296,5 @@ body.calls-sans{--call-font:var(--sans)}
 .kv .list div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;line-height:var(--li-h,26px)}
 .clip .ct.sw{background:var(--sw-bg,rgba(0,0,0,.28))}
 .kv .row + .sec{margin-top:var(--sec-mt,0)}
+
+.panel.vis{overflow:visible}

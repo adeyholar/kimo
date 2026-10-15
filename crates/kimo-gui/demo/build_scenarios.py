@@ -178,10 +178,10 @@ scen("m10", "particles", "glass_break.kimo", "claude", hms("00:42:51"),
 # ---------------------------------------------------------------- m11 lighting
 scen("m11", "lighting", "perfume_launch.kimo", "codex", hms("00:18:05"),
   [["light_rig", ["rembrandt", 4], 200], ["set_material", ["bottle", "glass"], 100], ["set_material", ["cap", "metal"], 100], ["preview_material", ["cap"], 300], ["set_relight", ["product"], 400], ["render_wgpu_pbr", [48], 1200]],
-  {"viewer": {"src": F("m11"), "tag": "relight rig_key"},
+  {"viewer": {"src": F("m11"), "tag": "relight rig_key", "tc": "00:00:02:00", "res": "pbr 1920 x 1080"},
    "lights": {"rows": [{"icon": "bulb", "k": "rig_key", "v": "5600K"}, {"icon": "bulb", "k": "rig_fill", "v": "6200K"}, {"icon": "bulb", "k": "rig_rim", "v": "7500K", "dim": True}]},
-   "insp": {"sub": "cap", "blocks": [{"widget": "swatches", "h": 58, "style": "border:none;background:none", "items": [
-              {"hi": "#ffffff", "mid": "#8d8d8d", "lo": "#1a1a1a"}, {"hi": "#f4efe6", "mid": "#b9b2a6", "lo": "#3a3631", "sel": True}, {"hi": "#bdb8ae", "mid": "#6f6b64", "lo": "#2a2825"}, {"hi": "#5a5a5a", "mid": "#202020", "lo": "#050505"}]},
+   "insp": {"sub": "cap", "blocks": [{"widget": "swatches", "h": 81, "d": 60, "gap2": 8, "style": "border:none;border-bottom:1px solid var(--line2);border-radius:0;background:none;margin:12px 0 0 -2px", "items": [
+              {"hi": "#ffffff", "mid": "#8d8d8d", "lo": "#1a1a1a", "src": F("m11_sw1")}, {"hi": "#f4efe6", "mid": "#b9b2a6", "lo": "#3a3631", "sel": True, "src": F("m11_sw2")}, {"hi": "#bdb8ae", "mid": "#6f6b64", "lo": "#2a2825", "src": F("m11_sw3")}, {"hi": "#5a5a5a", "mid": "#202020", "lo": "#050505", "src": F("m11_sw4")}]},
             S("Material"), K("Albedo", "0.62"), K("Roughness", "0.34", ch=True), K("Metallic", "1.00"), K("IOR", "1.45"), K("Clearcoat", "0.00")]},
    "rig": {"lights": [{"name": "key", "a": 90, "em": True}, {"name": "fill", "a": 215}, {"name": "rim", "a": 325}],
            "rows": [["rig_key", "5600K", "2.4", .8, True, "1.0"], ["rig_fill", "6200K", "0.6", .25, False, "1.0"], ["rig_rim", "7500K", "1.8", .6, False, "0.8"]],

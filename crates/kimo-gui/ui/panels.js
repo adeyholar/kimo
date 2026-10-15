@@ -288,11 +288,11 @@ const WIDGETS = {
     return `<svg viewBox="0 0 ${w} ${h}">${s}</svg>`;
   },
   swatches(b, w, h) {
-    const n = b.items.length, gap = 10, d = Math.min(h - 6, (w - gap * (n - 1)) / n);
+    const n = b.items.length, gap = b.gap2 ?? 10, d = b.d ?? Math.min(h - 6, (w - gap * (n - 1)) / n);
     let s = '<defs>' + b.items.map((it, i) => `<radialGradient id="sw${i}" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="${it.hi}"/><stop offset=".55" stop-color="${it.mid}"/><stop offset="1" stop-color="${it.lo}"/></radialGradient>`).join('') + '</defs>';
     b.items.forEach((it, i) => {
       const x = i * (d + gap) + d / 2;
-      s += `<rect x="${x - d / 2 + .75}" y="${.75}" width="${d - 1.5}" height="${d - 1.5}" rx="6" fill="#141413" stroke="${it.sel ? 'var(--cream)' : '#2a2a28'}" stroke-width="${it.sel ? 1.5 : 1}"/><circle cx="${x}" cy="${d / 2}" r="${d / 2 - 7}" fill="url(#sw${i})"/>`;
+      s += `<rect x="${x - d / 2 + .75}" y="${.75}" width="${d - 1.5}" height="${d - 1.5}" rx="6" fill="${it.src ? '#1c1b19' : '#141413'}" stroke="${it.sel ? 'var(--cream)' : it.src ? 'none' : '#2a2a28'}" stroke-width="${it.sel ? 1.5 : 1}"/>` + (it.src ? `<image href="${E(it.src)}" x="${x - d / 2 + 4}" y="4" width="${d - 8}" height="${d - 8}" preserveAspectRatio="xMidYMid slice"/>` : `<circle cx="${x}" cy="${d / 2}" r="${d / 2 - 7}" fill="url(#sw${i})"/>`);
     });
     return `<svg viewBox="0 0 ${w} ${h}">${s}</svg>`;
   },
@@ -844,7 +844,7 @@ function list({ spec, data, w, h }) {
   (data.rows || []).forEach((r, i) => {
     const y = (o.y0 ?? 44) + i * ((o.rowH ?? 30) + (o.gap ?? 0));
     html += `<div style="position:absolute;left:${o.chips ? 10 : 15}px;right:${o.chips ? 10 : 15}px;top:${y}px;height:${o.rowH ?? 30}px;display:flex;align-items:center;gap:10px;font-size:${o.fs ?? 12.5}px;padding:0 ${o.chips ? (o.padX ?? 9) : 0}px;${o.chips ? 'background:var(--raise);border-radius:4px;' : ''}${o.lines ? 'border-bottom:1px solid var(--line2);' : ''}">` +
-      (r.icon ? `<span style="width:16px;text-align:center;color:${r.dim ? 'var(--faint)' : 'var(--cream)'}">${r.icon === 'bulb' ? '<svg width="12" height="14" viewBox="0 0 12 14"><path d="M6 1a4.5 4.5 0 0 0-2.6 8.2V11h5.2V9.2A4.5 4.5 0 0 0 6 1z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4 12.8h4" stroke="currentColor" stroke-width="1.2"/></svg>' : E(r.icon)}</span>` : '') +
+      (r.icon ? `<span style="width:16px;text-align:center;color:${r.dim ? 'var(--faint)' : 'var(--cream)'}">${r.icon === 'bulb' ? '<svg width="12" height="14" viewBox="0 0 12 14"><path d="M6 1a4.5 4.5 0 0 0-2.6 8.2V11h5.2V9.2A4.5 4.5 0 0 0 6 1z" fill="' + (o.iconFill ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="1.2"/><path d="M4 12.8h4" stroke="currentColor" stroke-width="1.2"/></svg>' : E(r.icon)}</span>` : '') +
       `<span style="font-family:var(--label-font)" class="${r.dim ? 'dim' : 'cream'}">${E(r.k)}</span><span class="mono ${r.em ? 'em' : o.vCream ? 'cream' : 'dim'}" style="margin-left:auto">${E(r.v)}</span></div>`;
   });
   return html;
@@ -864,6 +864,41 @@ function tree({ spec, data, w, h }) {
 // ---------- light rig (lighting) ----------
 function lightrig({ spec, data, w, h }) {
   const o = spec.opts || {};
+  // m11 measured layout when o.cx is given (diagram centre/radius, table columns, thumb grid); the older
+  // compact layout otherwise
+  if (o.cx != null) {
+    const cx = o.cx, cy = o.cy, R = o.R, fs = o.fs ?? 17;
+    let s = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${o.ringC ?? '#3a3935'}" stroke-width="1.5"/>`;
+    s += `<rect x="${cx - 11}" y="${cy - 17}" width="22" height="30" rx="3" fill="${o.objC ?? '#6d6a64'}"/>`;
+    for (const L of (data.lights || [])) {
+      const a = L.a * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a), x = cx + ca * R, y = cy - sa * R, col = L.em ? 'var(--ember)' : 'var(--cream)';
+      const up = sa > .7, lx = up ? x : x + (ca >= 0 ? 14 : -14), ly = up ? y - 14 : y + 20;
+      s += `<line x1="${px(x)}" y1="${px(y)}" x2="${cx}" y2="${cy}" stroke="${col}" stroke-width="1.5" opacity="${L.em ? 1 : .55}"/><circle cx="${px(x)}" cy="${px(y)}" r="${o.dotR ?? 7}" fill="${col}"/>` +
+        `<text x="${px(lx)}" y="${px(ly)}" style="font-family:var(--sans);font-size:${fs}px" fill="${L.em ? 'var(--ember)' : 'var(--dim)'}" text-anchor="${up ? 'middle' : ca >= 0 ? 'start' : 'end'}">${E(L.name)}</text>`;
+    }
+    let html = head(spec, data) + `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
+    const C = o.cols, hy = o.hy, ry = o.ry, rh = o.rh;
+    const cell = (x, y, txt, al, cls, f) => `<span class="${cls}" style="position:absolute;${al === 'l' ? `left:${x}px;` : ''}${al === 'r' ? `right:${w - x}px;` : al === 'c' ? `left:${x - 60}px;width:120px;text-align:center;` : ''}top:${px(y - 12)}px;line-height:24px;font-size:${f}px;font-family:var(--sans);white-space:nowrap">${E(txt)}</span>`;
+    html += cell(C[0], hy, 'LIGHT', 'l', 'dim', o.hfs ?? 14) + cell(C[1], hy, 'TEMP', 'c', 'dim', o.hfs ?? 14) + cell(C[2], hy, 'INTENSITY', 'c', 'dim', o.hfs ?? 14) + cell(C[3], hy, 'FALLOFF', 'r', 'dim', o.hfs ?? 14);
+    html += `<i style="position:absolute;left:${C[0]}px;right:${w - C[3]}px;top:${px(hy + 19)}px;height:1px;background:var(--line)"></i>`;
+    (data.rows || []).forEach((r, i) => {
+      const y = ry + i * rh;
+      html += cell(C[0], y, r[0], 'l', 'cream', fs) + (r[1] ? cell(C[1], y, r[1], 'c', r[4] ? 'cream' : 'dim', fs) : '');
+      if (r[2] != null && r[2] !== '') {
+        const [b0, b1] = o.bar, vx = b0 + Math.min(Math.max(+r[3] || 0, .08), o.vmax ?? .45) * (b1 - b0);
+        html += `<i style="position:absolute;left:${b0}px;width:${px(Math.max(0, vx - 20 - b0))}px;top:${px(y)}px;height:2px;background:var(--cream)"></i>` +
+          `<i style="position:absolute;left:${px(vx + 20)}px;width:${px(Math.max(0, b1 - vx - 20))}px;top:${px(y)}px;height:2px;background:${o.barDim ?? '#3a3935'}"></i>` + cell(vx, y, r[2], 'c', 'cream', fs);
+      }
+      if (r[5] != null && r[5] !== '') html += cell(C[3], y, r[5], 'r', 'cream', fs);
+      if (i < (data.rows || []).length - 1) html += `<i style="position:absolute;left:${C[0]}px;right:${w - C[3]}px;top:${px(y + rh / 2)}px;height:1px;background:var(--line2)"></i>`;
+    });
+    const T = o.thumbs; (data.thumbs || []).forEach((t, i) => {
+      const x = T.x + (i % 2) * (T.w + T.gx), y = T.y + Math.floor(i / 2) * (T.h + T.gy);
+      html += `<div class="thumb ${t.sel ? 'sel' : ''}" style="position:absolute;left:${x}px;top:${y}px;width:${T.w}px;height:${T.h}px;border-radius:${T.r ?? 6}px">${t.src ? `<img src="${E(t.src)}">` : ''}</div>` +
+        `<span class="${t.sel ? 'cream' : 'dim'}" style="position:absolute;left:${x - 10}px;width:${T.w + 20}px;text-align:center;top:${px(y + T.h + T.ly - 12)}px;line-height:24px;font-size:${fs}px;font-family:var(--sans)">${E(t.label)}</span>`;
+    });
+    return html;
+  }
   const dw = o.dw ?? 190, tw = o.tw ?? 250;
   let s = '';
   const cx = 15 + dw / 2, cy = (h + 20) / 2, R = Math.min(dw / 2 - 10, (h - 70) / 2);
