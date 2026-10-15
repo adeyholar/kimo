@@ -264,6 +264,8 @@ function graphicsOps(state, MODES, ev) {
     }
     if (tn === 'remove_layer_style' || tn === 'remove_shape_modifier' || tn === 'remove_modifier' || tn === 'clear_path_keys') { K.blocks.push({ k: tn.replace(/_/g, ' '), v: String(A.effect_id ?? A.clip_id ?? ''), ch: true, _gfx: true, _flash: now() }); hit = true; }
   }
+  // the layer's clip on its track when the engine's telemetry did not already report the insert
+  if (P.s == null && P.clip == null && A.track_id != null && numOf(A.start) != null) { P.clip = String(R.clip_id ?? R.id ?? layer ?? tn); P.s = numOf(A.start); P.e = numOf(A.start) + (numOf(A.duration) ?? 4); P.track = A.track_id; P.label = P.label ?? P.clip; ev.payload = P; }
   if (hit) ev._kvDone = true;
   return hit;
 }
