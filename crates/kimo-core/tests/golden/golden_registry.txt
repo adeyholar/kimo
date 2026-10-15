@@ -103,6 +103,7 @@ export_job_start 07ddf323a2e92685
 export_manifest 5127d5c892991c43
 export_ocio_view_video 2eb3c79238b48182
 export_preset e5c29f6d9e3173dc
+export_vertex_stream_gltf cb9c0dd901f16703
 export_vertex_stream_obj e4ee4a2a4c9506e2
 export_with_subtitles 824e8be7e0dd374e
 ext_list 83a5db4765dba269
