@@ -58,7 +58,7 @@ function agent({ spec, state, data, w, h }) {
   calls.forEach((c, i) => {
     const cur = i === calls.length - 1;
     const y = top + i * (rowH + gap);
-    const ck = c.status === 'running' ? (o.runMark ?? '') : (c.status === 'error' ? '✕' : '✓');
+    const ck = c.status === 'running' ? (o.runMark ?? '') : c.status === 'error' ? '✕' : c.status === 'lost' ? '?' : '✓';   // lost: its result fell in a feed drop
     const showCk = !(cur && o.noCheckCur);
     const ckEl = `<span class="ck">${showCk ? ck : ''}</span>`;
     const dur = c.status === 'running' ? fmtDur(state.session.still && c.elapsed_ms != null ? c.elapsed_ms : performance.now() - c.t) : fmtDur(c.dur_ms);
@@ -658,7 +658,7 @@ function paintFalseColor(cv, im) {
 // inspector (no new panel). Only what the call carried; nested values are summarised, never invented.
 export function pickedRows(c) {
   const short = v => v == null ? '' : typeof v === 'object' ? (Array.isArray(v) ? `[${v.length}]` : `{${Object.keys(v).slice(0, 3).join(', ')}${Object.keys(v).length > 3 ? ', …' : ''}}`) : typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : String(v);
-  const rows = [{ sec: 'Call' }, { k: 'Status', v: c.status === 'running' ? 'running' : c.status === 'error' ? 'error' : 'ok', ch: c.status === 'error' }];
+  const rows = [{ sec: 'Call' }, { k: 'Status', v: c.status === 'running' ? 'running' : c.status === 'error' ? 'error' : c.status === 'lost' ? 'no result (feed dropped)' : 'ok', ch: c.status === 'error' }];
   const d = fmtDur(c.dur_ms); if (c.status !== 'running' && d) rows.push({ k: 'Latency', v: d });
   if (c.error) rows.push({ k: 'Error', v: String(c.error).slice(0, 80), ch: true });
   if (Array.isArray(c.diff) && c.diff.length) { rows.push({ sec: 'Diff' }); for (const d of c.diff) rows.push({ k: d.k, from: d.from, v: d.v }); }   // before -> after, only as the engine reported it

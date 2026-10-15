@@ -51,6 +51,9 @@ export function apply(ev) {
     case 'tool_start': {
       const m = ev.mode || (state.explicitMode ? null : inferMode(ev.name));
       if (m && MODES[m] && m !== state.mode) { state.mode = m; layoutDirty = true; }
+      // the engine runs one call at a time: a new start after a feed drop means a call left 'running' across the gap
+      // finished while we could not hear it; its outcome is unknown, so it says so instead of ticking forever
+      if (state._gapAt != null) { for (const x of state.calls) if (x.status === 'running' && x.t < state._gapAt) { x.status = 'lost'; x.dur_ms = null; } state._gapAt = null; }
       const c = { id: ev.id, name: ev.name, args: ev.args, t: performance.now() - (ev.elapsed_ms || 0), elapsed_ms: ev.elapsed_ms, dur_ms: null, status: 'running', progress: ev.progress };
       const i = state.calls.findIndex(x => x.id === ev.id && ev.id !== undefined);
       if (i >= 0) state.calls[i] = c; else { state.calls.push(c); state.callCount++; }
@@ -59,7 +62,8 @@ export function apply(ev) {
       break;
     }
     case 'tool_end': {
-      const c = [...state.calls].reverse().find(x => x.id === ev.id) || state.calls[state.calls.length - 1];
+      let c = ev.id !== undefined ? [...state.calls].reverse().find(x => x.id === ev.id) : state.calls[state.calls.length - 1];
+      if (!c && ev.id !== undefined) { c = { id: ev.id, name: ev.name, args: ev.args, t: performance.now(), dur_ms: null, status: 'ok' }; state.calls.push(c); state.callCount++; if (state.calls.length > 400) state.calls.splice(0, state.calls.length - 400); }   // its start was lost in a drop: the call still shows, settled
       if (c) { c.dur_ms = ev.dur_ms !== undefined ? ev.dur_ms : (performance.now() - c.t); /* null = the harness gave no latency: hidden */ c.status = ev.status || 'ok'; if (ev.args) c.args = ev.args; if (ev.result !== undefined) c.result = ev.result; if (ev.error) c.error = ev.error; if (ev.diff) c.diff = ev.diff; }
       break;
     }
@@ -317,7 +321,7 @@ async function watchTauriWindow() {
 }
 
 document.fonts.ready.then(() => {
-  connect(enqueue, (kind, label) => { state.status = { kind, label }; schedule(); });
+  connect(enqueue, (kind, label) => { state.status = { kind, label }; if (label === 'reconnecting' && state._gapAt == null) state._gapAt = performance.now(); schedule(); });
   watchTauriWindow();
   schedule();
 });
