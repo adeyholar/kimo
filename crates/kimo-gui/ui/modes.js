@@ -126,6 +126,7 @@ const RULES = [
   [/emitter|advection|shard|simulate|particle/, 'particles'],
   [/light_rig|set_light|remove_light|material|relight|pbr/, 'lighting'],
   [/set_camera|scene3d|gltf/, 'scene3d'],                                // before roto: set_camera_keyframe is not a key/matte
+  [/^(set_|add_|remove_|move_)?keyframes?$|^set_keyframes$/, 'edit'],                // a clip property's keys (animate group): the transform family draws them on the clip + viewer gizmo, not roto
   [/key|spill|mask|roto|matte/, 'roto'],
   [/scene_add|light_add|camera_set|keyframe/, 'scene3d'],
   [/grade|white_balance|match_shot|analyze_frame/, 'grading'],

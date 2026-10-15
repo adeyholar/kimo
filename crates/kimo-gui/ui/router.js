@@ -385,6 +385,9 @@ function railArgs(state, a) {
   for (const k of CLIP_KEYS) { const v = a[k]; if (typeof v !== 'string' || !RAW_ID.test(v)) continue;
     const [t, i] = state.liveTL ? findClip(state.liveTL, { clip_id: v }) : [null, -1], lb = t ? t.clips[i].label : null;
     o = o || { ...a }; if (lb && !RAW_ID.test(String(lb))) o[k] = String(lb); else delete o[k]; }
+  for (const k of ['track_id', 'track']) { const v = a[k]; if (typeof v !== 'string' || !RAW_ID.test(v)) continue;   // raw track ids the same way ('track1' -> 'V1')
+    const t = state.liveTL ? findTrack(state.liveTL, v) : null, lb = t ? t.label : null;
+    o = o || { ...a }; if (lb && !RAW_ID.test(String(lb))) o[k] = String(lb); else delete o[k]; }
   return o || a;
 }
 function clipLabel(P, t, fam) {
