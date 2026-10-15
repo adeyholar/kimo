@@ -22,6 +22,7 @@ export const FAMILIES = [
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
   ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents|fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track|undistort_clip|stabilize|apply_camera_solve|pin_layer|set_corner_pin|add_emitter|add_particles|add_shard_burst|set_material$|remove_material$|preview_material$|set_relight$|remove_light$)/],
   ['graphics', /^(add_shape|add_path_shape|set_path|add_path_key|clear_path_keys|add_shape_modifier|remove_shape_modifier|add_modifier|remove_modifier|set_layer_style|remove_layer_style|add_box_expand|add_detection_box|add_hud_frame|add_counter|add_prompt_box|add_glitch_confetti)$/],
+  ['roto', /^(add_mask|set_mask|set_mask_keyframe|set_mask_path_key|set_mask_prop_key|update_mask|reorder_mask|remove_mask|remove_mask_layer|roto_propagate|refine_matte|set_track_matte|remove_track_matte)$/],
   ['export', /^(export|render|queue_render|encode|deliver)/],
 ];
 export function family(name) {
@@ -424,6 +425,63 @@ function editOps2(state, MODES, tl, ev, A) {
   return false;
 }
 
+// Mask / roto family (m12): the mask's shape on the viewer (path points or rect/ellipse box), its keys on
+// Mask keys (one lane per mask property, diamonds at the keyed frames; propagation fills the run between
+// its keys), Refine matte / Key / Quality rows from the call's own args or result. Nothing is guessed.
+function maskOps(state, MODES, ev) {
+  const P = ev.payload || {}, tn = String(ev.tool_name).toLowerCase();
+  if (ev.phase === 'start') (state._maskArgs || (state._maskArgs = {}))[ev.call_id] = P.args || {};
+  const A = P.args || (state._maskArgs && state._maskArgs[ev.call_id]) || {};
+  if (ev.phase !== 'complete') return false;
+  delete (state._maskArgs || {})[ev.call_id];
+  const R = P.result && typeof P.result === 'object' ? P.result : {};
+  const [mode, V] = modeViews(state, MODES, ev); const PP = MODES[mode] ? MODES[mode].panels : {};
+  const vw = V.viewer || (V.viewer = {});
+  const mid = String(A.mask_id ?? R.mask_id ?? A.name ?? (tn === 'set_mask' || tn === 'remove_mask' ? 'mask' : 'mask'));
+  const kvp = Object.entries(PP).find(([, sp]) => sp.kind === 'kv'), K = kvp ? (V[kvp[0]] || (V[kvp[0]] = {})) : null;
+  const kp = Object.entries(PP).find(([, sp]) => sp.kind === 'keys'), KK = kp ? (V[kp[0]] || (V[kp[0]] = {})) : null;
+  const fps = numOf(state.session.fps) ?? 24;
+  let hit = false;
+  const rowsSet = (sec, rows) => { if (!K) return; K.blocks = (K.blocks || []).filter(b => b._mask); let at = K.blocks.findIndex(b => b.sec === sec);
+    if (at < 0) { K.blocks.push({ sec, _mask: true }); at = K.blocks.length - 1; }
+    for (const [k, v] of rows) { if (v == null || v === '') continue; let r = K.blocks.find(b => b.k === k && b._sec === sec); const vv = String(v);
+      if (!r) { r = { k, _mask: true, _sec: sec }; let end = at + 1; while (end < K.blocks.length && K.blocks[end].sec === undefined) end++; K.blocks.splice(end, 0, r); }
+      if (r.v != null && r.v !== vv) r.from = r.v; r.v = vv; r._flash = now(); hit = true; } };
+  const lane = (label, t, opt = {}) => { if (!KK) return; KK.lanes = (KK.lanes || []).filter(l => l._mask); let L = KK.lanes.find(l => l.label === label);
+    if (!L) { L = { label, keys: [], size: 4.5, keyColor: '#f1e2c2', _mask: true }; KK.lanes.push(L); } if (t != null && !L.keys.includes(t)) L.keys.push(t); L.keys.sort((a, b) => a - b); Object.assign(L, opt);
+    if (KK.lanes.length > 4) KK.lanes.splice(0, KK.lanes.length - 4);
+    const all = KK.lanes.flatMap(l => [...(l.keys || []), ...((l.area || []).map(p => p[0]))]); if (all.length) { const lo = Math.min(...all), hi = Math.max(...all), pad = Math.max(2, (hi - lo) * .06), step = hi - lo > 120 ? 50 : hi - lo > 40 ? 10 : 5;
+      KK.ruler = { t0: lo - pad, t1: hi + pad, step, first: Math.ceil((lo - pad) / step) * step, fmt: 'n', ticks: false }; if (t != null) KK.playhead = t; }
+    hit = true; };
+  const fr = t => numOf(t) != null ? Math.round(numOf(t) * fps) : null;
+  const pts = Array.isArray(A.points) ? A.points.map(q => Array.isArray(q) ? [numOf(q[0]), numOf(q[1])] : q && typeof q === 'object' ? [numOf(q.x), numOf(q.y)] : null).filter(q => q && q[0] != null && q[1] != null) : [];
+  const norm = pts.length && pts.every(([x, y]) => Math.abs(x) <= 1.5 && Math.abs(y) <= 1.5);
+  const P2 = norm ? pts : (state.session.width ? pts.map(([x, y]) => [x / state.session.width, y / state.session.height]) : []);
+  const ov = () => (vw.overlay = (vw.overlay || []).filter(o => o._kind !== 'mask:' + mid));
+  if (/^(add_mask|update_mask|set_mask)$/.test(tn)) {
+    const pr = A.params && typeof A.params === 'object' ? A.params : A;
+    const cx = numOf(pr.cx), cy = numOf(pr.cy), w = numOf(pr.w), h = numOf(pr.h), kind = String(A.kind ?? A.shape ?? (P2.length ? 'path' : 'rect'));
+    if (P2.length >= 2) { const o = ov(); o.push({ path: P2, closed: A.closed !== false, _kind: 'mask:' + mid }); hit = true; }
+    else if (cx != null && cy != null && w != null && h != null) { const o = ov(); o.push({ shape: /ellipse|circle/.test(kind) ? 'ellipse' : 'rect', rect: [cx - w / 2, cy - h / 2, w, h], _kind: 'mask:' + mid }); hit = true; }
+    if (K) { K.sub = `${mid} - ${kind}${P2.length ? ` · ${P2.length} pts` : ''}`; }
+    rowsSet('Refine matte', [['Feather', numOf(A.feather) != null ? `${fmtVal(numOf(A.feather))} px` : null], ['Choke', numOf(A.expand) != null ? fmtVal(-numOf(A.expand)) : null]]);   // only the rows m12 draws (choke = negative expand)
+  }
+  if (tn === 'set_mask_path_key') { lane(`${mid} path`, fr(A.time)); if (P2.length >= 2) { const o = ov(); o.push({ path: P2, closed: true, _kind: 'mask:' + mid }); } }
+  if (tn === 'set_mask_prop_key' || tn === 'set_mask_keyframe') { const pr = String(A.property ?? 'value'); lane(`${mid} ${pr}`, fr(A.time)); if (numOf(A.value) != null && /^(feather|expand)$/.test(pr)) rowsSet('Refine matte', [[pr === 'feather' ? 'Feather' : 'Choke', pr === 'feather' ? `${fmtVal(numOf(A.value))} px` : fmtVal(-numOf(A.value))]]); }
+  if (tn === 'roto_propagate' && KK) { const L = (KK.lanes || []).find(l => l.label === `${mid} path`); if (L && L.keys.length >= 2) { const lo = L.keys[0], hi = L.keys[L.keys.length - 1]; L.bar = [[lo, hi, '#3a3935']]; hit = true; }
+  }
+  if (tn === 'refine_matte') { rowsSet('Refine matte', [['Bg model', A.auto_bg != null ? (A.auto_bg ? 'auto' : 'manual') : null]]); if (K && !K.sub && A.clip_id != null) K.sub = 'refine matte';
+    const mae = numOf(R.mae ?? R.matte_mae); if (mae != null) rowsSet('Quality', [['Matte MAE', mae.toFixed(2)]]); }
+  if (tn === 'set_track_matte' && KK) lane(`track matte${A.mode ? ' ' + String(A.mode) : ''}`, null);
+  if (tn === 'remove_track_matte') { if (K) K.blocks = (K.blocks || []).filter(b => b.sec !== 'Key' && b._sec !== 'Key'); if (KK) KK.lanes = (KK.lanes || []).filter(l => !l.label.startsWith('track matte')); hit = true; }
+  if (tn === 'reorder_mask' && numOf(A.index) != null && KK && KK.lanes) {   // the mask's lanes move to its new place in the stack order
+    const mine = KK.lanes.filter(l => l.label.startsWith(mid + ' ')), rest = KK.lanes.filter(l => !l.label.startsWith(mid + ' ')); if (mine.length) { const at = Math.max(0, Math.min(rest.length, Math.round(numOf(A.index)))); KK.lanes = [...rest.slice(0, at), ...mine, ...rest.slice(at)]; for (const l of mine) l._flash = now(); hit = true; } }
+  if (tn === 'remove_mask' || tn === 'remove_mask_layer') { ov(); if (tn === 'remove_mask') vw.overlay = (vw.overlay || []).filter(o => !String(o._kind || '').startsWith('mask:'));
+    if (KK) KK.lanes = (KK.lanes || []).filter(l => !(tn === 'remove_mask' || l.label.startsWith(mid + ' '))); if (K && (tn === 'remove_mask' || String(K.sub || '').startsWith(mid))) { K.blocks = (K.blocks || []).filter(b => !b._mask); K.sub = ''; } hit = true; }
+  if (hit) ev._kvDone = true;
+  return hit;
+}
+
 function timelineOps(state, MODES, ev, fam) {
   const tl = timelineView(state, MODES); if (!tl) return false;
   const A = (ev.payload || {}).args || (state._editArgs && state._editArgs[ev.call_id]) || {};
@@ -433,7 +491,33 @@ function timelineOps(state, MODES, ev, fam) {
     // the m16 inspector heads with the touched clip's name (its rows fill only from args that carry them)
     const [t2, i2] = findClip(tl, { clip_id: A.clip_id ?? A.clip_a ?? (ev.target || {}).clip_id }); const kv = panels(state, MODES, ['kv'])[0];
     if (kv && t2) { const lb = t2.clips[i2].label; if (lb && !RAW_ID.test(String(lb))) kv.sub = String(lb); }
-    if (kv && kv.blocks) { const j = kv.blocks.findIndex(b => b._live); if (j >= 0) kv.blocks.splice(j); }   // the previous call's rows no longer describe this clip
+    if (kv) {
+      // the op's own rows in the existing Inspector: what it touched (clip names, track) and its values
+      kv.blocks = kv.blocks || []; const j = kv.blocks.findIndex(b => b._live); if (j >= 0) kv.blocks.splice(j);
+      const nameOf = id => { const [tt, ii] = findClip(tl, { clip_id: id }); const lb = tt ? tt.clips[ii].label : null; return lb && !RAW_ID.test(String(lb)) ? String(lb) : null; };
+      const ids = [A.clip_id, A.clip_a, A.clip_b, ...(Array.isArray(A.clip_ids) ? A.clip_ids : [])].filter(x => x != null);
+      const names = [...new Set(ids.map(nameOf).filter(Boolean))];
+      const trk = A.track_id != null ? findTrack(tl, A.track_id) : null;
+      const s = v => `${fmtVal(numOf(v))} s`, rows = [];
+      if (names.length) rows.push([names.length > 1 ? 'Clips' : 'Clip', names.length > 2 ? `${names[0]} +${names.length - 1}` : names.join(', ')]);
+      if (trk) rows.push(['Track', String(trk.label)]);
+      const add = (k, v) => { if (v != null && v !== '') rows.push([k, v]); };
+      if (numOf(A.speed) != null) add('Speed', `${fmtVal(numOf(A.speed))}×`);
+      if (ev.tool_name === 'rate_stretch' && numOf(A.duration) != null) add('Duration', s(A.duration));
+      if (numOf(A.times) != null) add('Copies', String(Math.round(numOf(A.times))));
+      if (numOf(A.gap) != null) add('Gap', s(A.gap));
+      if (numOf(A.start) != null && ev.tool_name !== 'add_camera_shake') add('Start', s(A.start));
+      if (Array.isArray(A.keys)) add('Ramp keys', `${A.keys.length} keys`);
+      if (Array.isArray(A.clip_ids)) add('Grouped', `${A.clip_ids.length} clips`);
+      if (A.mode != null) add('Mode', String(A.mode));
+      if (numOf(A.count) != null) add('Count', String(Math.round(numOf(A.count))));
+      if (numOf(A.at) != null) add('At', s(A.at));
+      if (numOf(A.amount) != null) add('Amount', fmtVal(numOf(A.amount)));
+      if (ev.tool_name === 'add_camera_shake') { if (numOf(A.amplitude) != null) add('Amplitude', fmtVal(numOf(A.amplitude))); if (numOf(A.duration) != null) add('Duration', s(A.duration)); }
+      if (ev.tool_name === 'set_track' && typeof A.name === 'string') add('Name', A.name);
+      if (ev.tool_name === 'project_set') { if (numOf(A.width) && numOf(A.height)) add('Size', `${A.width} x ${A.height}`); if (numOf(A.fps) != null) add('Frame rate', `${fmtVal(numOf(A.fps))} fps`); }
+      if (rows.length) { kv.blocks.push({ sec: String(ev.tool_name), _live: true }); for (const [k, v] of rows.slice(0, 6)) kv.blocks.push({ k, v, _live: true, _flash: now() }); }
+    }
     ev._kvDone = true; return true;
   }
   const hit = timelineOps1(tl, ev, fam);
@@ -627,8 +711,13 @@ export function route(ev, state, MODES) {
   if (fam === 'transform' && (ev.phase === 'start' || ev.phase === 'complete')) xfOps(state, MODES, ev);
   if (fam === '3d') sceneOps(state, MODES, ev);
   if (fam === 'graphics') graphicsOps(state, MODES, ev);
+  if (fam === 'roto') maskOps(state, MODES, ev);
   if (ev.phase === 'start' && (fam === 'color' || fam === 'effects')) (state._gradeArgs || (state._gradeArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
   if ((fam === 'color' || fam === 'effects') && gradeOps(state, MODES, ev)) ev._kvDone = true;
+  if (ev.phase === 'start' && /^(open_project|load_project|new_project|save_project|project_set)$/.test(String(ev.tool_name))) {   // the topbar's project name, from the call's own args
+    const pa = (ev.payload || {}).args || {}, nm = pa.name ?? pa.project ?? (typeof pa.path === 'string' ? pa.path.split(/[\\/]/).pop() : null);
+    if (typeof nm === 'string' && nm.trim()) state.session.project = nm.trim().slice(0, 40);
+  }
   if (ev.phase === 'start' && fam === 'edit') (state._editArgs || (state._editArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
   const T = ev.target || {}, P = ev.payload || {};
   const param = T.param || P.param, val = P.to ?? P.value;
@@ -887,7 +976,7 @@ function sceneOps(state, MODES, ev) {
       const kvn2 = Object.entries(PP).find(([, sp]) => sp.kind === 'kv');
       if (tn === 'set_material' && kvn2) {
         const K = V[kvn2[0]] || (V[kvn2[0]] = {}); const nm = String(A.name ?? 'material');
-        const alb = Array.isArray(A.albedo) && A.albedo.length >= 3 ? A.albedo.slice(0, 3).map(x => fmtVal(numOf(x))).join(', ') : null;
+        const alb = Array.isArray(A.albedo) && A.albedo.length >= 3 ? A.albedo.slice(0, 3).map(x => (numOf(x) ?? 0).toFixed(2)).join('  ') : null;
         const F = [['Albedo', alb], ['Roughness', numOf(A.roughness)], ['Metallic', numOf(A.metal)], ['IOR', numOf(A.ior)], ['Clearcoat', numOf(A.clearcoat)]].filter(([, v]) => v != null);
         const keep = (K.blocks || []).filter(b => b.widget);
         K.sub = nm; K.blocks = [...keep, { sec: 'Material' }, ...F.map(([k, v]) => ({ k, v: typeof v === 'number' ? v.toFixed(2) : v, _flash: now() }))]; ev._kvDone = true; hit = true;

@@ -115,6 +115,7 @@ const RULES = [
   [/grade|white_balance|match_shot|match_color|cdl|color_curve|acescct|lut_node|^(add|connect|disconnect)_nodes?$|^set_node_(param|mask)$/, 'grading'],   // grade graph / balance tools before scopes
   [/scope|exposure|ocio|gamut|hdr_|cie/, 'color'],
   [/effect|adjustment_layer|posterize|transition|speed_lines/, 'effects'],
+  [/track_matte$/, 'roto'],
   [/^(add|remove|delete|move|rename|lock)_track|^set_track$/, 'edit'],          // timeline tracks, not camera tracking
   [/track|stabiliz|undistort|camera_solve|solve_camera|corner_disagreement|lk_residual/, 'tracking'],
   [/mesh|sdf|lathe/, 'modelling'],

@@ -46,7 +46,7 @@ async def main(strict):
         await b.close()
     srv.shutdown()
     # families whose router code changes a panel beyond the rail / inspector diff / HUD that every call gets
-    PANEL = {'ingest': 'timeline insert', 'edit': 'timeline split/trim/ripple; duplicate/swap/loop/distribute/group clips, speed/ramp/blend/echo/freeze badges, shake layer, track rename, project size', 'effects': 'fx badge + wipe', 'text': 'caption chip',
+    PANEL = {'roto': 'mask path / box on the viewer, Mask keys lanes (path / property keys, propagation run, track matte), Refine matte / Key / Quality rows', 'ingest': 'timeline insert', 'edit': 'timeline split/trim/ripple; duplicate/swap/loop/distribute/group clips, speed/ramp/blend/echo/freeze badges, shake layer, track rename, project size', 'effects': 'fx badge + wipe', 'text': 'caption chip',
              'audio': 'EQ / comp / pan / meters / M-S', 'color': 'grade wipe + false colour', 'export': 'job card: progress bar, settings, renders row',
              'transform': 'viewer gizmo: box + 8 handles + anchor, previous pose, move arrow, readout; keyframe diamonds on the clip; motion path, bezier ease, null, parent link',
              '3d': 'camera orbit ring + frustum + pan keys + axis triad, scene objects in the tree, track quad / ROI / mesh grid / point ring / matte seed on the viewer, light glyph + Lights row, mesh op on the Stack, physics bodies, solve RMS',

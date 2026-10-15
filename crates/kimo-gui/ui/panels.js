@@ -12,7 +12,15 @@ export function fmtArgs(a) {
   const kv = o => Object.entries(o).filter(([, v]) => v != null && v !== '' && !(typeof v === 'number' && !Number.isFinite(v)))
     .map(([k, v]) => `${k}: ${v && typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
   if (Array.isArray(a)) return a.filter(x => x != null).map(x => (typeof x === 'object') ? kv(x) : String(x)).join(', ');
-  return kv(a);
+  // a live call's args object, in the mockups' rail style: what it acts on first, positional
+  // ("set_material(cap, …)", "add_emitter(V2, dust, …)"), then its own values named; nested arrays /
+  // objects stay out of the rail (they are in the inspector)
+  const ID = ['clip_id', 'clip', 'name', 'id', 'track_id', 'preset', 'kind', 'shape', 'mode', 'material', 'path', 'text', 'label', 'effect'];
+  const prim = v => v != null && v !== '' && typeof v !== 'object' && !(typeof v === 'number' && !Number.isFinite(v));
+  const pos = ID.filter(k => prim(a[k])).map(k => k === 'path' ? String(a[k]).split(/[\\/]/).pop() : String(a[k]));
+  const named = Object.entries(a).filter(([k, v]) => !ID.includes(k) && prim(v)).map(([k, v]) => `${k}: ${typeof v === 'number' ? Math.round(v * 1000) / 1000 : v}`);
+  const out = [...pos, ...named].join(', ');
+  return out || kv(a);
 }
 const fmtDur = ms => (ms == null ? '' : (ms / 1000).toFixed(1) + 's');
 

@@ -88,6 +88,7 @@ export function apply(ev) {
     case 'project_changed':
       state.stats.saved_at = performance.now(); state.stats.rev = ev.rev;
       if (ev.width > 0 && ev.height > 0) { state.session.width = ev.width; state.session.height = ev.height; }
+      if (typeof ev.project === 'string' && ev.project.trim()) state.session.project = ev.project.trim();
       break;
     default: return;
   }
