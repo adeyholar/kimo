@@ -240,6 +240,7 @@ render_offscreen_mesh_normal e5810f0e1140caa9
 render_particle_flow cd9f93ba7ca535b1
 render_particle_flow_motion eb05f96c9b39b857
 render_scene3d_cpu 5d6113f266a4cfbc
+render_scene3d_sequence d5ead1993608f34f
 render_scene3d_wgpu c0f647412c014efc
 render_scope 0ba759192f5e77dd
 render_textured_bvh ff1f91fde6db4cfa
@@ -260,6 +261,7 @@ sample_linear_neutral f521f85a77fcec69
 sample_noise 0efa7d68b87bccf8
 sample_pbr_raw 86bc792607aa9747
 sample_property 3994cff551e8910e
+sample_scene3d_animation b800f076572c3d6e
 sample_sdf_graph b9b932be852b16ac
 sample_sdf_raw b0e579f1cde1279c
 sample_texture_material 4a03308329ef702a

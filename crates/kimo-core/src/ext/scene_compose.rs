@@ -28,4 +28,35 @@ pub fn commands()->Vec<Command>{vec![
   Ok(json!({"path":path,"backend":status.actual_backend,"gpu_rendered":status.gpu_rendered,"fallback_reason":status.fallback_reason,"target":status.target,"draws":compiled.stats.draws,"sources_resolved":compiled.stats.sources_resolved,"vertices":compiled.stats.vertices,"triangles":compiled.stats.triangles,"contour_polygonized":compiled.stats.contour_polygonized,"contour_cache_hits":compiled.stats.contour_cache_hits,"depth_tiebreak":"exact ties keep the earlier draw (Depth32Float Less, painter order)","textures":"scene materials must be scalar; no texture image inputs in this tool","parity_vs_cpu_executor":"NOT bit-comparable (UNORM clamped linear vs ACES display-referred); tolerance metrics only"}))}
   #[cfg(not(all(feature="mesh-import",feature="material-textures",feature="flat-sah")))]
   {let _=a;Err("requires mesh-import,material-textures,flat-sah".into())}}},
+ Command{name:"sample_scene3d_animation",description:"Sample scene keyframe tracks at one time into a STATIC scene descriptor (CP4 bridge). Raw composable primitives: per-node translation/scale vec3 tracks (linear), rotation unit-quaternion [w,x,y,z] tracks (slerp, shorter arc), camera eye/pan/tilt/roll tracks, directional-light travel_direction/radiance and point-light position/intensity/min_distance tracks. Times clamp to first/last key; single key is constant; no easing curves or presets (easing is upstream choice of sample times). An animated node's world matrix is REPLACED by T(t)*R(t)*S(t) composed from its tracks (defaults: translation 0, identity rotation, scale 1). Wrong-variant light tracks, duplicate/dangling indices and malformed tracks are typed errors. Render the sampled descriptor with render_scene3d_cpu or render_scene3d_wgpu.",mutates:false,schema:obj(vec![("scene",json!({"type":"object"})),("animation",json!({"type":"object"})),("time",json!({"type":"number"}))],&["scene","animation","time"]),run:|_,a|{
+  let scene:crate::threed::scene::Scene=read(a,"scene")?;
+  let animation:crate::threed::animate::Animation=read(a,"animation")?;
+  let sampled=crate::threed::animate::sample(&scene,&animation,read(a,"time")?)?;
+  Ok(json!({"scene":serde_json::to_value(&sampled).map_err(|e|e.to_string())?,"nodes_animated":animation.nodes.len(),"lights_animated":animation.lights.len(),"camera_animated":animation.camera.is_some()}))}},
+ Command{name:"render_scene3d_sequence",description:"Render an animated scene at a list of times to a numbered PNG sequence dir/frame_000.png... (CP4 dual verification + frame export). Each time samples the keyframe tracks (see sample_scene3d_animation) and renders through the CPU executor (backend cpu, ACES display-referred) or the wgpu executor (backend wgpu, UNORM clamped linear; requires the gpu3d feature combo, software_only/allow_cpu honored). Times: 1..64 finite values, rendered in the given order (not sorted - upstream owns pacing). Fresh contour cache per frame. Returns per-frame paths, covered pixels and stats. Max 64 frames, target max per executor.",mutates:false,schema:obj(vec![("scene",json!({"type":"object"})),("animation",json!({"type":"object"})),("times",json!({"type":"array"})),("dir",s("output directory")),("width",json!({"type":"integer"})),("height",json!({"type":"integer"})),("backend",json!({"type":"string","default":"cpu"})),("software_only",json!({"type":"boolean","default":false})),("allow_cpu",json!({"type":"boolean","default":true}))],&["scene","animation","times","dir","width","height"]),run:|_,a|{
+  let scene:crate::threed::scene::Scene=read(a,"scene")?;
+  let animation:crate::threed::animate::Animation=read(a,"animation")?;
+  let times:Vec<f64>=read(a,"times")?;
+  if times.is_empty()||times.len()>64||times.iter().any(|t|!t.is_finite()){return Err("times: 1..64 finite values required".into());}
+  let dir=str_arg(a,"dir")?;std::fs::create_dir_all(dir).map_err(|e|e.to_string())?;
+  let w:usize=read(a,"width")?;let h:usize=read(a,"height")?;
+  let backend=a.get("backend").and_then(|v|v.as_str()).unwrap_or("cpu");
+  let software_only=a.get("software_only").and_then(|v|v.as_bool()).unwrap_or(false);
+  let allow_cpu=a.get("allow_cpu").and_then(|v|v.as_bool()).unwrap_or(true);
+  let mut frames=Vec::new();
+  for(i,t)in times.iter().enumerate(){
+   let sampled=crate::threed::animate::sample(&scene,&animation,*t)?;
+   let mut cache=crate::threed::scene::Cache::new();
+   let compiled=crate::threed::scene::compile(&sampled,&mut cache)?;
+   let path=format!("{dir}/frame_{i:03}.png");
+   let info=match backend{
+    "cpu"=>{let out=crate::threed::scene::render_cpu(&compiled,w,h)?;crate::render::write_image_tpdf(&out.frame,&path)?;json!({"covered_pixels":out.covered,"backend":"cpu_multi_draw_shared_depth"})},
+    "wgpu"=>{
+     #[cfg(all(feature="mesh-import",feature="material-textures",feature="flat-sah"))]
+     {let(frame,status)=crate::threed::scene::render_wgpu(&compiled,&[],w,h,[0.2;3],0.,software_only,allow_cpu)?;crate::render::write_image(&frame,&path)?;json!({"backend":status.actual_backend,"gpu_rendered":status.gpu_rendered,"fallback_reason":status.fallback_reason})}
+     #[cfg(not(all(feature="mesh-import",feature="material-textures",feature="flat-sah")))]
+     {let _=(software_only,allow_cpu);return Err("backend wgpu requires mesh-import,material-textures,flat-sah".into());}}
+    other=>return Err(format!("backend: cpu|wgpu required (got {other:?})")),};
+   frames.push(json!({"index":i,"time":t,"path":path,"draws":compiled.stats.draws,"render":info}));}
+  Ok(json!({"frames":frames,"count":frames.len(),"dir":dir}))}},
 ]}
