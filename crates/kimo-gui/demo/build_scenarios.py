@@ -116,13 +116,14 @@ scen("m05", "color", "dune_film.kimo", "codex", hms("00:26:51"),
 scen("m06", "effects", "neon_run.kimo", "claude", hms("00:18:22"),
   [["add_effect", ["clip_07", "glitch"], 300], ["set_effect_param", [{"amount": "0.42"}], 100], ["add_effect", ["clip_07", "chromatic"], 200], ["set_effect_mask", ["chromatic"], 200],
    ["add_adjustment_layer", ["V3"], 100], ["set_posterize_time", ["12fps"], 100], ["add_transition", ["whip", "10f"], 200], ["add_speed_lines", ["clip_07"], 700]],
-  {"viewer": {"src": F("m06"), "tag": "fx · clip_07", "tc": "01:00:09:14", "res": "1920 x 1080 24p"},
+  {"viewer": {"src": F("m06"), "tag": "fx - clip_07", "tc": "01:00:09:14", "res": "1920 x 1080 24p"},
    "insp": {"sub": "clip_07 · night_street", "blocks": [K("Position", "0, 0"), K("Scale", "104%"), K("Rotation", "0.0"), K("Opacity", "100%"), S("Effect stack"),
             {"list": ["glitch", "chromatic", "speed lines"], "sel": 2}, S("speed lines"), K("Density", "64"), K("Length", "0.35"), K("Center", "960, 540"), K("Amount", "0.60", **{"from": "0.20"}), K("Blend", "screen")]},
-   "tl": {"ruler": {"t0": 5.85, "t1": 14.6, "step": 2, "align": "right"}, "playhead": 10.0, "tracks": [
-      {"label": "V2", "clips": [{"s": 9.4, "e": 12.9, "label": "adjustment", "cls": "mauve"}]},
-      {"label": "V1", "clips": [{"s": 5.85, "e": 9.85, "label": "alley_rain", "thumb": F("m06_t1")}, {"s": 9.9, "e": 10.75, "label": "whip 10f", "cls": "ghost"}, {"s": 10.8, "e": 14.6, "label": "night_street", "thumb": F("m06_t2"), "cls": "sel", "fx": ["glitch", "chromatic", "speed lines"]}]},
-      {"label": "A1", "wave": {"seed": 12, "amp": .8}}]}},
+   "tl": {"ruler": {"t0": 4.21, "t1": 14.14, "step": 2, "first": 6, "minor": 2, "minorFrom": 5, "ticks": False}, "playhead": 9.77, "tracks": [
+      {"label": "V2", "h": 36, "lane": "#39352c", "laneInset": 0, "clips": [{"s": 8.0, "e": 11.99, "label": "adjustment", "cls": "mauve"}]},
+      {"label": "V1", "h": 80, "cls": "tall", "clips": [{"s": 4.21, "e": 8.68, "label": "alley_rain", "thumb": F("m06_t1")}, {"s": 8.76, "e": 9.71, "cls": "ghost haspill", "pill": "whip 10f"},
+                                     {"s": 9.80, "e": 14.14, "label": "night_street", "thumb": F("m06_t2"), "cls": "sel", "fx": ["glitch", "chromatic", "speed lines"]}]},
+      {"label": "A1", "h": 35, "area": {"pts": [0.7, 0.45, 0.62, 0.38, 0.55, 0.42, 0.6, 0.35, 0.5, 0.3, 0.48, 0.4, 0.58, 0.45, 0.62], "bg": "#252422", "fill": "#4f4e49"}}]}},
   stats={"cpu": 74, "ffmpeg": "7.1", "saved_s": 1}, final={"count": 57})
 
 # ---------------------------------------------------------------- m07 tracking

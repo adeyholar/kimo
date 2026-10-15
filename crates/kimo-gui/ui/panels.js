@@ -200,9 +200,9 @@ function fmtT(t, f) {
 }
 function ruler(r, X, y, o = {}) {
   let s = `<div class="ruler" style="top:${y}px">`;
-  if (r.minor) for (let t = r.t0; t <= r.t1 + 1e-6; t += r.minor) s += `<i class="mn" style="left:${px(X(t))}px"></i>`;
+  if (r.minor) for (let t = r.minorFrom ?? r.t0; t <= r.t1 + 1e-6; t += r.minor) s += `<i class="mn" style="left:${px(X(t))}px"></i>`;
   const last = r.last ?? r.t1;
-  for (let t = r.t0; t <= last + 1e-6; t += r.step) {
+  for (let t = r.first ?? r.t0; t <= last + 1e-6; t += r.step) {
     const x = X(t);
     const tr = r.edge && t === r.t0 ? 'none' : r.edge && t + r.step > last + 1e-6 ? 'translateX(-100%)' : r.align === 'right' ? 'translateX(-100%) translateX(-5px)' : r.align === 'left' ? `translateX(${r.lx ?? 4}px)` : 'translateX(-50%)';
     s += `<span style="left:${px(x)}px;transform:${tr}">${fmtT(Math.round(t * 100) / 100, r.fmt)}</span>`;
@@ -238,7 +238,7 @@ function timeline({ spec, data, w, h }) {
   let y = o.trackY ?? 30;
   for (const t of (data.tracks || [])) {
     const th = t.h ?? o.trackH ?? 38;
-    html += `<div class="trk" style="top:${y}px;height:${th}px">`;
+    html += `<div class="trk ${t.cls || ''}" style="top:${y}px;height:${th}px">`;
     if (t.area) html += `<svg style="position:absolute;left:${px(X(t.area.s ?? r.t0))}px;top:0;width:${px((x1) - X(t.area.s ?? r.t0))}px;height:${th}px" viewBox="0 0 ${px(x1 - X(t.area.s ?? r.t0))} ${th}"><rect width="100%" height="100%" rx="7" fill="${t.area.bg || '#2a2824'}"/><path d="${smoothArea(x1 - X(t.area.s ?? r.t0), th, t.area)}" fill="${t.area.fill || '#4a4741'}"/></svg>`;
     if (t.label) html += t.chip ? `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? 120}px">${E(t.label)}</span>` : `<span class="lab">${E(t.label)}</span>`;
     if (t.lane) { const li = t.laneInset ?? o.laneInset ?? 3; html += `<div class="lane" style="position:absolute;left:${x0}px;right:${w - x1}px;top:${li}px;bottom:${li}px;background:${t.lane}"></div>`; }
@@ -253,7 +253,8 @@ function timeline({ spec, data, w, h }) {
       const a = X(c.s), b = X(c.e);
       html += `<div class="clip ${c.cls || ''}" style="left:${px(a)}px;width:${px(b - a)}px${c.bg ? ';background:' + c.bg : ''}">` +
         (c.thumb ? `<span class="ct"><img src="${E(c.thumb)}" alt=""></span>` : '') + (c.cover ? `<img src="${E(c.cover)}" alt="">` : '') + (c.label ? `<span class="cl">${E(c.label)}</span>` : '') +
-        (c.fx || []).map(f => `<span class="fxchip">${E(f)}</span>`).join('') + '</div>';
+        (c.pill ? `<span class="cpill">${E(c.pill)}</span>` : '') +
+        (c.fx ? (o.fxRow ? `<span class="fxrow">${c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')}</span>` : c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')) : '') + '</div>';
     }
     html += '</div>';
     y += th + (o.trackGap ?? 0);

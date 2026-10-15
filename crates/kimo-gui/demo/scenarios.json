@@ -2732,7 +2732,7 @@
   "views": {
    "viewer": {
     "src": "../demo/frames/m06.jpg",
-    "tag": "fx \u00b7 clip_07",
+    "tag": "fx - clip_07",
     "tc": "01:00:09:14",
     "res": "1920 x 1080 24p"
    },
@@ -2794,19 +2794,25 @@
    },
    "tl": {
     "ruler": {
-     "t0": 5.85,
-     "t1": 14.6,
+     "t0": 4.21,
+     "t1": 14.14,
      "step": 2,
-     "align": "right"
+     "first": 6,
+     "minor": 2,
+     "minorFrom": 5,
+     "ticks": false
     },
-    "playhead": 10.0,
+    "playhead": 9.77,
     "tracks": [
      {
       "label": "V2",
+      "h": 36,
+      "lane": "#39352c",
+      "laneInset": 0,
       "clips": [
        {
-        "s": 9.4,
-        "e": 12.9,
+        "s": 8.0,
+        "e": 11.99,
         "label": "adjustment",
         "cls": "mauve"
        }
@@ -2814,22 +2820,24 @@
      },
      {
       "label": "V1",
+      "h": 80,
+      "cls": "tall",
       "clips": [
        {
-        "s": 5.85,
-        "e": 9.85,
+        "s": 4.21,
+        "e": 8.68,
         "label": "alley_rain",
         "thumb": "../demo/frames/m06_t1.jpg"
        },
        {
-        "s": 9.9,
-        "e": 10.75,
-        "label": "whip 10f",
-        "cls": "ghost"
+        "s": 8.76,
+        "e": 9.71,
+        "cls": "ghost haspill",
+        "pill": "whip 10f"
        },
        {
-        "s": 10.8,
-        "e": 14.6,
+        "s": 9.8,
+        "e": 14.14,
         "label": "night_street",
         "thumb": "../demo/frames/m06_t2.jpg",
         "cls": "sel",
@@ -2843,9 +2851,27 @@
      },
      {
       "label": "A1",
-      "wave": {
-       "seed": 12,
-       "amp": 0.8
+      "h": 35,
+      "area": {
+       "pts": [
+        0.7,
+        0.45,
+        0.62,
+        0.38,
+        0.55,
+        0.42,
+        0.6,
+        0.35,
+        0.5,
+        0.3,
+        0.48,
+        0.4,
+        0.58,
+        0.45,
+        0.62
+       ],
+       "bg": "#252422",
+       "fill": "#4f4e49"
       }
      }
     ]

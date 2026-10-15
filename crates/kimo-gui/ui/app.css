@@ -139,7 +139,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .kv .row.bar{position:relative}
 .kv .row.bar::before{content:"";position:absolute;left:-15px;top:4px;bottom:4px;width:3px;background:var(--ember)}
 .kv .list{border:1px solid var(--line);border-radius:5px;overflow:hidden;margin:4px 0}
-.kv .list div{height:var(--li-h,26px);display:flex;align-items:center;padding:0 10px;font-family:var(--mono);font-size:12px;color:var(--text)}
+.kv .list div{height:var(--li-h,26px);display:flex;align-items:center;padding:0 10px;font-family:var(--li-font,var(--mono));font-size:var(--li-fs,12px);color:var(--li-c,var(--text))}
 .kv .list div.sel{background:var(--raise2);color:var(--cream)}
 .kv .code{background:var(--raise);border-radius:5px;padding:9px 11px;font-family:var(--mono);font-size:12px;line-height:18px;color:var(--cream);white-space:pre;margin:2px 0 4px}
 .kv .widget{margin:4px 0;border:1px solid var(--line);border-radius:5px;background:#0e0e0d;overflow:hidden}
@@ -209,3 +209,13 @@ body.calls-sans{--call-font:var(--sans)}
 .clip.cap{justify-content:center} .clip.cap .cl{padding:0 6px}
 .call.cur .ck:empty{display:var(--cur-ck,block)}
 .call.cur .ck{color:var(--ember)}
+
+/* tall video tracks (m06): label on top, thumb 44x26, fx chips along the bottom */
+.trk.tall .clip{align-items:flex-start;padding-top:5px}
+.trk.tall .clip .ct{height:26px}
+.trk.tall .clip .cl{line-height:26px}
+.clip .fxrow{position:absolute;left:6px;bottom:6px;display:flex;gap:6px;z-index:1}
+.clip .fxrow .fxchip{margin:0;height:22px;line-height:22px;padding:0 7px;border-radius:6px;background:var(--fx-bg,#4b463e);font-size:var(--fx-fs,15px);color:var(--cream)}
+.clip .cpill{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1;height:28px;line-height:28px;padding:0 10px;border-radius:14px;background:var(--pill-bg2,#5b5546);font-size:var(--clip-fs,16px);color:var(--cream)}
+.trk .lane.full{border-radius:var(--clip-r,7px)}
+.clip.haspill{overflow:visible}
