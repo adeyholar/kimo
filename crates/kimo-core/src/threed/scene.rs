@@ -79,6 +79,23 @@ pub fn render_wgpu(c:&Compiled,images:&[super::texture_material::Image],w:usize,
  if c.draws.len()>64{return Err(format!("wgpu executor max64 draws per scene pass (got {}); the CPU executor allows 256 - split the scene or use render_cpu",c.draws.len()));}
  let draws:Vec<super::pbr_offscreen::Draw>=c.draws.iter().map(|d|super::pbr_offscreen::Draw{stream:d.stream.clone(),world:d.world,surface:d.surface.clone()}).collect();
  super::pbr_offscreen::render(&draws,images,&c.camera,w,h,&c.lights,ambient,time,software_only,allow_cpu)}
+/// PL1b: render_cpu + one optional directional shadow map. The map's light is
+/// lights[index]; its bounds/texel constants are shared verbatim with the wgpu and
+/// raycast-reference paths. None shadows render EXACTLY the render_cpu frame.
+pub fn render_cpu_shadowed(c:&Compiled,w:usize,h:usize,shadow:Option<(usize,&super::shadow::DirectionalShadowMap)>)->Result<super::lit_raster::Output,String>{
+ let mut baked=Vec::with_capacity(c.draws.len());
+ for d in &c.draws{baked.push(super::node_ingest::transform(&d.stream,d.world)?);}
+ let materials:Vec<super::pbr::Material>=c.draws.iter().map(|d|surface_to_material(&d.surface)).collect();
+ let refs:Vec<(&Stream,&super::pbr::Material)>=baked.iter().zip(materials.iter()).map(|(s,m)|(s,m)).collect();
+ let mut slots:Vec<Option<&super::shadow::DirectionalShadowMap>>=vec![None;c.lights.len()];
+ if let Some((i,m))=shadow{if i>=slots.len(){return Err("shadowed light index in range required".into());}slots[i]=Some(m);}
+ super::lit_raster::render_shadowed(&refs,&c.camera,w,h,&c.lights,&slots)}
+#[cfg(all(feature="mesh-import",feature="material-textures",feature="flat-sah"))]
+/// PL1b: render_wgpu + one optional directional shadow map (depth pre-pass + PCF).
+pub fn render_wgpu_shadowed(c:&Compiled,images:&[super::texture_material::Image],w:usize,h:usize,ambient:[f64;3],time:f64,software_only:bool,allow_cpu:bool,shadow:Option<(usize,&super::shadow::DirectionalShadowMap)>)->Result<(crate::effects::Frame,super::pbr_offscreen::Status),String>{
+ if c.draws.len()>64{return Err(format!("wgpu executor max64 draws per scene pass (got {})",c.draws.len()));}
+ let draws:Vec<super::pbr_offscreen::Draw>=c.draws.iter().map(|d|super::pbr_offscreen::Draw{stream:d.stream.clone(),world:d.world,surface:d.surface.clone()}).collect();
+ super::pbr_offscreen::render_shadowed(&draws,images,&c.camera,w,h,&c.lights,ambient,time,software_only,allow_cpu,shadow)}
 fn check_affine(m:&Matrix,what:&str)->Result<(),String>{if m[3]!=[0.,0.,0.,1.]||m.iter().flatten().any(|v|!v.is_finite()){return Err(format!("{what}: finite affine transform required (last row 0,0,0,1)"));}Ok(())}
 
 /// Structural validation only - no geometry is built. Unreferenced sources are
@@ -235,7 +252,7 @@ pub fn compile(s:&Scene,cache:&mut Cache)->Result<Compiled,String>{
  #[test]fn render_wgpu_combo_without_gpu3d_typed_error_or_honest_fallback(){
   let s=Scene{sources:vec![sphere_source()],nodes:vec![Node{source:0,world:ident(),material:0}],materials:vec![surf()],lights:vec![Light::Directional{travel_direction:[0.,0.,1.],radiance:[1.;3]}],camera:cam()};
   let c=compile(&s,&mut Cache::new()).unwrap();
-  assert!(render_wgpu(&c,&[],64,36,[0.2;3],0.,true,false).unwrap_err().contains("native gpu3d not compiled"),"no gpu3d: typed error, never silent");
+  assert!(render_wgpu(&c,&[],64,36,[0.2;3],0.,true,false).err().unwrap().contains("native gpu3d not compiled"),"no gpu3d: typed error, never silent");
   let(_,st)=render_wgpu(&c,&[],64,36,[0.2;3],0.,true,true).unwrap();assert!(!st.gpu_rendered);assert!(st.fallback_reason.is_some(),"allow_cpu: honest labeled fallback");}
  #[test]fn scene_json_roundtrip_deterministic(){let s=Scene{sources:vec![sphere_source()],nodes:vec![Node{source:0,world:ident(),material:0}],materials:vec![surf()],lights:vec![Light::Point{position:[0.,0.,3.],intensity:[1.;3],min_distance:0.01}],camera:cam()};
   let j=serde_json::to_string(&s).unwrap();let back:Scene=serde_json::from_str(&j).unwrap();assert_eq!(serde_json::to_string(&back).unwrap(),j,"JSON round-trip stable");}
@@ -343,7 +360,7 @@ pub fn compile(s:&Scene,cache:&mut Cache)->Result<Compiled,String>{
   let s=Scene{sources:vec![sphere_source()],nodes:(0..64).map(|_|Node{source:0,world:ident(),material:0}).collect(),materials:vec![surf()],lights:vec![],camera:cam()};
   let c=compile(&s,&mut Cache::new()).unwrap();
   #[cfg(not(feature="gpu3d"))]
-  assert!(render_wgpu(&c,&[],64,36,[0.2;3],0.,true,false).unwrap_err().contains("native gpu3d not compiled"),"64 draws: past the cap check, fails only at backend dispatch");
+  assert!(render_wgpu(&c,&[],64,36,[0.2;3],0.,true,false).err().unwrap().contains("native gpu3d not compiled"),"64 draws: past the cap check, fails only at backend dispatch");
   #[cfg(feature="gpu3d")]
   {let(_,st)=render_wgpu(&c,&[],64,36,[0.2;3],0.,true,false).unwrap();assert!(st.gpu_rendered,"64 draws render on the adapter");}}
  #[cfg(all(feature="mesh-import",feature="surface-contour"))]
