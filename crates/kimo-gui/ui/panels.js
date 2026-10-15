@@ -105,7 +105,7 @@ function viewer({ spec, data, w, h, state }) {
   if (data.tc || data.left || data.res) {
     html += `<div class="vmeta" style="top:${my}px;left:${o.metaL ?? 14}px;right:${o.metaR ?? 14}px">` +
       `<span>${E(data.left || '')}</span>` +
-      (data.tc ? `<span class="tc" style="${o.tcLeft ? 'position:static;transform:none;font-weight:400;color:var(--dim);font-size:var(--fs-s)' : ''}">${E(data.tc)}</span>` : '') +
+      (data.tc ? `<span class="tc" style="${o.tcLeft ? 'position:static;transform:none;font-weight:400;color:var(--dim);font-size:var(--tcl-fs,var(--fs-s));font-family:var(--tcl-font,var(--mono))' : ''}">${E(data.tc)}</span>` : '') +
       `<span class="r">${E(data.res || '')}</span></div>`;
   }
   return html;
@@ -414,8 +414,9 @@ function keys({ spec, data, w, h }) {
     html += `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? (x0 - 20)}px">${L.html ? L.label : E(L.label)}</span>`;
     const mid = lh / 2;
     let s = '';
+    if (o.laneBg) s += `<rect x="${px(x0 - 6)}" y="${px(mid - (o.laneBgH ?? lh - 4) / 2)}" width="${px(x1 - x0 + 10)}" height="${o.laneBgH ?? lh - 4}" rx="4" fill="${o.laneBg}"/>`;
     if (L.bar) for (const [a, b, c] of L.bar) s += `<rect x="${px(X(a))}" y="${px(mid - (o.barH ?? 9))}" width="${px(X(b) - X(a))}" height="${(o.barH ?? 9) * 2}" rx="3" fill="${c || '#6b665d'}"/>`;
-    if (L.cache) { const [done, total] = L.cache; s += `<rect x="${x0}" y="${mid - 9}" width="${px(X(done) - x0)}" height="18" rx="3" fill="#bdb8ae"/><rect x="${px(X(done))}" y="${mid - 9}" width="${px(x1 - X(done))}" height="18" rx="3" fill="#070707" stroke="#2a2a28"/>`; for (let f = done + 2; f < total; f += 2) s += `<line x1="${px(X(f))}" x2="${px(X(f))}" y1="${mid - 4}" y2="${mid + 4}" stroke="#2a2a28"/>`; }
+    if (L.cache) { const [done, total] = L.cache, ch = o.cacheH ?? 18; s += `<rect x="${px(X(done))}" y="${mid - ch / 2}" width="${px(x1 - X(done))}" height="${ch}" rx="3" fill="#070707" stroke="#2a2a28"/><rect x="${x0}" y="${mid - ch / 2}" width="${px(X(done) - x0)}" height="${ch}" rx="4" fill="${o.cacheC ?? '#bdb8ae'}"/>`; for (let f = done + 2; f < total; f += 2) s += `<line x1="${px(X(f))}" x2="${px(X(f))}" y1="${mid - 4}" y2="${mid + 4}" stroke="#2a2a28"/>`; }
     if (L.area) { const pts = L.area; s += `<path d="M${px(X(pts[0][0]))} ${mid + 9} ${pts.map(p => `L${px(X(p[0]))} ${px(mid + 9 - p[1] * 18)}`).join(' ')} L${px(X(pts[pts.length - 1][0]))} ${mid + 9}Z" fill="${L.color || '#5a5650'}"/>`; }
     if (L.dots) for (const t of L.dots) s += `<circle cx="${px(X(t))}" cy="${mid}" r="${L.r || 2.6}" fill="${L.dotColor || '#77736b'}"/>`;
     if (L.keys) for (const k of L.keys) { const t = typeof k === 'number' ? k : k.t; const em = typeof k === 'object' && k.em; const d = L.size || 5.5; s += `<path d="M${px(X(t))} ${mid - d} L${px(X(t) + d)} ${mid} L${px(X(t))} ${mid + d} L${px(X(t) - d)} ${mid}Z" fill="${em ? 'var(--ember)' : (L.keyColor || 'var(--cream)')}"/>`; }
@@ -842,9 +843,9 @@ function list({ spec, data, w, h }) {
   let html = head(spec, data);
   (data.rows || []).forEach((r, i) => {
     const y = (o.y0 ?? 44) + i * ((o.rowH ?? 30) + (o.gap ?? 0));
-    html += `<div style="position:absolute;left:${o.chips ? 10 : 15}px;right:${o.chips ? 10 : 15}px;top:${y}px;height:${o.rowH ?? 30}px;display:flex;align-items:center;gap:10px;font-size:12.5px;padding:0 ${o.chips ? 9 : 0}px;${o.chips ? 'background:var(--raise);border-radius:4px;' : ''}${o.lines ? 'border-bottom:1px solid var(--line2);' : ''}">` +
+    html += `<div style="position:absolute;left:${o.chips ? 10 : 15}px;right:${o.chips ? 10 : 15}px;top:${y}px;height:${o.rowH ?? 30}px;display:flex;align-items:center;gap:10px;font-size:${o.fs ?? 12.5}px;padding:0 ${o.chips ? (o.padX ?? 9) : 0}px;${o.chips ? 'background:var(--raise);border-radius:4px;' : ''}${o.lines ? 'border-bottom:1px solid var(--line2);' : ''}">` +
       (r.icon ? `<span style="width:16px;text-align:center;color:${r.dim ? 'var(--faint)' : 'var(--cream)'}">${r.icon === 'bulb' ? '<svg width="12" height="14" viewBox="0 0 12 14"><path d="M6 1a4.5 4.5 0 0 0-2.6 8.2V11h5.2V9.2A4.5 4.5 0 0 0 6 1z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4 12.8h4" stroke="currentColor" stroke-width="1.2"/></svg>' : E(r.icon)}</span>` : '') +
-      `<span style="font-family:var(--label-font)" class="${r.dim ? 'dim' : 'cream'}">${E(r.k)}</span><span class="mono ${r.em ? 'em' : 'dim'}" style="margin-left:auto">${E(r.v)}</span></div>`;
+      `<span style="font-family:var(--label-font)" class="${r.dim ? 'dim' : 'cream'}">${E(r.k)}</span><span class="mono ${r.em ? 'em' : o.vCream ? 'cream' : 'dim'}" style="margin-left:auto">${E(r.v)}</span></div>`;
   });
   return html;
 }

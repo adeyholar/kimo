@@ -76,11 +76,11 @@ export const MODES = {
     rects: { agent: [10, 55, 377, 480], viewer: [387, 55, 1070, 480], insp: [1080, 55, 1365, 480], tl: [10, 489, 1365, 741] },
     panels: { agent: AG({ count: true }), viewer: { kind: 'viewer', opts: { pad: [12, 12, 42, 12] } }, insp: { kind: 'kv', title: 'Inspector', opts: { lines: true, top: 58 } },
       tl: { kind: 'timeline', opts: { x0: 56.5, xr: 8, rulerY: 1, trackY: 37, trackH: 37, trackGap: 7.5 } } } },
-  particles: { activity: 'simulating', top: 46, foot: 0, rightCls: 'chips', vars: { '--radius': '10px', '--panel': '#121211' },
+  particles: { activity: 'simulating', top: 46, foot: 0, rightCls: 'chips', vars: { '--radius': '10px', '--panel': '#121211', '--empty-pp': 'none', '--kv-row': '28.5px', '--sec-h': '42px', '--sec-mt': '10px', '--raise': '#1e1d1b', '--sub-c': '#7a776f', '--ro-pad': '3px 9px', '--ro-c': 'var(--cream)', '--ro-fs': '17px', '--ro-bg': '#1e1d1b', '--ro-bd': 'transparent', '--clk-c': '#9d988b', '--clk-font': 'var(--sans)', '--clk-w': '400', '--clk-bg': '#131312', '--clk-ml': '-4px', '--call-fs': '16px', '--call-ls': '-0.06em', '--call-w': '500', '--ck-fs': '17px', '--ck-c': 'var(--cream)', '--fn': 'var(--cream)', '--args': 'var(--cream)', '--call-pl': '12px', '--call-pr': '9px', '--call-gap': '9px', '--chip-inset': '7px', '--dur-w': '3.4ch', '--tcl-font': 'var(--sans)', '--tcl-fs': '15px', '--vmeta-font': 'var(--sans)', '--res-fs': '15px', '--chip-h': '28px', '--chip-font': 'var(--sans)', '--chip-fs': '15px', '--chip-c': 'var(--cream)', '--chip-bg': '#1f1e1c', '--chip-px': '6px', '--ruler-font': 'var(--sans)', '--ruler-fs': '15px' },
     rects: { agent: [11, 55, 353, 421], emit: [11, 432, 353, 579], viewer: [363, 55, 1112, 579], insp: [1122, 55, 1364, 579], sim: [11, 590, 1364, 759] },
-    panels: { agent: AG({ chips: true, rowH: 38, gap: 6, top: 46 }), emit: { kind: 'list', title: 'Emitters', opts: { chips: true, rowH: 28, gap: 5, y0: 44 } },
-      viewer: { kind: 'viewer', opts: { pad: [0, 0, 0, 0], metaY: 492, tcLeft: true } }, insp: { kind: 'kv', title: 'Inspector' },
-      sim: { kind: 'keys', title: 'Simulation', opts: { x0: 160, rulerY: 32, laneY: 54, laneH: 34, chipW: 132 } } } },
+    panels: { agent: AG({ chips: true, rowH: 28, gap: 4, top: 42 }), emit: { kind: 'list', title: 'Emitters', opts: { chips: true, rowH: 28, gap: 5, y0: 41, fs: 16, padX: 12, vCream: true } },
+      viewer: { kind: 'viewer', opts: { pad: [0, 0, 0, 0], metaY: 492, tcLeft: true } }, insp: { kind: 'kv', title: 'Inspector', opts: { top: 66 } },
+      sim: { kind: 'keys', title: 'Simulation', opts: { x0: 160, rulerY: 34, laneY: 66.5, laneH: 32, chipX: 12, chipW: 137, laneBg: '#1c1b19', laneBgH: 28, cacheH: 26, cacheC: '#c9c7c1', phTop: 66 } } } },
   lighting: { activity: 'lighting', top: 56, foot: 0, cls: 'calls-sans', vars: { '--radius': '8px' },
     rects: { agent: [20, 66, 357, 330], lights: [20, 349, 357, 510], viewer: [376, 66, 1044, 472], insp: [1062, 66, 1355, 512], rig: [20, 529, 1355, 750] },
     panels: { agent: AG(), lights: { kind: 'list', title: 'Lights', opts: { rowH: 34, y0: 42 } }, viewer: { kind: 'viewer', opts: { pad: [0, 0, 0, 0] } },
@@ -129,7 +129,7 @@ const RULES = [
 ];
 // Read-only tools (queries, probes, samples, listings, descriptions): they change nothing, so they
 // never move the workspace; the router gives them the "inspect" HUD state instead.
-export const READONLY = /^(get_|list_|inspect_|probe_|sample_|query|describe_|read_|find$|search_tools$|job_status$|session_stats$|cache_stats$|kimo_info$|kimo_describe$|history_list$|ext_list$|recipe_list$|template_list$|path_info$|fit_info$|explain_|transform_ocio_|transform_vertex_stream$|camera_project_points$|camera_clip_triangle$|track_long_gap$|analyze_color$|audit_color_output$|compare_aces2_reference$|compare_linear_exposure$|evaluate_grade_graph_samples$|evaluate_hlg_reference_display$|validate_hdr_transfer_math$|effect_uv_sample$)|_describe$|_info$|_metrics$|_residuals$/;
+export const READONLY = /^(get_|list_|inspect_|probe_|sample_|query|describe_|read_|find$|search_tools$|job_status$|session_stats$|cache_stats$|kimo_info$|kimo_describe$|history_list$|ext_list$|recipe_list$|template_list$|path_info$|fit_info$|explain_|transform_ocio_|transform_vertex_stream$|camera_project_points$|camera_clip_triangle$|track_long_gap$|analyze_color$|audit_color_output$|compare_aces2_reference$|compare_linear_exposure$|evaluate_grade_graph_samples$|evaluate_hlg_reference_display$|validate_hdr_transfer_math$|effect_uv_sample$|shards_project$)|_describe$|_info$|_metrics$|_residuals$/;
 export function inferMode(name) {
   if (!name) return null;
   if (READONLY.test(String(name).toLowerCase())) return null;

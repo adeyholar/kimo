@@ -20,7 +20,7 @@ export const FAMILIES = [
   ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut|set_grade_node|set_grade_graph|pick_white_balance|match_grade|match_color|set_white_balance|set_grade_output|remove_grade_node|generate_lut_node|add_acescct_primaries|create_shared_grade_graph|bind_shared_grade_graphs|remove_shared_grade_graph|set_node_param|set_node_mask|apply_asc_cdl|set_color_curve|set_grade_scopes|add_node$|connect_nodes|disconnect_nodes)/],
   ['audio', /^(set_|add_|apply_|auto_|measure_|normalize_|analyze_)?(mix|audio|gain|fader|mute|solo|pan|compress|eq|limiter|limit|loudness|duck|stem|bus|route_)|^track_beats$/],
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
-  ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents|fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track|undistort_clip|stabilize|apply_camera_solve|pin_layer|set_corner_pin)/],
+  ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents|fit_track_homography|ecc_refine_track|decompose_track_homography|corner_disagreement|lk_residual_audit|validate_planar_track|undistort_clip|stabilize|apply_camera_solve|pin_layer|set_corner_pin|add_emitter|add_particles|add_shard_burst)/],
   ['graphics', /^(add_shape|add_path_shape|set_path|add_path_key|clear_path_keys|add_shape_modifier|remove_shape_modifier|add_modifier|remove_modifier|set_layer_style|remove_layer_style|add_box_expand|add_detection_box|add_hud_frame|add_counter|add_prompt_box|add_glitch_confetti)$/],
   ['export', /^(export|render|queue_render|encode|deliver)/],
 ];
@@ -247,8 +247,15 @@ function graphicsOps(state, MODES, ev) {
   const kvp = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'kv');
   if (kvp) {
     const K = V[kvp[0]] || (V[kvp[0]] = {}); K.blocks = (K.blocks || []).filter(b => b._gfx);
-    const nm = String(R.clip_id ?? R.id ?? A.clip_id ?? layer ?? '');
+    const rid = R.clip_id ?? R.id ?? A.clip_id, nm = String(rid != null && !RAW_ID.test(String(rid)) ? rid : (typeof A.label === 'string' && A.label.trim() ? A.label.trim().slice(0, 24) : layer ?? ''));   // never a raw engine id
     if (layer && nm) {
+      // the rows the m09 mockup draws above the list (Layer style: Stroke, Stroke color, Opacity), only from this layer's own args
+      const hex = c => Array.isArray(c) && c.length >= 3 && c.every(x => numOf(x) != null) ? '#' + c.slice(0, 3).map(x => { const n = numOf(x); return Math.round(Math.max(0, Math.min(255, n <= 1 ? n * 255 : n))).toString(16).padStart(2, '0'); }).join('') : (typeof c === 'string' && c.length < 24 ? c : null);
+      const sw = numOf(A.stroke_width), sc = hex(A.stroke_color ?? (/^add_(hud_frame|detection_box)$/.test(tn) ? A.color : undefined)), op = numOf(A.opacity);
+      const rows = [sw != null && { k: 'Stroke', v: `${fmtVal(sw)} px` }, sc && { k: 'Stroke color', v: sc }, op != null && { k: 'Opacity', v: `${Math.round(op <= 1 ? op * 100 : op)}%` }].filter(Boolean).map(x => ({ ...x, _gfx: true, _layerRow: true, _flash: now() }));
+      K.blocks = K.blocks.filter(b => !b._layerRow && !b._layerSec);
+      if (rows.length) K.blocks.unshift({ sec: 'Layer style', _gfx: true, _layerSec: true }, ...rows);
+      K.sub = `${nm} - ${layer === 'prompt' ? 'prompt box' : layer === 'counter' ? 'counter' : 'shape layer'}`;
       let li = K.blocks.find(b => b._layers);
       if (!li) { K.blocks.push({ sec: 'Shape layers', _gfx: true }); li = { list: [], sel: 0, _gfx: true, _layers: true }; K.blocks.push(li); }
       if (!li.list.includes(nm)) li.list.push(nm); li.sel = li.list.indexOf(nm); if (li.list.length > 8) li.list.splice(0, li.list.length - 8);
@@ -265,7 +272,7 @@ function graphicsOps(state, MODES, ev) {
     if (tn === 'remove_layer_style' || tn === 'remove_shape_modifier' || tn === 'remove_modifier' || tn === 'clear_path_keys') { K.blocks.push({ k: tn.replace(/_/g, ' '), v: String(A.effect_id ?? A.clip_id ?? ''), ch: true, _gfx: true, _flash: now() }); hit = true; }
   }
   // the layer's clip on its track when the engine's telemetry did not already report the insert
-  if (P.s == null && P.clip == null && A.track_id != null && numOf(A.start) != null) { P.clip = String(R.clip_id ?? R.id ?? layer ?? tn); P.s = numOf(A.start); P.e = numOf(A.start) + (numOf(A.duration) ?? 4); P.track = A.track_id; P.label = P.label ?? P.clip; ev.payload = P; }
+  if (P.s == null && P.clip == null && A.track_id != null && numOf(A.start) != null) { P.clip = String(R.clip_id ?? R.id ?? layer ?? tn); P.s = numOf(A.start); P.e = numOf(A.start) + (numOf(A.duration) ?? 4); P.track = A.track_id; P.label = P.label ?? (RAW_ID.test(P.clip) ? (typeof A.label === 'string' && A.label.trim() ? A.label.trim().slice(0, 24) : layer ?? P.clip) : P.clip); ev.payload = P; }
   if (hit) ev._kvDone = true;
   return hit;
 }
@@ -316,7 +323,7 @@ function fitRuler(tl) {
 }
 // Clip names a person reads: a file name when the call carried a path, the text of a text clip,
 // the engine's own label when it is a real name, else "V1 · Clip 02" (never a raw engine id).
-const RAW_ID = /^(clip|track|fx|effect|node)_?\d+$/i;
+const RAW_ID = /^(c|clip|t|track|fx|effect|node|n|layer|l)[_-]?\d+$/i;
 function clipLabel(P, t, fam) {
   const A = P.args || {};
   if (fam === 'text' && P.text) return P.text;
@@ -727,6 +734,38 @@ function sceneOps(state, MODES, ev) {
       else if (Array.isArray(A.corners) && A.corners.length === 4) { const base = [[0, 0], [1, 0], [1, 1], [0, 1]]; q = A.corners.map((d, i) => Array.isArray(d) && numOf(d[0]) != null && numOf(d[1]) != null ? [base[i][0] + numOf(d[0]) / W, base[i][1] + numOf(d[1]) / H] : null); if (q.some(v => !v)) q = null; }
       if (q) { const o = ov(); o.push({ quad: q, _call: ev.call_id, _kind: tn }); hit = true; }
     }
+    // particles (m10): the emitter joins Emitters with its rate/count, gets a Simulation lane with a dot at its
+    // start and end frame, and writes its own numbers into the Inspector in the mockup's sections — all from args
+    if ((tn === 'add_emitter' || tn === 'add_particles' || tn === 'add_shard_burst') && ev.phase === 'complete') {
+      const C = (A.config && typeof A.config === 'object') ? { ...A, ...A.config } : A;
+      const name = String(C.name ?? A.preset ?? A.kind ?? (tn === 'add_shard_burst' ? 'shards' : C.shape ? `${C.shape} emitter` : 'emitter'));
+      const rate = numOf(C.rate ?? C.rate_per_s ?? C.spawn_rate), count = numOf(C.count ?? C.shards ?? C.num_shards);
+      const v = rate != null ? `${Math.round(rate).toLocaleString('en-US')}/s` : count != null ? Math.round(count).toLocaleString('en-US') : '';
+      const P = MODES[mode] ? MODES[mode].panels : {};
+      const lists = Object.entries(P).filter(([, sp]) => sp.kind === 'list');
+      if (lists[0]) { const L = V[lists[0][0]] || (V[lists[0][0]] = {}); L.rows = (L.rows || []).filter(x => x._id); let r = L.rows.find(x => x._id === name); if (!r) { r = { _id: name }; L.rows.push(r); } r.k = name; r.v = v; r.em = true; r._flash = now(); for (const x of L.rows) if (x !== r) x.em = false; if (L.rows.length > 4) L.rows.splice(0, L.rows.length - 4); hit = true; }
+      const kp = Object.entries(P).find(([, sp]) => sp.kind === 'keys');
+      const fps = numOf(state.session.fps) ?? 24, s0 = numOf(A.start), dur = numOf(A.duration);
+      if (kp && s0 != null) {
+        const KK = V[kp[0]] || (V[kp[0]] = {}); KK.lanes = (KK.lanes || []).filter(l => l._pt);
+        const f0 = Math.round(s0 * fps), f1 = dur != null ? Math.round((s0 + dur) * fps) : null;
+        let ln = KK.lanes.find(l => l.label === name); if (!ln) { ln = { label: name, dots: [], r: 3.4, dotColor: '#8a8780', _pt: true }; KK.lanes.push(ln); }
+        ln.dots = f1 != null && f1 !== f0 ? [f0, f1] : [f0]; if (KK.lanes.length > 3) KK.lanes.splice(0, KK.lanes.length - 3);
+        const end = Math.max(...KK.lanes.flatMap(l => l.dots), 1), step = end > 240 ? 120 : end > 96 ? 48 : 24;
+        KK.ruler = { t0: 0, t1: Math.ceil(end / step) * step, step, fmt: 'n' }; KK.playhead = f0; hit = true;
+      }
+      const ins = Object.entries(P).find(([, sp]) => sp.kind === 'kv');
+      if (ins) {
+        const K = V[ins[0]] || (V[ins[0]] = {}); K.sub = tn === 'add_shard_burst' ? 'shard_burst' : name;
+        const num = x => numOf(Array.isArray(x) ? x[1] : x);
+        const secs = [[tn === 'add_shard_burst' ? 'Fracture' : 'Emitter', [['Shards', tn === 'add_shard_burst' ? count : null], ['Seed', C.seed], ['Rate', rate != null ? `${Math.round(rate).toLocaleString('en-US')}/s` : null]]],
+          ['Physics', [['Gravity', C.gravity], ['Restitution', C.restitution ?? C.bounce], ['Drag', C.drag], ['Turbulence', C.turbulence], ['Wind', C.wind]]],
+          ['Particles', [['Count', tn !== 'add_shard_burst' ? count : null], ['Lifetime', C.life ?? C.lifetime], ['Size', C.size ?? C.size0]]]];
+        const blocks = [];
+        for (const [sec, rows] of secs) { const rr = rows.filter(([, x]) => x != null && (typeof x === 'string' || num(x) != null)); if (!rr.length) continue; blocks.push({ sec }); for (const [k, x] of rr) blocks.push({ k, v: typeof x === 'string' ? x : k === 'Lifetime' ? `${fmtVal(num(x))} s` : (k === 'Shards' || k === 'Count') ? Math.round(num(x)).toLocaleString('en-US') : fmtVal(num(x), k.toLowerCase()), chip: true, _flash: now() }); }
+        if (blocks.length) { K.blocks = blocks; ev._kvDone = true; ev._ptKv = true; hit = true; }
+      }
+    }
     // lights: glyph at its frame position, row in the Lights list
     if (tn === 'set_light' || tn === 'light_rig') {
       const lists = Object.entries(MODES[mode] ? MODES[mode].panels : {}).filter(([, sp]) => sp.kind === 'list').map(([k]) => V[k] || (V[k] = {}));
@@ -790,7 +829,7 @@ function sceneOps(state, MODES, ev) {
   if (ev.phase === 'complete') {
     // Inspector: the call's own args for what it targeted (light / track / camera / mesh), no placeholders
     const kvn = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'kv');
-    if (kvn && !/^set_camera/.test(tn)) {
+    if (kvn && !/^set_camera/.test(tn) && !ev._ptKv) {
       const K = V[kvn[0]] || (V[kvn[0]] = {}); K.blocks = K.blocks || [];
       const i = K.blocks.findIndex(b => b._live); if (i >= 0) K.blocks.splice(i);
       const fmtA = v => Array.isArray(v) ? (v.length <= 4 && v.every(x => numOf(x) != null) ? v.map(x => fmtVal(x)).join(', ') : null) : (typeof v === 'object' || v == null ? null : fmtVal(v));

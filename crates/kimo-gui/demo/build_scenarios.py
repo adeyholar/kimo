@@ -173,7 +173,7 @@ scen("m10", "particles", "glass_break.kimo", "claude", hms("00:42:51"),
    "insp": {"sub": "shard_burst", "blocks": [S("Fracture"), K("Shards", "220", chip=True), K("Seed", "7", chip=True), S("Physics"), K("Gravity", "-9.81", chip=True), K("Restitution", "0.30", chip=True), K("Drag", "0.04", chip=True),
             S("Particles"), K("Alive", "18,402", chip=True, emb=True), K("Lifetime", "2.0 s", chip=True)]},
    "sim": {"metaChip": "cache 38 / 96", "ruler": {"t0": 0, "t1": 96, "step": 24, "fmt": "n"}, "playhead": 38,
-           "lanes": [{"label": "cache", "cache": [38, 96]}, {"label": "shards", "dots": [6, 14, 22, 30, 38, 52, 60, 66, 74, 82, 90]}, {"label": "dust", "dots": [3 + i * 4.6 for i in range(20)], "r": 2}]}})
+           "lanes": [{"label": "cache", "cache": [38, 96]}, {"label": "shards", "dots": [16.9, 19.8, 20.6, 22.6, 25.7, 28.8, 33.8], "r": 3.4, "dotColor": "#8a8780"}, {"label": "dust", "dots": [3.2, 7.5, 11.8, 18.0, 21.8, 23.2, 24.0, 28.8, 33.8, 35.6, 37.4], "r": 3.4, "dotColor": "#8a8780"}]}})
 
 # ---------------------------------------------------------------- m11 lighting
 scen("m11", "lighting", "perfume_launch.kimo", "codex", hms("00:18:05"),

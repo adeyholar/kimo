@@ -196,6 +196,8 @@ body.calls-sans{--call-font:var(--sans)}
 #topbar .right.boxed .ro{padding:3px 10px;border:1px solid var(--line);border-radius:12px}
 #topbar .right.boxed .vsep{display:none}
 #topbar .right.chips .ro,#topbar .right.chips .clock{padding:4px 10px;border-radius:5px;background:var(--raise);border:1px solid var(--line);min-width:0}
+#topbar .right.chips .ro{padding:var(--ro-pad,4px 10px);color:var(--ro-c,inherit);font-size:var(--ro-fs,inherit);background:var(--ro-bg,var(--raise));border-color:var(--ro-bd,var(--line))}
+#topbar .right.chips .clock{padding:var(--ro-pad,4px 10px);color:var(--clk-c,inherit);font-family:var(--clk-font,inherit);font-size:var(--ro-fs,inherit);font-weight:var(--clk-w,inherit);background:var(--clk-bg,var(--raise));border-color:var(--ro-bd,var(--line));margin-left:var(--clk-ml,0)}
 #topbar .right.chips .vsep{display:none}
 #topbar .right.chipclock .clock{padding:4px 10px;border-radius:5px;background:var(--raise);border:1px solid var(--line);min-width:0}
 #topbar .right.chipclock .vsep{display:none}
@@ -293,3 +295,4 @@ body.calls-sans{--call-font:var(--sans)}
 [data-panel=grade] .ph .t{font-family:var(--grade-title-font,var(--title-font,var(--sans)))}
 .kv .list div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;line-height:var(--li-h,26px)}
 .clip .ct.sw{background:var(--sw-bg,rgba(0,0,0,.28))}
+.kv .row + .sec{margin-top:var(--sec-mt,0)}

@@ -256,7 +256,8 @@ function renderTop() {
   const pill = document.getElementById('livepill');
   pill.classList.toggle('down', state.status.kind === 'down');
   document.getElementById('pill-state').textContent = state.status.kind === 'down' ? state.status.label : 'live';
-  document.getElementById('pill-agent').textContent = state.session.agent;
+  const ag = state.session.agent, agEl = document.getElementById('pill-agent'), hasAg = ag != null && String(ag).trim() !== '' && ag !== '—';
+  agEl.textContent = hasAg ? ag : ''; agEl.style.display = hasAg ? '' : 'none'; if (agEl.previousElementSibling) agEl.previousElementSibling.style.display = hasAg ? '' : 'none';   // no empty segment between hyphens
   let act = state.activity;
   if (!state.explicitActivity || act == null) act = M.activity || state.mode;
   if (act === '#calls') act = `${state.callCount} calls`;
