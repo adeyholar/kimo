@@ -661,6 +661,7 @@ export function pickedRows(c) {
   const rows = [{ sec: 'Call' }, { k: 'Status', v: c.status === 'running' ? 'running' : c.status === 'error' ? 'error' : 'ok', ch: c.status === 'error' }];
   const d = fmtDur(c.dur_ms); if (c.status !== 'running' && d) rows.push({ k: 'Latency', v: d });
   if (c.error) rows.push({ k: 'Error', v: String(c.error).slice(0, 80), ch: true });
+  if (Array.isArray(c.diff) && c.diff.length) { rows.push({ sec: 'Diff' }); for (const d of c.diff) rows.push({ k: d.k, from: d.from, v: d.v }); }   // before -> after, only as the engine reported it
   const A = c.args && typeof c.args === 'object' && !Array.isArray(c.args) ? Object.entries(c.args) : Array.isArray(c.args) ? c.args.map((v, i) => [`#${i + 1}`, v]) : c.args != null ? [['args', c.args]] : [];
   if (A.length) { rows.push({ sec: 'Args' }); for (const [k, v] of A.slice(0, 12)) if (v != null && v !== '') rows.push({ k, v: short(v) }); }
   const R = c.result && typeof c.result === 'object' ? Object.entries(c.result).filter(([, v]) => v != null && v !== '') : [];

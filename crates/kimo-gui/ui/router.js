@@ -327,6 +327,57 @@ function fitRuler(tl) {
 const RAW_ID = /^(c|clip|t|track|fx|effect|node|n|layer|l)[_-]?\d+$/i;
 // The rail's copy of a call's args: a raw clip id becomes that clip's name on the live timeline, or is
 // left out when the window has no name for it (never shown raw, never invented)
+// A picked call's state diff (the Inspector's Diff section): before -> after for each target field the engine
+// reported in its complete payload (`changed`, spectator.rs diff()), else the vocabulary's from/to. Clip start /
+// duration read as the clip's In / Out; keyframe lists as the keys that changed; clips and tracks by their
+// names on the live timeline (a raw id with no name is left out). Nothing is filled in that the engine did not send.
+const secs = v => { const n = +v; return Number.isFinite(n) ? `${Math.round(n * 100) / 100}s` : ''; };
+const DASH = '—';
+function callDiff(state, ev) {
+  const P = ev.payload || {}, T = ev.target || {}, C = P.changed && typeof P.changed === 'object' ? P.changed : null, out = [];
+  const tl = state.liveTL, cap = s => s.replace(/_/g, ' ').replace(/^./, x => x.toUpperCase());
+  const push = (k, from, to) => { if (from === to || (!from && !to)) return; out.push({ k, from: from || DASH, v: to || DASH }); };
+  const clipName = id => { if (id == null) return null; if (!RAW_ID.test(String(id))) return String(id); const [t, i] = tl ? findClip(tl, { clip_id: id }) : [null, -1]; const lb = t ? t.clips[i].label : null; return lb && !RAW_ID.test(String(lb)) ? String(lb) : null; };
+  const trackName = id => { if (id == null) return null; if (!RAW_ID.test(String(id))) return String(id); const t = tl ? findTrack(tl, id) : null; return t && t.label && !RAW_ID.test(String(t.label)) ? String(t.label) : null; };
+  const keyStr = (k, p) => k && typeof k === 'object' && k.t != null ? `${secs(k.t)} ${fmtVal(k.v, p)}`.trim() : '';
+  const keysDiff = (label, p, a, b) => {
+    const A = Array.isArray(a) ? a : [], B = Array.isArray(b) ? b : [], at = new Map(A.map(k => [+k.t, k]));
+    for (const k of B) { const o = at.get(+k.t); at.delete(+k.t); const f = o ? keyStr(o, p) : '', t = keyStr(k, p); if (f !== t) push(`${label} key`, f, t); }
+    for (const o of at.values()) push(`${label} key`, keyStr(o, p), '');
+  };
+  if (C) {
+    const F = C.clip && typeof C.clip === 'object' ? C.clip : {};
+    // clip timing as In / Out (timeline seconds); needs the clip's own s/e from the payload to place "after"
+    const sF = F.start, dF = F.duration, s1 = numOf(P.s), e1 = numOf(P.e);
+    if ((sF || dF) && s1 != null && e1 != null) {
+      const s0 = sF ? numOf(sF[0]) : s1, d0 = dF ? numOf(dF[0]) : e1 - s1;
+      if (s0 != null) push('In', secs(s0), secs(s1));
+      if (s0 != null && d0 != null) push('Out', secs(s0 + d0), secs(e1));
+    } else { if (sF) push('Start', secs(sF[0]), secs(sF[1])); if (dF) push('Duration', secs(dF[0]), secs(dF[1])); }
+    for (const [k, ft] of Object.entries(F)) {
+      if (k === 'start' || k === 'duration' || !Array.isArray(ft)) continue;
+      const segs = k.split('.'), last = segs[segs.length - 1];
+      if (/\]$/.test(k) || /^(id|expr|bez|ease)$/.test(last)) continue;
+      const emp = x => x == null || (Array.isArray(x) && !x.length); if (last !== 'keys' && emp(ft[0]) && emp(ft[1])) continue;   // a list that only appeared / emptied (its items are their own rows)            // list containers and bookkeeping
+      if (/\]\.kind$/.test(k)) { push(cap(segs[0].replace(/\[.*$/, '').replace(/s$/, '')), fmtVal(ft[0]), fmtVal(ft[1])); continue; }   // effect added / removed
+      const words = segs.map(s => s.replace(/\[.*\]$/, '')).filter(s => !/^(props|params|base|effects|masks|source)$/.test(s) || segs.length === 1);
+      if (last === 'keys') { const p = words.filter(w => w !== 'keys').pop() || 'value'; keysDiff(cap(p), p, ft[0], ft[1]); continue; }
+      const p = words[words.length - 1] || last, lbl = cap(k.startsWith('source.') ? 'source ' + words.join(' ') : words.join(' '));
+      const fv = x => x != null && typeof x === 'object' ? (Array.isArray(x) ? (x.length && typeof x[0] !== 'object' ? fmtVal(x) : `[${x.length}]`) : '') : /(^|_)(point|time|start|end|in|out)$/.test(p) ? secs(x) : fmtVal(x, p);
+      push(lbl, fv(ft[0]), fv(ft[1]));
+    }
+    for (const a of C.clips_added || []) { const n = clipName(a.clip_id) || (a.clip_id === T.clip_id || a.clip_id === P.clip ? (P.label && !RAW_ID.test(String(P.label)) ? String(P.label) : null) : null); if (n) push('Clip', '', n); }
+    for (const a of C.clips_removed || []) { const n = clipName(a.clip_id); if (n) push('Clip', n, ''); }
+    for (const m of C.clips_moved || []) { const n = clipName(m.clip_id), f = trackName(m.from), t = trackName(m.to); if (f && t) push(n ? `${n} track` : 'Track', f, t); }
+    for (const t of C.tracks_added || []) { const n = trackName(t); if (n) push('Track', '', n); }
+    for (const t of C.tracks_removed || []) { const n = trackName(t); if (n) push('Track', n, ''); }
+    if (Array.isArray(C.duration)) push('Length', secs(C.duration[0]), secs(C.duration[1]));
+  } else {
+    const param = T.param || P.param;
+    if (param != null && P.from !== undefined && P.to !== undefined) push(cap(String(param)), fmtVal(P.from, param), fmtVal(P.to, param));
+  }
+  return out.length ? out.slice(0, 10) : null;
+}
 const CLIP_KEYS = ['clip_id', 'clip', 'clip_a', 'clip_b', 'matte_clip_id'];
 function railArgs(state, a) {
   if (!a || typeof a !== 'object' || Array.isArray(a)) return a;
@@ -772,12 +823,13 @@ export function route(ev, state, MODES) {
     const t0 = state._t0 && state._t0[id]; if (t0 != null) delete state._t0[id];
     const dur = numOf(P.dur_ms) ?? numOf(ev.duration_ms) ?? (t0 != null && ev.ts_ms != null && ev.ts_ms >= t0 ? ev.ts_ms - t0 : null); ev._dur = dur;
     // the landed value replaces the rail's start-time args: "scale: 104% → 112%"
-    const landed = !err && param && val != null ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
+    const landed = !err && param && val != null && fmtVal(val, param) !== '' ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
     out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(P.result !== undefined ? { result: P.result } : {}), ...(landed ? { args: railArgs(state, landed) } : {}) });
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
       if (/false_?colou?r/.test(String(ev.tool_name).toLowerCase())) { v.viewer = v.viewer || {}; v.viewer.falsecolor = { split: P.split ?? .5 }; }
       const hit = timelineOps(state, MODES, ev, fam) | (fam === 'audio' ? audioOps(state, MODES, ev) : false) | (fam === 'export' ? exportOps(state, MODES, ev) : false);
+      const df = callDiff(state, ev); if (df) { const te = out.find(x => x.type === 'tool_end'); if (te) te.diff = df; }   // the picked call's Inspector Diff
       const diff = ev._kvDone || inspectorDiff(state, MODES, ev, fam);   // sceneOps already wrote the inspector
       if (!hit && !diff) hud(state, ev, fam, ev.tool_name + ' ✓'); else hud(state, ev, fam, ev.tool_name + ' ✓');
     } else { if (fam === 'export') exportOps(state, MODES, ev); hud(state, ev, fam, ev.tool_name + ' failed'); }

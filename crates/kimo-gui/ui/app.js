@@ -60,7 +60,7 @@ export function apply(ev) {
     }
     case 'tool_end': {
       const c = [...state.calls].reverse().find(x => x.id === ev.id) || state.calls[state.calls.length - 1];
-      if (c) { c.dur_ms = ev.dur_ms !== undefined ? ev.dur_ms : (performance.now() - c.t); /* null = the harness gave no latency: hidden */ c.status = ev.status || 'ok'; if (ev.args) c.args = ev.args; if (ev.result !== undefined) c.result = ev.result; if (ev.error) c.error = ev.error; }
+      if (c) { c.dur_ms = ev.dur_ms !== undefined ? ev.dur_ms : (performance.now() - c.t); /* null = the harness gave no latency: hidden */ c.status = ev.status || 'ok'; if (ev.args) c.args = ev.args; if (ev.result !== undefined) c.result = ev.result; if (ev.error) c.error = ev.error; if (ev.diff) c.diff = ev.diff; }
       break;
     }
     case 'tool_progress': {
