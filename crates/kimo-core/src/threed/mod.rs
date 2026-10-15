@@ -6,6 +6,8 @@ pub mod spatial;
 pub mod flat_sah;
 pub mod sdf_graph;
 pub mod contour_wrapped;
+#[cfg(feature="surface-contour")]
+pub mod octree;
 pub mod node_ingest;
 pub mod scene;
 pub mod animate;
