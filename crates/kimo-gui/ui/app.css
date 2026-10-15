@@ -221,3 +221,7 @@ body.calls-sans{--call-font:var(--sans)}
 .clip.haspill{overflow:visible}
 .playhead.rtri::after{content:'';position:absolute;bottom:-4px;left:1px;border:5px solid transparent;border-left:7px solid var(--ember);border-right:none}
 .call.cur .args,.call.cur .pp{color:var(--cur-args,var(--args,inherit))}
+
+/* live wipe while a grade/effect call runs (driven by progress events) */
+.frame img.before{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:saturate(.25) brightness(.82) contrast(.92)}
+.frame .wipe{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--ember);box-shadow:0 0 0 1px rgba(255,90,35,.25)}

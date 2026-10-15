@@ -71,7 +71,9 @@ function viewer({ spec, data, w, h }) {
   let html = '';
   if (spec.title) html += head(spec, data);
   html += `<div class="frame" style="left:${pl}px;top:${pt}px;width:${fw}px;height:${fh}px">` +
-    (data.src ? `<img src="${E(data.src)}" alt="">` : '<div class="ph-frame"></div>');
+    (data.src ? `<img src="${E(data.src)}" alt="">` : '<div class="ph-frame"></div>') +
+    // a running grade/effect wipes across the frame: before (ungraded) on the right of the edge, result on the left
+    (data.src && data.wipe != null && data.wipe < 1 ? `<img class="before" src="${E(data.src)}" alt="" style="clip-path:inset(0 0 0 ${px(data.wipe * 100)}%)"><i class="wipe" style="left:${px(data.wipe * fw)}px"></i>` : '');
   if (data.overlay) html += `<svg class="ov" viewBox="0 0 ${fw} ${fh}">${overlay(data.overlay, fw, fh)}</svg>`;
   for (const t of (data.tags || (data.tag ? [{ text: data.tag }] : []))) {
     const pos = t.pos === 'tr' ? `right:${t.x ?? 10}px` : `left:${t.x ?? 10}px`;
