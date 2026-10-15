@@ -14,7 +14,7 @@ import { READONLY, inferMode } from './modes.js';
 
 export const FAMILIES = [
   ['ingest', /^(import|ingest|add_media|relink|load_media|add_clip|add_track|insert)/],
-  ['edit', /^(cut|split|blade|razor|trim|extend|ripple|slip|slide|move_clip|delete_clip|lift|roll)/],
+  ['edit', /^(cut|split|blade|razor|trim|extend|ripple|slip|slide|move_clip|delete_clip|lift|roll)|^(duplicate_clip|swap_clips|loop_clip|freeze_frame|delete_track|set_speed|rate_stretch|set_speed_ramp|group_clips|ungroup_clip|distribute_clips|set_blend|set_echo|set_flow_blur|add_camera_shake|remove_audio_effect|set_track|project_set)$/],
   ['effects', /^(add_effect|apply_effect|set_effect|add_transition|remove_effect|add_speed|set_posterize|add_adjustment)/],
   ['transform', /^(set_property|set_clip_property|set_props?$|transform|set_transform|keyframe|set_keyframe|add_keyframe|scale|rotate|position|set_motion|add_null|set_parent|set_expression)/],
   ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut|set_grade_node|set_grade_graph|pick_white_balance|match_grade|match_color|set_white_balance|set_grade_output|remove_grade_node|generate_lut_node|add_acescct_primaries|create_shared_grade_graph|bind_shared_grade_graphs|remove_shared_grade_graph|set_node_param|set_node_mask|apply_asc_cdl|set_color_curve|set_grade_scopes|add_node$|connect_nodes|disconnect_nodes)/],
@@ -342,8 +342,93 @@ function insertClip(tl, t, c) {
   t.clips.sort((a, b) => a.s - b.s);
 }
 
+// Timeline edit ops that act on whole clips/tracks (duplicate, swap, loop, freeze, speed, group,
+// distribute, blend/echo/flow-blur badges, camera shake layer, track rename/lock, project size). Every
+// change comes from the call's own args (and the new id in its result); a clip the window has never seen
+// is left alone, so nothing is guessed.
+function editOps2(state, MODES, tl, ev, A) {
+  const n = String(ev.tool_name).toLowerCase(), P = ev.payload || {}, R = P.result && typeof P.result === 'object' ? P.result : {};
+  const at = id => findClip(tl, { clip_id: id });
+  const nid = (fb) => String(R.clip_id ?? R.id ?? fb);
+  const badge = (c, b, re) => { c.fx = [...(c.fx || []).filter(x => !(re && re.test(x)) && x !== b), b]; c._flash = now(); };
+  const N = numOf;
+  if (n === 'project_set') {
+    const w = N(A.width), h = N(A.height), fps = N(A.fps);
+    if (w) state.session.width = w; if (h) state.session.height = h; if (fps) state.session.fps = fps;
+    const [, V] = modeViews(state, MODES, ev); const vw = V.viewer || (V.viewer = {});
+    const W = state.session.width, H = state.session.height, F = state.session.fps;
+    if (W && H) { vw.res = `${W} x ${H}${F ? ` ${fmtVal(F)}p` : ''}`; vw._flash = now(); return true; }
+    return false;
+  }
+  if (n === 'set_track') {
+    const t = findTrack(tl, A.track_id); if (!t) return false;
+    if (typeof A.name === 'string' && A.name.trim()) t.label = A.name.trim().slice(0, 16);
+    if (A.locked != null || A.lock != null) t.lock = !!(A.locked ?? A.lock);
+    t._flash = now(); return true;
+  }
+  if (n === 'delete_track') { const i = (tl.tracks || []).findIndex(t => t.id === A.track_id || t.label === A.track_id); if (i < 0) return false; tl.tracks.splice(i, 1); return true; }
+  if (n === 'add_camera_shake') {
+    const s = N(A.start), d = N(A.duration); if (s == null || A.track_id == null) return false;
+    const t = ensureTrack(tl, A.track_id); const c = { id: nid('shake'), label: 'camera shake', s, e: s + (d ?? 2), fx: ['impact_shake'], _flash: now() };
+    if (Array.isArray(A.hits)) c.keys = A.hits.map(x => N(Array.isArray(x) ? x[0] : x && typeof x === 'object' ? x.t ?? x.time : x)).filter(x => x != null).map(x => ({ t: x < s ? s + x : x }));
+    insertClip(tl, t, c); t._flash = now(); return true;
+  }
+  if (n === 'group_clips' && Array.isArray(A.clip_ids) && A.clip_ids.length) {
+    const got = A.clip_ids.map(id => at(id)).filter(([t]) => t); if (!got.length) return false;
+    const kids = got.map(([t, i]) => ({ track: t.id, clip: t.clips[i] }));
+    const s = Math.min(...kids.map(k => k.clip.s)), e = Math.max(...kids.map(k => k.clip.e));
+    for (const k of kids) { const t = findTrack(tl, k.track); t.clips = t.clips.filter(c => c !== k.clip); }
+    const t = ensureTrack(tl, A.track_id ?? kids[0].track);
+    insertClip(tl, t, { id: nid('group'), label: `group · ${kids.length} clips`, s, e, cls: 'grp', _kids: kids, _flash: now() }); return true;
+  }
+  if (n === 'distribute_clips') {
+    const t = findTrack(tl, A.track_id); if (!t || !(t.clips || []).length) return false;
+    const gap = N(A.gap) ?? 0; let x = N(A.start) ?? t.clips[0].s;
+    for (const c of [...t.clips].sort((a, b) => a.s - b.s)) { const d = c.e - c.s; c.s = x; c.e = x + d; x = c.e + gap; c._flash = now(); }
+    return true;
+  }
+  if (n === 'swap_clips') {
+    const [ta, ia] = at(A.clip_a), [tb, ib] = at(A.clip_b); if (!ta || ta !== tb) return false;
+    let a = ta.clips[ia], b = ta.clips[ib]; if (b.s < a.s) [a, b] = [b, a];
+    const gap = b.s - a.e, da = a.e - a.s, db = b.e - b.s, s0 = a.s;
+    b.s = s0; b.e = s0 + db; a.s = b.e + gap; a.e = a.s + da; a._flash = b._flash = now(); ta.clips.sort((x, y) => x.s - y.s); return true;
+  }
+  const [t, i] = at(A.clip_id ?? (ev.target || {}).clip_id); if (!t) return false;
+  const c = t.clips[i];
+  if (n === 'duplicate_clip') {
+    const s = N(A.start); if (s == null) return false; const tt = A.track_id != null ? ensureTrack(tl, A.track_id) : t;
+    const cp = { ...c, id: nid(c.id + '_dup'), s, e: s + (c.e - c.s), _flash: now() }; insertClip(tl, tt, cp); tt._flash = now(); return true;
+  }
+  if (n === 'loop_clip') {
+    const k = Math.min(32, Math.max(1, Math.round(N(A.times) ?? 1))), gap = N(A.gap) ?? 0, d = c.e - c.s; let s = c.e + gap;
+    const ids = Array.isArray(R.clip_ids) ? R.clip_ids : [];
+    for (let j = 0; j < k; j++, s += d + gap) insertClip(tl, t, { ...c, id: String(ids[j] ?? `${c.id}_loop${j + 1}`), s, e: s + d, _flash: now() });
+    return true;
+  }
+  if (n === 'ungroup_clip') {
+    if (!c._kids) return false; t.clips.splice(i, 1);
+    for (const k of c._kids) insertClip(tl, ensureTrack(tl, k.track), { ...k.clip, _flash: now() }); return true;
+  }
+  if (n === 'freeze_frame') { badge(c, A.at != null ? `freeze ${fmtVal(N(A.at))}s` : 'freeze', /^freeze/); return true; }
+  if (n === 'set_speed') { const v = N(A.speed); if (v == null) return false; badge(c, `${fmtVal(v)}×`, /^[\d.]+×$|^ramp$/); return true; }
+  if (n === 'rate_stretch') { const d = N(A.duration); if (d == null) return false; c.e = c.s + d; c._flash = now(); return true; }
+  if (n === 'set_speed_ramp') {
+    const keys = Array.isArray(A.keys) ? A.keys.map(k => N(Array.isArray(k) ? k[0] : k && typeof k === 'object' ? k.t : null)).filter(x => x != null) : [];
+    if (!keys.length) { c.fx = (c.fx || []).filter(x => x !== 'ramp'); c.keys = (c.keys || []).filter(k => !k._ramp); c._flash = now(); return true; }
+    badge(c, 'ramp', /^[\d.]+×$/); c.keys = [...(c.keys || []).filter(k => !k._ramp), ...keys.map(x => ({ t: c.s + x, _ramp: true }))]; return true;
+  }
+  if (n === 'set_blend') { if (!A.mode) return false; badge(c, String(A.mode), /^(normal|add|multiply|screen|overlay)$/); return true; }
+  if (n === 'set_echo') { badge(c, N(A.count) != null ? `echo ×${Math.round(N(A.count))}` : 'echo', /^echo/); return true; }
+  if (n === 'set_flow_blur') { badge(c, 'flow blur', /^flow blur/); return true; }
+  if (n === 'remove_audio_effect') { const fx = A.effect_id ?? A.effect ?? A.name; if (fx == null || !(c.fx || []).length) return false; c.fx = c.fx.filter(x => x !== fx); c._flash = now(); return true; }
+  return false;
+}
+
 function timelineOps(state, MODES, ev, fam) {
   const tl = timelineView(state, MODES); if (!tl) return false;
+  const A = (ev.payload || {}).args || (state._editArgs && state._editArgs[ev.call_id]) || {};
+  if (fam === 'edit') delete (state._editArgs || {})[ev.call_id];
+  if (fam === 'edit' && editOps2(state, MODES, tl, ev, A)) { fitRuler(tl); return true; }
   const hit = timelineOps1(tl, ev, fam);
   if (hit) {
     fitRuler(tl);
@@ -537,6 +622,7 @@ export function route(ev, state, MODES) {
   if (fam === 'graphics') graphicsOps(state, MODES, ev);
   if (ev.phase === 'start' && (fam === 'color' || fam === 'effects')) (state._gradeArgs || (state._gradeArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
   if ((fam === 'color' || fam === 'effects') && gradeOps(state, MODES, ev)) ev._kvDone = true;
+  if (ev.phase === 'start' && fam === 'edit') (state._editArgs || (state._editArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
   const T = ev.target || {}, P = ev.payload || {};
   const param = T.param || P.param, val = P.to ?? P.value;
   const args = { ...(T.clip_id ? { clip: T.clip_id } : {}), ...(param && val != null ? { [param]: fmtVal(val, param) } : {}) };
