@@ -11,6 +11,8 @@ pub mod mikk_adapter;
 pub mod gltf_surface;
 pub mod textured_bvh;
 pub mod textured_fixture;
+#[cfg(all(feature="mesh-import",feature="material-textures",feature="flat-sah"))]
+pub mod pbr_offscreen;
 pub mod sdf;
 pub mod pbr;
 pub mod cpu;
