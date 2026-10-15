@@ -49,7 +49,7 @@ export function apply(ev) {
     case 'tool_start': {
       const m = ev.mode || (state.explicitMode ? null : inferMode(ev.name));
       if (m && MODES[m] && m !== state.mode) { state.mode = m; layoutDirty = true; }
-      const c = { id: ev.id, name: ev.name, args: ev.args, t: performance.now(), dur_ms: null, status: 'running', progress: ev.progress };
+      const c = { id: ev.id, name: ev.name, args: ev.args, t: performance.now() - (ev.elapsed_ms || 0), elapsed_ms: ev.elapsed_ms, dur_ms: null, status: 'running', progress: ev.progress };
       const i = state.calls.findIndex(x => x.id === ev.id && ev.id !== undefined);
       if (i >= 0) state.calls[i] = c; else { state.calls.push(c); state.callCount++; }
       if (state.calls.length > 400) state.calls.splice(0, state.calls.length - 400);
@@ -178,7 +178,7 @@ document.addEventListener('visibilitychange', () => setHidden(document.visibilit
 let tickId = 0;
 function armTicker() {
   if (tickId || hidden) return;
-  const running = state.calls.length && state.calls[state.calls.length - 1].status === 'running';
+  const running = !state.session.still && state.calls.length && state.calls[state.calls.length - 1].status === 'running';
   const clockLive = !state.session.still && state.status.kind !== 'down';
   if (!running && !clockLive) return;
   const delay = running ? 100 : 1000 - ((elapsed() * 1000) % 1000) + 5;

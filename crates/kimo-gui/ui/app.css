@@ -79,7 +79,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .ph{flex:none;display:flex;align-items:flex-start;justify-content:space-between;
   padding:var(--ph-pad,12px 15px 0 15px);height:var(--ph-h,44px);line-height:20px;white-space:nowrap}
 .ph .t{font-weight:600;font-size:var(--pt-fs,17px);color:var(--cream);font-family:var(--title-font,var(--sans));letter-spacing:-.005em}
-.ph .t small{font-weight:400;color:var(--dim);margin-left:10px;font-size:var(--fs-s)}
+.ph .t small{font-weight:var(--pts-w,400);color:var(--pts-c,var(--dim));margin-left:var(--pts-ml,10px);font-size:var(--pts-fs,var(--fs-s))}
 .ph .m{font-size:var(--fs-s);color:var(--dim);font-family:var(--meta-font,var(--sans))}
 .pb{position:relative;flex:1;min-height:0}
 .psub{position:absolute;left:15px;right:15px;top:var(--sub-top,35px);line-height:20px;font-size:var(--sub-fs,16px);color:var(--sub-c,#bdb9af);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -87,9 +87,9 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 /* ---------- agent call log ---------- */
 .calls{position:absolute;inset:0;overflow:hidden}
 .call{position:absolute;left:0;right:0;height:var(--row);display:flex;align-items:center;
-  padding:0 var(--call-pr,14px) 0 15px;gap:var(--call-gap,9px);border-bottom:1px solid var(--line2);font-family:var(--call-font);
+  padding:0 var(--call-pr,14px) 0 var(--call-pl,15px);gap:var(--call-gap,9px);border-bottom:1px solid var(--line2);font-family:var(--call-font);
   font-size:var(--call-fs,15px);letter-spacing:var(--call-ls,-.02em);white-space:nowrap;color:var(--text)}
-.call .ck{width:13px;flex:none;color:var(--dim);font-size:var(--ck-fs,13px);text-align:center;letter-spacing:0}
+.call .ck{width:13px;flex:none;color:var(--ck-c,var(--dim));font-size:var(--ck-fs,13px);text-align:center;letter-spacing:0}
 .call .fn{color:var(--fn,inherit)}
 .call .args{color:var(--args,inherit);overflow:hidden;text-overflow:ellipsis;min-width:0}
 .call .pp{flex:none;color:var(--args,inherit)}
@@ -105,7 +105,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .call.faded .fn,.call.faded .args{color:var(--faded,#8e8a82)}
 .callbar{position:absolute;left:15px;right:14px;height:3px;background:var(--raise2);border-radius:2px}
 .callbar i{display:block;height:100%;background:var(--ember);border-radius:2px}
-.pfoot{position:absolute;left:15px;right:14px;bottom:12px;font-size:var(--fs-s);color:var(--dim);font-family:var(--mono)}
+.pfoot{position:absolute;left:var(--pfoot-l,15px);right:14px;bottom:var(--pfoot-b,12px);font-size:var(--pfoot-fs,var(--fs-s));color:var(--pfoot-c,var(--dim));letter-spacing:var(--pfoot-ls,normal);white-space:nowrap;overflow:hidden;font-family:var(--mono)}
 
 /* ---------- viewer ---------- */
 .frame{position:absolute;overflow:hidden;background:#000;border-radius:var(--frame-r,3px)}
@@ -122,7 +122,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .thumb.sel{border-color:var(--cream)}
 .thumb.dimmed{opacity:.45}
-.thumb .badge{position:absolute;left:4px;top:4px;width:14px;height:14px;border-radius:50%;background:rgba(20,20,20,.8);color:var(--cream);font-size:9px;display:flex;align-items:center;justify-content:center}
+.thumb .badge{position:absolute;left:var(--badge-l,4px);right:var(--badge-r,auto);top:var(--badge-t,4px);width:14px;height:14px;border-radius:50%;background:var(--badge-bg,rgba(20,20,20,.8));color:var(--cream);font-size:var(--badge-fs,9px);display:flex;align-items:center;justify-content:center}
 
 /* ---------- inspector key/value ---------- */
 .kv{position:absolute;inset:0;padding:0 15px;overflow:hidden}
@@ -208,3 +208,4 @@ body.calls-sans{--call-font:var(--sans)}
 .clip.cap.emb{background:var(--cap-emb-bg,var(--ember-tint));color:var(--ember-text)}
 .clip.cap{justify-content:center} .clip.cap .cl{padding:0 6px}
 .call.cur .ck:empty{display:var(--cur-ck,block)}
+.call.cur .ck{color:var(--ember)}

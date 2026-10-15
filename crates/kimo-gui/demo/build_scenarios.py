@@ -68,9 +68,9 @@ scen("m02", "batch", "dune_film.kimo", "codex", hms("00:31:20"),
    "hist": {"items": [{"id": "cp_12", "name": "after_recipe", "ago": "now", "live": True, "src": F("m02_h1"), "sel": True},
                       {"id": "cp_11", "name": "before_recipe", "ago": "2m", "src": F("m02_h2")}, {"id": "cp_10", "name": "captions_done", "ago": "9m", "src": F("m02_h3")},
                       {"id": "cp_09", "name": "rough_cut", "ago": "18m", "src": F("m02_h4")}, {"id": "cp_08", "name": "import", "ago": "31m", "src": F("m02_h5")}]},
-   "diff": {"title": "Diff", "titleSmall": "cp_11 to cp_12", "diff": [["+", "node look clip_02"], ["~", "  saturation 1.00 -> 1.10"], ["~", "  contrast   1.00 -> 1.14"], ["~", "  grain      0 -> 12"], ["-", "lut old_rec709.cube"], ["+", "title lower_third_01"]],
+   "diff": {"title": "Diff", "titleSmall": "cp_11 to cp_12", "diff": [["+", "node look clip_02"], ["~", "  saturation 1.00 -> 1.10"], ["~", "  contrast   1.00 -> 1.14"], ["~", "  grain 0 -> 12"], ["-", " lut old_rec709.cube"], ["+", "title lower_third_01"]],
             "batch": {"title": "Batch grade", "meta": "4 / 6", "rows": [["clip_01", "film_look", "done"], ["clip_02", "film_look", "done"], ["clip_03", "film_look", "done"], ["clip_04", "film_look", "done"], ["clip_05", "film_look", "grading"], ["clip_06", "film_look", "queued"]]}},
-   "media": {"items": [{"name": "dune_aerial.mov", "note": "relinked", "em": False, "src": F("m02_m1")}, {"name": "walk_ridge.mov", "src": F("m02_m2")}, {"name": "sky_wide.mov", "src": F("m02_m3")}, {"name": "wind_sfx.wav", "wave": True}],
+   "media": {"items": [{"name": "dune_aerial.mov", "note": "relinked", "link": True, "src": F("m02_m1")}, {"name": "walk_ridge.mov", "note": "relinked", "link": True, "src": F("m02_m2")}, {"name": "sky_wide.mov", "note": "relinked", "link": True, "src": F("m02_m3")}, {"name": "wind_sfx.wav", "note": "relinked", "link": True, "src": F("m02_m4")}],
              "foot": "collect_project: 14 files, 6.2 GB"}},
   final={"progress": {"done": 4, "total": 6}, "running": True})
 

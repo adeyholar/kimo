@@ -17,7 +17,7 @@ function head(spec, data, extra = '') {
   if (spec.title === undefined && !data.title) return '';
   const t = data.title ?? spec.title;
   const m = data.meta ?? spec.meta ?? '';
-  return `<div class="ph"><span class="t">${E(t)}${data.titleSmall ? `<small>${E(data.titleSmall)}</small>` : ''}</span><span class="m">${E(m)}${extra}</span></div>` +
+  return `<div class="ph"${spec.phPad ? ` style="padding:${spec.phPad}"` : ''}><span class="t">${E(t)}${data.titleSmall ? `<small>${E(data.titleSmall)}</small>` : ''}</span><span class="m">${E(m)}${extra}</span></div>` +
     (data.sub ? `<div class="psub">${data.subHtml ? data.sub : E(data.sub)}</div>` : '');
 }
 
@@ -43,18 +43,19 @@ function agent({ spec, state, data, w, h }) {
     const ck = c.status === 'running' ? (o.runMark ?? '') : (c.status === 'error' ? '✕' : '✓');
     const showCk = !(cur && o.noCheckCur);
     const ckEl = `<span class="ck">${showCk ? ck : ''}</span>`;
-    const dur = c.status === 'running' ? fmtDur(performance.now() - c.t) : fmtDur(c.dur_ms);
+    const dur = c.status === 'running' ? fmtDur(state.session.still && c.elapsed_ms != null ? c.elapsed_ms : performance.now() - c.t) : fmtDur(c.dur_ms);
     const args = fmtArgs(c.args);
     const faded = !cur && o.fade != null && i < calls.length - 1 - o.fade;
-    html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}" style="top:${y}px;height:${rowH}px">` +
+    const ch = cur && o.curH ? o.curH : rowH;
+    html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}" style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
       (o.checkRight ? '' : ckEl) +
       `<span class="sig"><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
       (o.checkRight ? ckEl : '') +
       `<span class="dur" ${c.status === 'running' ? `data-run="${E(c.id)}"` : ''}>${dur}</span></div>`;
     if (cur && c.progress && o.progress) {
       const p = c.progress;
-      html += `<div class="callbar" style="top:${y + rowH + 6}px;right:60px"><i style="width:${(100 * p.done / p.total).toFixed(1)}%"></i></div>` +
-        `<div class="mono dim" style="position:absolute;right:14px;top:${y + rowH - 1}px;font-size:11.5px">${p.done} / ${p.total}</div>`;
+      html += `<div class="callbar" style="top:${y + rowH + 6}px;left:${o.barL ?? 15}px;right:${o.barR ?? 60}px"><i style="width:${(100 * p.done / p.total).toFixed(1)}%"></i></div>` +
+        `<div class="mono dim" style="position:absolute;right:14px;top:${y + rowH - 1}px;font-size:${o.progFs ?? 11.5}px">${p.done} / ${p.total}</div>`;
     }
   });
   html += '</div>';
@@ -84,8 +85,8 @@ function viewer({ spec, data, w, h }) {
   }
   if (data.thumbs) {
     const ty = o.thumbY ?? (pt + fh + 12), th = o.thumbH ?? 50;
-    html += `<div class="thumbs" style="left:${pl}px;right:${pr}px;top:${ty}px;height:${th}px;gap:${o.thumbGap ?? 6}px">` +
-      data.thumbs.map(t => `<div class="thumb ${t.sel ? 'sel' : ''} ${t.dim ? 'dimmed' : ''}">${t.src ? `<img src="${E(t.src)}" alt="">` : ''}${t.check ? '<span class="badge">✓</span>' : ''}</div>`).join('') + '</div>';
+    html += `<div class="thumbs" style="left:${pl}px;right:${pr}px;top:${ty}px;height:${th}px;gap:${o.thumbGap ?? 6}px;overflow:hidden">` +
+      data.thumbs.map(t => `<div class="thumb ${t.sel ? 'sel' : ''} ${t.dim ? 'dimmed' : ''}"${o.thumbW ? ` style="flex:none;width:${o.thumbW}px"` : ''}>${t.src ? `<img src="${E(t.src)}" alt="">` : ''}${t.check ? '<span class="badge">✓</span>' : ''}</div>`).join('') + '</div>';
   }
   const my = o.metaY ?? (pt + fh + (pb - 20) / 2);
   if (data.tc || data.left || data.res) {
@@ -345,13 +346,13 @@ function history({ spec, data, w, h }) {
   const o = spec.opts || {};
   let html = head(spec, data);
   const y0 = o.y0 ?? 48, step = o.step ?? 70;
-  html += `<div style="position:absolute;left:${(o.tw ?? 70) / 2 + 15}px;top:${y0 + 20}px;height:${step * ((data.items || []).length - 1)}px;width:1px;background:var(--line)"></div>`;
+  html += `<div style="position:absolute;left:${(o.tw ?? 70) / 2 + 15}px;top:${y0 + (o.th ?? 44) / 2}px;height:${step * ((data.items || []).length - 1)}px;width:var(--hist-line-w,1px);background:var(--hist-line,var(--line))"></div>`;
   (data.items || []).forEach((it, i) => {
     const y = y0 + i * step;
     html += `<div style="position:absolute;left:15px;right:15px;top:${y}px;height:${o.th ?? 44}px;display:flex;align-items:center;gap:12px">` +
       `<div class="thumb ${it.sel ? 'sel' : ''}" style="flex:none;width:${o.tw ?? 70}px;height:100%">${it.src ? `<img src="${E(it.src)}">` : ''}</div>` +
-      `<div style="font-family:var(--mono);font-size:12px;line-height:17px"><div class="cream">${E(it.id)}</div><div class="dim">${E(it.name)}</div></div>` +
-      `<span style="margin-left:auto;font-family:var(--mono);font-size:11.5px" class="dim">${E(it.ago)}${it.live ? ' <span class="em">●</span>' : ''}</span></div>`;
+      `<div style="font-family:var(--mono);font-size:var(--hist-fs,12px);line-height:var(--hist-lh,17px)"><div class="cream">${E(it.id)}</div><div class="${o.nameCream ? 'cream' : 'dim'}">${E(it.name)}</div></div>` +
+      `<span style="margin-left:auto;font-family:var(--mono);font-size:var(--hist-ago-fs,11.5px);color:var(--ago-c,var(--dim))">${E(it.ago)}${it.live ? ' <span class="em">●</span>' : ''}</span></div>`;
   });
   return html;
 }
@@ -361,16 +362,16 @@ function diffbatch({ spec, data, w, h }) {
   const o = spec.opts || {};
   const split = o.split ?? Math.round(w * .56);
   let html = head(spec, data);
-  const col = { '+': '#cfe0b8', '~': 'var(--ember-text)', '-': '#e28a7a' };
+  const col = o.col || { '+': '#cfe0b8', '~': 'var(--ember-text)', '-': '#e28a7a' };
   (data.diff || []).forEach((L, i) => {
-    html += `<div style="position:absolute;left:15px;width:${split - 30}px;top:${(o.y0 ?? 52) + i * (o.step ?? 24)}px;display:flex;gap:12px;font-family:var(--mono);font-size:12px;white-space:pre"><span style="color:${col[L[0]]};width:10px">${E(L[0])}</span><span style="color:${L[0] === '~' ? 'var(--text)' : col[L[0]]}">${E(L[1])}</span></div>`;
+    html += `<div style="position:absolute;left:15px;width:${split - 30}px;top:${(o.y0 ?? 52) + i * (o.step ?? 24)}px;display:flex;gap:var(--diff-gap,12px);font-family:var(--mono);font-size:var(--diff-fs,12px);white-space:pre"><span style="color:${col[L[0]]};width:10px">${E(L[0])}</span><span style="color:${L[0] === '~' && !o.col ? 'var(--text)' : (o.txt || col)[L[0]]}">${E(L[1])}</span></div>`;
   });
-  html += `<div style="position:absolute;left:${split}px;top:14px;bottom:14px;width:1px;background:var(--line)"></div>`;
+  html += `<div style="position:absolute;left:${split}px;top:${o.splitTop ?? 14}px;bottom:14px;width:1px;background:var(--line)"></div>`;
   const b = data.batch || {};
-  html += `<div style="position:absolute;left:${split + 16}px;right:15px;top:12px;display:flex;justify-content:space-between;font-family:var(--title-font,var(--sans));font-weight:600;font-size:13px"><span>${E(b.title || '')}</span><span class="mono dim" style="font-weight:400">${E(b.meta || '')}</span></div>`;
+  html += `<div style="position:absolute;left:${split + (o.bx ?? 16)}px;right:${o.br ?? 15}px;top:${o.bty ?? 12}px;display:flex;justify-content:space-between;align-items:baseline;font-family:var(--title-font,var(--sans));font-weight:var(--batch-t-w,600);font-size:var(--batch-t-fs,13px)"><span>${E(b.title || '')}</span><span class="mono dim" style="font-weight:400;font-size:var(--batch-m-fs,inherit)${o.metaInline ? ';margin-left:10px;margin-right:auto;color:var(--cream);font-family:var(--sans)' : ''}">${E(b.meta || '')}</span></div>`;
   (b.rows || []).forEach((r, i) => {
     const st = r[2];
-    html += `<div style="position:absolute;left:${split + 16}px;right:15px;top:${(o.by0 ?? 46) + i * (o.bstep ?? 24)}px;display:grid;grid-template-columns:1fr 1fr 70px;font-family:var(--mono);font-size:12px;${st === 'queued' ? 'opacity:.45' : ''}"><span>${E(r[0])}</span><span class="dim">${E(r[1])}</span><span style="text-align:right;color:${st === 'grading' ? 'var(--ember-text)' : 'var(--dim)'}">${E(st)}</span></div>`;
+    html += `<div style="position:absolute;left:${split + (o.bx ?? 16)}px;right:${o.br ?? 15}px;top:${(o.by0 ?? 46) + i * (o.bstep ?? 24)}px;display:grid;grid-template-columns:var(--batch-cols,1fr 1fr 70px);font-family:var(--mono);font-size:var(--diff-fs,12px);${st === 'queued' ? 'opacity:.45' : ''}"><span style="color:${st === 'grading' ? 'var(--cream)' : (o.nameC || 'inherit')}">${E(r[0])}</span><span style="color:${o.lookC || 'var(--dim)'}">${E(r[1])}</span><span style="text-align:right;color:${st === 'grading' ? (o.activeC || 'var(--ember-text)') : (o.doneC || 'var(--dim)')}">${E(st)}</span></div>`;
   });
   return html;
 }
@@ -380,9 +381,9 @@ function media({ spec, data, w, h }) {
   const o = spec.opts || {};
   let html = head(spec, data);
   (data.items || []).forEach((it, i) => {
-    html += `<div style="position:absolute;left:15px;right:15px;top:${(o.y0 ?? 46) + i * (o.step ?? 32)}px;height:26px;display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:12px">` +
-      `<div class="thumb" style="flex:none;width:38px;height:24px">${it.src ? `<img src="${E(it.src)}">` : (it.wave ? `<svg viewBox="0 0 38 24" style="width:38px;height:24px"><path d="${wave(38, 24, 9, .9)}" fill="#8a867d"/></svg>` : '')}</div>` +
-      `<span class="cream">${E(it.name)}</span><span style="margin-left:auto" class="${it.em ? 'em' : 'dim'}">${E(it.note || '')}</span></div>`;
+    html += `<div style="position:absolute;left:15px;right:15px;top:${(o.y0 ?? 46) + i * (o.step ?? 32)}px;height:${o.th ?? 26}px;display:flex;align-items:center;gap:${o.gap ?? 10}px;font-family:var(--mono);font-size:var(--media-fs,12px)">` +
+      `<div class="thumb" style="flex:none;width:${o.tw ?? 38}px;height:${o.thh ?? 24}px">${it.src ? `<img src="${E(it.src)}">` : (it.wave ? `<svg viewBox="0 0 38 24" style="width:38px;height:24px"><path d="${wave(38, 24, 9, .9)}" fill="#8a867d"/></svg>` : '')}</div>` +
+      `<span class="cream">${E(it.name)}</span><span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:${o.noteFs ? o.noteFs + 'px' : 'inherit'};${o.noteC ? 'color:' + o.noteC : ''}" class="${it.em ? 'em' : (o.noteC ? '' : 'dim')}">${it.link ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6.5 9.5l3-3M7 4.5l1-1a3 3 0 0 1 4.2 4.2l-1 1M9 11.5l-1 1a3 3 0 0 1-4.2-4.2l1-1"/></svg>' : ''}${E(it.note || '')}</span></div>`;
   });
   if (data.foot) html += `<div class="pfoot">${E(data.foot)}</div>`;
   return html;

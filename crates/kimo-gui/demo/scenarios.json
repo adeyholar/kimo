@@ -436,11 +436,11 @@
      ],
      [
       "~",
-      "  grain      0 -> 12"
+      "  grain 0 -> 12"
      ],
      [
       "-",
-      "lut old_rec709.cube"
+      " lut old_rec709.cube"
      ],
      [
       "+",
@@ -489,20 +489,26 @@
      {
       "name": "dune_aerial.mov",
       "note": "relinked",
-      "em": false,
+      "link": true,
       "src": "../demo/frames/m02_m1.jpg"
      },
      {
       "name": "walk_ridge.mov",
+      "note": "relinked",
+      "link": true,
       "src": "../demo/frames/m02_m2.jpg"
      },
      {
       "name": "sky_wide.mov",
+      "note": "relinked",
+      "link": true,
       "src": "../demo/frames/m02_m3.jpg"
      },
      {
       "name": "wind_sfx.wav",
-      "wave": true
+      "note": "relinked",
+      "link": true,
+      "src": "../demo/frames/m02_m4.jpg"
      }
     ],
     "foot": "collect_project: 14 files, 6.2 GB"

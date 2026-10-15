@@ -17,6 +17,7 @@ export function eventsFor(s, { still = false, live = true } = {}) {
     const st = { type: 'tool_start', id, name, args };
     if (last && s.final.count) st.count = s.final.count;
     if (last && s.final.progress) st.progress = s.final.progress;
+    if (last && s.final.running) st.elapsed_ms = dur;  // how long it has been running at this moment
     ev.push(st);
     if (!(last && s.final.running)) ev.push({ type: 'tool_end', id, name, dur_ms: dur, status: 'ok', _wait: live ? Math.min(dur, 900) : 0 });
   });
