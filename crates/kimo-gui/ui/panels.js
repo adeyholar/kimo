@@ -134,11 +134,24 @@ function overlay(ov, w, h) {
       else { s += `<circle cx="${px(x)}" cy="${px(y)}" r="7" fill="${c}" stroke="#141412" stroke-width="1.5"/>`; for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4; s += `<line x1="${px(x + 11 * Math.cos(a))}" y1="${px(y + 11 * Math.sin(a))}" x2="${px(x + 16 * Math.cos(a))}" y2="${px(y + 16 * Math.sin(a))}" stroke="var(--ember)" stroke-width="1.4"/>`; } }
       if (o.label) s += `<text x="${px(x + 20)}" y="${px(y + 4)}" style="fill:var(--cream);font-family:var(--mono);font-size:11.5px">${E(o.label)}</text>`;
     }
+    if (o.cam) {   // m13: orbit ring + camera at its pan with a frustum wedge at its fov + pan keyframe diamonds + axis triad
+      const c = o.cam, cx = w / 2, cy = h * .46, rx = w * .34, ry = h * .15, P = d => { const a = (d || 0) * Math.PI / 180; return [cx + rx * Math.sin(a), cy + ry * Math.cos(a)]; };
+      s += `<ellipse cx="${px(cx)}" cy="${px(cy)}" rx="${px(rx)}" ry="${px(ry)}" fill="none" stroke="rgba(245,241,231,.55)" stroke-width="1.2" stroke-dasharray="2 5" stroke-linecap="round"/>`;
+      for (const v of o.keys || []) { const [x, y] = P(v); s += `<path d="M${px(x)} ${px(y - 6)}l6 6-6 6-6-6z" fill="var(--cream)" stroke="#141412" stroke-width="1"/>`; }
+      const [x, y] = P(c.cam_pan), ang = Math.atan2(cy - y, cx - x), fov = (c.cam_fov ?? 40) * Math.PI / 180, L = Math.min(w, h) * .22;
+      const a1 = [x + L * Math.cos(ang - fov / 2), y + L * Math.sin(ang - fov / 2)], a2 = [x + L * Math.cos(ang + fov / 2), y + L * Math.sin(ang + fov / 2)];
+      s += `<path d="M${px(x)} ${px(y)}L${px(a1[0])} ${px(a1[1])}L${px(a2[0])} ${px(a2[1])}Z" fill="rgba(255,90,35,.10)" stroke="var(--ember)" stroke-width="1.2"/><rect x="${px(x - 7)}" y="${px(y - 5)}" width="14" height="10" rx="2" fill="var(--ember)" transform="rotate(${px(ang * 180 / Math.PI)} ${px(x)} ${px(y)})"/>`;
+      const label = [c.cam_fov != null ? `fov ${fmtNum(c.cam_fov)}°` : '', c.cam_pan != null ? `pan ${fmtNum(c.cam_pan)}°` : '', c.cam_tilt != null ? `tilt ${fmtNum(c.cam_tilt)}°` : ''].filter(Boolean).join('  ');
+      if (label) s += `<text x="${px(x + 12)}" y="${px(y - 10)}" style="fill:var(--cream);font-family:var(--mono);font-size:11.5px">${E(label)}</text>`;
+      const tx = w - 46, ty = 78, pa = (c.cam_pan || 0) * Math.PI / 180, ax = [[Math.cos(pa), Math.sin(pa) * .45, '#e5533b', 'x'], [0, -1, '#e8a33a', 'y'], [-Math.sin(pa) * .8, Math.cos(pa) * .4, '#7fbf6a', 'z']];
+      for (const [dx, dy, col, lab] of ax) s += `<line x1="${tx}" y1="${ty}" x2="${px(tx + dx * 24)}" y2="${px(ty + dy * 24)}" stroke="${col}" stroke-width="1.6"/><text x="${px(tx + dx * 32 - 3)}" y="${px(ty + dy * 32 + 4)}" style="fill:${col};font-family:var(--mono);font-size:10.5px">${lab}</text>`;
+    }
     if (o.body) { const [x, y] = [o.body[0] * w, o.body[1] * h], r = Math.max(4, (o.r ?? .01) * w); s += `<circle cx="${px(x)}" cy="${px(y)}" r="${px(r)}" fill="rgba(255,90,35,.08)" stroke="var(--ember)" stroke-width="1.25"/><path d="M${px(x)} ${px(y)}v${px(r * .9)}" stroke="var(--ember)" stroke-width="1.25"/>${o.label ? `<text x="${px(x + r + 5)}" y="${px(y + 4)}" style="fill:var(--cream);font-family:var(--mono);font-size:11px">${E(o.label)}</text>` : ''}`; }
   }
   return s;
 }
 
+const fmtNum = n => String(Math.round(n * 10) / 10);
 // ---------- transform gizmo (router xfOps) ----------
 // The layer's box (a layer at scale 1 fills the frame), 8 handles, anchor crosshair, the previous pose
 // dashed, a move arrow, plus the family's marks (null, parent link, motion path, bezier ease inset).
@@ -157,6 +170,15 @@ function gizmo(g, w, h, S, age) {
   for (const [u, v] of [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]]) { const [x, y] = rot(b, b.cx + u * b.bw / 2, b.cy + v * b.bh / 2); s += `<rect x="${px(Math.min(w - 7, Math.max(0, x - 3.5)))}" y="${px(Math.min(h - 7, Math.max(0, y - 3.5)))}" width="7" height="7" fill="var(--cream)" stroke="#141412" stroke-width="1"/>`; }
   s += `<circle cx="${px(b.cx)}" cy="${px(b.cy)}" r="5" fill="none" stroke="var(--cream)" stroke-width="1.2"/><path d="M${px(b.cx - 9)} ${px(b.cy)}h18M${px(b.cx)} ${px(b.cy - 9)}v18" stroke="var(--cream)" stroke-width="1"/>`;
   if (moved && Math.hypot(a.cx - b.cx, a.cy - b.cy) > 3) { const ang = Math.atan2(b.cy - a.cy, b.cx - a.cx), hx = b.cx - 9 * Math.cos(ang), hy = b.cy - 9 * Math.sin(ang); s += `<path d="M${px(a.cx)} ${px(a.cy)}L${px(hx)} ${px(hy)}" stroke="var(--ember)" stroke-width="1.5"/><path d="M${px(b.cx)} ${px(b.cy)}L${px(hx - 6 * Math.cos(ang - .5))} ${px(hy - 6 * Math.sin(ang - .5))}M${px(b.cx)} ${px(b.cy)}L${px(hx - 6 * Math.cos(ang + .5))} ${px(hy - 6 * Math.sin(ang + .5))}" stroke="var(--ember)" stroke-width="1.5"/>`; }
+  if (g.three) {   // 3D props: orbit rings around the anchor (rot_y horizontal, rot_x vertical) with the angle as an ember arc, axis handles
+    const R = Math.min(b.bw, b.bh) * .32, ry = (g.next.rot_y || 0) * Math.PI / 180, rx = (g.next.rot_x || 0) * Math.PI / 180;
+    s += `<ellipse cx="${px(b.cx)}" cy="${px(b.cy)}" rx="${px(R)}" ry="${px(R * .32)}" fill="none" stroke="rgba(245,241,231,.6)" stroke-width="1.1"/><ellipse cx="${px(b.cx)}" cy="${px(b.cy)}" rx="${px(R * .32)}" ry="${px(R)}" fill="none" stroke="rgba(245,241,231,.6)" stroke-width="1.1"/>`;
+    const arcH = (a0, a1) => { const p = t => [b.cx + R * Math.sin(t), b.cy + R * .32 * Math.cos(t)]; const [x0, y0] = p(a0), [x1, y1] = p(a1); return `M${px(x0)} ${px(y0)}A${px(R)} ${px(R * .32)} 0 ${Math.abs(a1 - a0) > Math.PI ? 1 : 0} ${a1 > a0 ? 0 : 1} ${px(x1)} ${px(y1)}`; };
+    const arcV = (a0, a1) => { const p = t => [b.cx + R * .32 * Math.sin(t), b.cy - R * Math.cos(t)]; const [x0, y0] = p(a0), [x1, y1] = p(a1); return `M${px(x0)} ${px(y0)}A${px(R * .32)} ${px(R)} 0 ${Math.abs(a1 - a0) > Math.PI ? 1 : 0} ${a1 > a0 ? 1 : 0} ${px(x1)} ${px(y1)}`; };
+    if (Math.abs(ry) > 1e-3) s += `<path d="${arcH(0, ry)}" fill="none" stroke="var(--ember)" stroke-width="2.2"/>`;
+    if (Math.abs(rx) > 1e-3) s += `<path d="${arcV(0, rx)}" fill="none" stroke="var(--ember)" stroke-width="2.2"/>`;
+    for (const [dx, dy, col] of [[1, 0, '#e5533b'], [0, -1, '#e8a33a'], [-.55, .45, '#7fbf6a']]) { const L = R * 1.25, ex = b.cx + dx * L, ey = b.cy + dy * L; s += `<line x1="${px(b.cx)}" y1="${px(b.cy)}" x2="${px(ex)}" y2="${px(ey)}" stroke="${col}" stroke-width="1.6"/><circle cx="${px(ex)}" cy="${px(ey)}" r="3.5" fill="${col}"/>`; }
+  }
   if (g.parent) { const q = P(g.parent); s += `<path d="M${px(b.cx)} ${px(b.cy)}L${px(q.cx)} ${px(q.cy)}" stroke="var(--cream)" stroke-width="1" stroke-dasharray="3 3"/><circle cx="${px(q.cx)}" cy="${px(q.cy)}" r="4" fill="var(--cream)"/>`; }
   if (g.path && g.path.length) {
     let pts;
@@ -360,7 +382,7 @@ function keys({ spec, data, w, h }) {
     const vy = v => gh - 6 - (v / g.max) * (gh - 14);
     const d = g.pts.map((v, i) => (i ? 'L' : 'M') + px(X(r.t0 + i * (r.t1 - r.t0) / (g.pts.length - 1)) - gx) + ' ' + px(vy(v))).join('');
     html += `<svg style="position:absolute;left:${gx}px;top:${gy}px;width:${x1 - gx + 8}px;height:${gh}px;background:#121211;border-radius:4px" viewBox="0 0 ${x1 - gx + 8} ${gh}">` +
-      `<line x1="0" x2="${x1 - gx + 8}" y1="${vy(g.thr)}" y2="${vy(g.thr)}" stroke="#8a867d" stroke-dasharray="3 3"/><text x="${x1 - gx}" y="${vy(g.thr) - 4}" font-size="10" fill="var(--dim)" text-anchor="end">${E(g.thrLabel)}</text>` +
+      (g.thr != null ? `<line x1="0" x2="${x1 - gx + 8}" y1="${vy(g.thr)}" y2="${vy(g.thr)}" stroke="#8a867d" stroke-dasharray="3 3"/><text x="${x1 - gx}" y="${vy(g.thr) - 4}" font-size="10" fill="var(--dim)" text-anchor="end">${E(g.thrLabel ?? '')}</text>` : '') +
       `<path d="${d}" fill="none" stroke="var(--cream)" stroke-width="1.3"/></svg>`;
   }
   html += ruler(r, X, o.rulerY ?? 6);

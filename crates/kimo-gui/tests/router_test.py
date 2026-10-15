@@ -161,10 +161,13 @@ async def main():
         lrows = await pg5.evaluate("[...document.querySelectorAll('[data-panel=lights] *')].map(e => e.textContent).filter(s => s.includes('key')).length")
         m1 = await run3('mesh_lathe', 'd4', {'profile': [[0, 0], [1, 1]], 'segments': 96})
         nodes = await pg5.evaluate("document.querySelector('[data-panel=stack]') ? document.querySelector('[data-panel=stack]').textContent : ''")
+        c1 = await run3('set_camera', 'd5', {'cam_pan': 0, 'cam_fov': 40})
+        c2 = await run3('set_camera_keyframe', 'd6', {'property': 'cam_pan', 'time': 2, 'value': 35})
+        cam = await pg5.evaluate("(() => { const v = document.querySelector('[data-panel=viewer]'); return [v.querySelectorAll('svg.ov ellipse').length, v.textContent.includes('fov 40°'), [...document.querySelectorAll('[data-panel=insp] .row')].map(r => r.textContent).join('|')]; })()")
         bad = await pg.evaluate(BAD)
         ok_3 = (t1[0] == 'tracking' and t1[1] >= 1 and 'solve' not in t1[4] and 'track 0.70 px RMS' in t1[4] and t2[2] >= 5 and l1[0] == 'lighting' and l1[3] >= 1 and lrows >= 1
-                and m1[0] == 'modelling' and 'lathe' in nodes and not bad and not errs5)
-        print(f"{'PASS' if ok_3 else 'FAIL'}  3d/tracking: planar {t1[:4]} '{t1[4][-30:]}' mesh grid lines {t2[2]} light {l1[:4]} rows {lrows} stack '{nodes[-40:]}' m1 {m1[0]} bad {bad[:2]} errs {errs5[:2]}")
+                and m1[0] == 'modelling' and 'lathe' in nodes and not bad and not errs5 and c1[0] == 'scene3d' and c2[0] == 'scene3d' and cam[0] >= 1 and cam[1] and 'Pan' in cam[2] and '35' in cam[2])
+        print(f"{'PASS' if ok_3 else 'FAIL'}  3d/tracking: planar {t1[:4]} '{t1[4][-30:]}' mesh grid lines {t2[2]} light {l1[:4]} rows {lrows} stack '{nodes[-40:]}' m1 {m1[0]} cam {c1[0]} {c2[0]} {cam} bad {bad[:2]} errs {errs5[:2]}")
         if not ok_3: fails.append('3d')
 
         # ---- cold real-engine session (?feed=off): events shaped like kimo-mcp's (no `type`) ----

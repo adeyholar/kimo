@@ -20,7 +20,7 @@ export const FAMILIES = [
   ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut)/],
   ['audio', /^(set_|add_|apply_|auto_|measure_|normalize_|analyze_)?(mix|audio|gain|fader|mute|solo|pan|compress|eq|limiter|limit|loudness|duck|stem|bus|route_)|^track_beats$/],
   ['text', /^(caption|subtitle|add_caption|add_subtitle|edit_caption|transcript_edit|transcri|add_title|title|text|set_text|add_text|set_caption|validate_captions)/],
-  ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track)/],
+  ['3d', /^(add_mesh|mesh|model|extrude|bevel|light|camera|particle|emit|simulate|scene|render_3d|add_light|set_light|solve_camera|track|set_camera|add_scene3d|instantiate_gltf)/],
   ['export', /^(export|render|queue_render|encode|deliver)/],
 ];
 export function family(name) {
@@ -378,7 +378,7 @@ export function route(ev, state, MODES) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
       if (/false_?colou?r/.test(String(ev.tool_name).toLowerCase())) { v.viewer = v.viewer || {}; v.viewer.falsecolor = { split: P.split ?? .5 }; }
       const hit = timelineOps(state, MODES, ev, fam) | (fam === 'audio' ? audioOps(state, MODES, ev) : false) | (fam === 'export' ? exportOps(state, MODES, ev) : false);
-      const diff = inspectorDiff(state, MODES, ev, fam);
+      const diff = ev._kvDone || inspectorDiff(state, MODES, ev, fam);   // sceneOps already wrote the inspector
       if (!hit && !diff) hud(state, ev, fam, ev.tool_name + ' ✓'); else hud(state, ev, fam, ev.tool_name + ' ✓');
     } else { if (fam === 'export') exportOps(state, MODES, ev); hud(state, ev, fam, ev.tool_name + ' failed'); }
   }
@@ -438,7 +438,7 @@ function peek(state, MODES, t) {
 // the call: x/y are project pixels, placed when the project size is known (session/frame events'
 // width/height), otherwise the move is shown in the readout and the box stays centred.
 export const GIZMO_MS = 2400;
-const XF = { x: 'x', y: 'y', pos_x: 'x', pos_y: 'y', scale: 'scale', rotation: 'rotation', rot_z: 'rotation', rotate: 'rotation', opacity: 'opacity' };
+const XF = { x: 'x', y: 'y', pos_x: 'x', pos_y: 'y', scale: 'scale', rotation: 'rotation', rot_z: 'rotation', rotate: 'rotation', opacity: 'opacity', rot_x: 'rot_x', rot_y: 'rot_y', pos_z: 'pos_z' };
 const numOf = v => { if (v == null || typeof v === 'object') return null; const s = String(v).trim(), n = parseFloat(s); return Number.isFinite(n) ? (s.endsWith('%') ? n / 100 : n) : null; };
 function xfOps(state, MODES, ev) {
   const P = ev.payload || {}, T = ev.target || {}, A = P.args || (state._xfArgs && state._xfArgs[ev.call_id]) || {};
@@ -478,6 +478,7 @@ function xfOps(state, MODES, ev) {
     if (tr && times.length) { const c = tr.clips[i]; c.keys = c.keys || []; for (const tt of times) if (!c.keys.some(q => Math.abs(q.t - (c.s + tt)) < 1e-6)) c.keys.push({ t: c.s + tt, em: !!g.bez }); else if (g.bez) c.keys.find(q => Math.abs(q.t - (c.s + tt)) < 1e-6).em = true; c._flash = now(); }
     if (!g.read.length || !k) g.read.push(`${times.length} key${times.length === 1 ? '' : 's'}${param ? ' · ' + param : ''}`);
   }
+  if (/^(rot_x|rot_y|pos_z)$/.test(k || '') || ['rot_x', 'rot_y', 'pos_z'].some(q => A[q] != null)) g.three = true;
   if (!g.read.length) g.read.push(ev.tool_name);
   state.gizmo = g;   // nothing animates in JS: the viewer draws it while fresh and CSS fades it
 }
@@ -488,6 +489,7 @@ function xfOps(state, MODES, ev) {
 // arguments or result — track quads / ROI / mesh grid / point ring / matte seed on the viewer, a light
 // glyph at its frame position plus its row in Lights, the mesh op appended to the Stack, a physics
 // body per clip, the solve's reprojection error. Nothing is drawn for a value the call did not carry.
+const E2 = x => String(x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const quad8 = c => Array.isArray(c) && c.length >= 8 && c.slice(0, 8).every(v => numOf(v) != null) ? [0, 2, 4, 6].map(i => [numOf(c[i]), numOf(c[i + 1])]) : null;
 function modeViews(state, MODES, ev) {
   const m = (state.explicitMode ? null : inferMode(String(ev.tool_name))) || state.mode;   // the screen app.js will show for this call
@@ -539,12 +541,63 @@ function sceneOps(state, MODES, ev) {
       const stk = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'stack');
       if (stk) { const S = V[stk[0]] || (V[stk[0]] = {}); S.nodes = S.nodes || []; for (const n of S.nodes) n.em = false; const nm = { mesh_lathe: 'lathe', mesh_subdivide: 'subdivide', mesh_boolean: 'boolean ' + (A.op ?? A.operation ?? 'diff'), mesh_extrude_path: 'extrude path' }[tn] || tn.replace(/^mesh_/, ''); S.nodes.push({ name: nm, em: true, _flash: now() }); if (S.nodes.length > 7) S.nodes.splice(0, S.nodes.length - 7); hit = true; }
     }
+    // camera (m13): orbit ring with the camera on it at its pan, a frustum wedge opening at its fov,
+    // a diamond per keyframed pan, the axis triad turned by the pan; scene objects into the Scene tree
+    if (/^set_camera/.test(tn) && ev.phase === 'complete') {
+      const cam = state.cam || (state.cam = {}), keys = state.camKeys || (state.camKeys = []);
+      if (tn === 'set_camera') for (const k of ['cam_x', 'cam_y', 'cam_z', 'cam_pan', 'cam_tilt', 'cam_roll', 'cam_fov']) { if (numOf(A[k]) != null) cam[k] = numOf(A[k]); }
+      else if (A.property && numOf(A.value) != null) { cam[A.property] = numOf(A.value); keys.push({ prop: A.property, t: numOf(A.time), v: numOf(A.value) }); if (keys.length > 24) keys.shift(); }
+      vw.overlay = (vw.overlay || []).filter(x => x._kind !== 'camera');
+      // Keyframes panel: one lane per keyed camera property, diamonds at the keys' timeline times, newest in ember
+      const kp = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'keys');
+      const timed = keys.filter(k => k.t != null);
+      if (kp && timed.length) {
+        const KK = V[kp[0]] || (V[kp[0]] = {}), last = timed[timed.length - 1], props = [...new Set(timed.map(k => k.prop))];
+        KK.ruler = { t0: 0, t1: Math.max(4, Math.ceil(Math.max(...timed.map(k => k.t)) + 1)), step: 1, fmt: 's', align: 'left' };
+        KK.lanes = props.map(pr => ({ label: `<span class=cream>camera</span> <span class=dim>${E2(pr.replace(/^cam_/, ''))}</span>`, html: true, sel: pr === last.prop, keys: timed.filter(k => k.prop === pr).map(k => k === last ? { t: k.t, em: true } : k.t) }));
+        KK.playhead = last.t;
+      }
+      const o = ov(); o.push({ cam: { ...cam }, keys: keys.filter(k => k.prop === 'cam_pan').map(k => k.v), _call: ev.call_id, _kind: 'camera' });
+      const kvn = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'kv');
+      if (kvn) { ev._kvDone = true; const K = V[kvn[0]] || (V[kvn[0]] = {}); K.blocks = K.blocks || []; for (const [k, lab, u] of [['cam_fov', 'FOV', '°'], ['cam_pan', 'Pan', '°'], ['cam_tilt', 'Tilt', '°'], ['cam_z', 'Dolly', ' px']]) if (cam[k] != null) { let r = K.blocks.find(b => b.k === lab); const v = fmtVal(cam[k]) + u; if (!r) { r = { k: lab }; K.blocks.push(r); } if (r.v !== v) { if (r.v != null) r.from = r.v; r.v = v; r._flash = now(); } } }
+      hit = true;
+    }
+    if (tn === 'add_scene3d' && ev.phase === 'complete' && A.config && typeof A.config === 'object') {
+      const tr = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'tree');
+      const objs = Array.isArray(A.config.objects) ? A.config.objects : [], lts = Array.isArray(A.config.lights) ? A.config.lights : [];
+      if (tr && (objs.length || lts.length)) { const S = V[tr[0]] || (V[tr[0]] = {}); S.items = S.items || []; for (const x of S.items) x.sel = false;
+        objs.forEach((ob, i) => S.items.push({ name: String(ob.name ?? ob.id ?? `${ob.kind ?? 'object'} ${i + 1}`), icon: ob.kind === 'plane' ? 'plane' : 'mesh', d: ob.parent ? 1 : 0, sel: i === objs.length - 1, _flash: now() }));
+        lts.forEach((l, i) => S.items.push({ name: String(l.name ?? `${l.kind ?? 'light'} ${i + 1}`), icon: 'light' }));
+        if (S.items.length > 14) S.items.splice(0, S.items.length - 14); hit = true; }
+    }
     // physics bodies: one ring per body at its pixel offset from the canvas centre (needs the project size)
     if (tn === 'simulate_physics' && Array.isArray(A.bodies) && state.session.width) {
       const o = ov(); for (const b of A.bodies) if (b && numOf(b.x) != null && numOf(b.y) != null) o.push({ body: [.5 + numOf(b.x) / state.session.width, .5 + numOf(b.y) / state.session.height], r: (numOf(b.radius_px) ?? 20) / state.session.width, label: b.clip_id, _call: ev.call_id, _kind: tn }); hit = true;
     }
   }
   if (ev.phase === 'complete') {
+    // Inspector: the call's own args for what it targeted (light / track / camera / mesh), no placeholders
+    const kvn = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'kv');
+    if (kvn && !/^set_camera/.test(tn)) {
+      const K = V[kvn[0]] || (V[kvn[0]] = {}); K.blocks = K.blocks || [];
+      const i = K.blocks.findIndex(b => b._live); if (i >= 0) K.blocks.splice(i);
+      const fmtA = v => Array.isArray(v) ? (v.length <= 4 && v.every(x => numOf(x) != null) ? v.map(x => fmtVal(x)).join(', ') : null) : (typeof v === 'object' || v == null ? null : fmtVal(v));
+      const lab = k => String(k).replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+      const rows = Object.entries(A).filter(([k]) => !/^(clip_id|target_clip_id|return_|verts0)/.test(k)).map(([k, v]) => [k, fmtA(v)]).filter(([, v]) => v != null && v !== '').slice(0, 6);
+      if (rows.length) { K.blocks.push({ sec: String(A.id ?? A.clip_id ?? ev.tool_name), _live: true }); for (const [k, v] of rows) K.blocks.push({ k: lab(k), v, _live: true, _flash: now() }); hit = true; ev._kvDone = true; }
+    }
+    // Light rig table: one row per light the calls named, only the columns its args carry
+    if (tn === 'set_light' && (A.id != null || A.kind != null)) {
+      const rg = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'lightrig');
+      if (rg) { const G2 = V[rg[0]] || (V[rg[0]] = {}); G2.rows = G2.rows || []; const id = String(A.id ?? A.kind); let r = G2.rows.find(x => x[0] === id);
+        const inten = numOf(A.intensity), temp = numOf(A.temperature ?? A.kelvin);
+        if (!r) { r = [id, '', '', 0, false, '']; G2.rows.push(r); }
+        r[1] = temp != null ? Math.round(temp) + 'K' : r[1]; if (inten != null) { r[2] = fmtVal(inten); r._i = inten; } if (numOf(A.falloff) != null) r[5] = fmtVal(A.falloff);
+        const mx = Math.max(...G2.rows.map(x => x._i || 0)) || 1; for (const x of G2.rows) { x[3] = (x._i || 0) / mx; x[4] = x === r; } hit = true; }
+    }
+    // Track residual graph: per-frame residuals when the result carries them (else the mockup's empty state)
+    const res = [R.frame_rms, R.residuals, R.residuals_px, R.per_frame_rms].find(a => Array.isArray(a) && a.length > 1 && a.every(v => numOf(v) != null));
+    if (res && /track|solve/.test(tn)) { const kp = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'keys'); if (kp) { const KK = V[kp[0]] || (V[kp[0]] = {}); const n = res.length, mx = Math.max(...res.map(numOf)); KK.ruler = { t0: 0, t1: n - 1, step: Math.max(1, Math.round(n / 6)), fmt: 'n' }; KK.graph = { pts: res.map(numOf), max: Math.max(1, Math.ceil(mx)), thr: KK.graph && KK.graph.thr }; hit = true; } }
     // a solve / track reports its error: the viewer's left meta line (m07 "solve 0.70 px RMS")
     const rms = numOf(R.rms_px ?? R.rms ?? R.reprojection_rms ?? R.mean_error_px ?? (Array.isArray(R.solves) && R.solves[0] ? R.solves[0].rms_px : null));
     if (rms != null && /solve|track/.test(tn)) { vw.left = `${/solve/.test(tn) ? 'solve' : 'track'} ${rms.toFixed(2)} px RMS`; hit = true; }
