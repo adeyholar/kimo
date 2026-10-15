@@ -60,12 +60,22 @@ then `cargo tauri dev` (or `cargo build` for the shell). In another shell:
 NOTE: the shell has not been compiled on the dev box this was authored on
 (no webkit2gtk-4.1-dev); the frontend is verified in headless Chromium.
 
-## Frontend-only development
+## Transports (ui/bridge.js)
 
-`cd ui && python3 -m http.server 8123` and open
-`http://127.0.0.1:8123/index.html`. With no Tauri shell present a simulated
-feed replays the mockup-A scenario and the status pill reads
-`dev · simulated feed` — simulated data is always labeled.
+One ingestion path, three bindings:
+
+1. **Tauri IPC** — inside the shell; events come from the loopback TCP/JSONL
+   listener in `src/main.rs`. The shell never uses SSE.
+2. **localhost SSE** — plain-browser development. Run
+   `python3 tools/sse_feed.py` (stdlib only, `http://127.0.0.1:7422/events`,
+   holds the stream open with keep-alives), serve `ui/` and open
+   `http://127.0.0.1:8123/index.html?feed=sse`. The pill reads
+   `live · sse loopback :7422`. `?sse=PORT` overrides the port.
+3. **simulated** — with neither reachable (or `?feed=sim`), the built-in
+   mockup-A replay runs and the pill reads `dev · simulated feed`.
+
+Simulated data is always labeled; every binding announces itself in the
+status pill.
 
 ## Licenses
 

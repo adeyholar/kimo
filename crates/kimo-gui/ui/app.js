@@ -3,6 +3,7 @@
 // When no Tauri shell is present (Chromium dev harness) a simulated feed runs
 // and the status pill says so - simulated data is always labeled.
 import { markDirty, setCubeColor } from './viewer.js';
+import { connect } from './bridge.js';
 
 const $ = s => document.querySelector(s);
 const PALETTE = ['#dd5227','#7fb7a6','#b9a6e8','#e889a0','#a7948d','#9a8f5f'];
@@ -154,15 +155,14 @@ function setPill(txt, sim) {
   const p = $('#conn-pill'); p.textContent = txt; p.classList.toggle('sim', !!sim);
   $('#feed-label').textContent = sim ? 'simulated feed' : 'live feed';
 }
-if (window.__TAURI__) {
-  setPill('● connecting · loopback :7421', false);
-  window.__TAURI__.event.listen('engine-event', e => onEvent(e.payload));
-  window.__TAURI__.event.listen('spectator-status', e =>
-    setPill(e.payload === 'live' ? '● live · loopback :7421' : `● ${e.payload}`, false));
-} else {
-  setPill('● dev · simulated feed', true);
-  runSimulatedFeed();
-}
+// Transport selection lives in bridge.js; status strings stay honest about
+// where the data comes from (tauri ipc / sse loopback / simulated).
+const binding = connect(onEvent, (st, detail) => {
+  if (st === 'live') setPill(`● live · ${detail}`, false);
+  else if (st === 'sim') setPill('● dev · simulated feed', true);
+  else setPill(`● ${detail}`, false);
+}, () => { setPill('● dev · simulated feed', true); runSimulatedFeed(); });
+if (binding.kind === 'tauri') setPill('● connecting · loopback :7421', false);
 
 /* Simulated feed for the Chromium dev harness: replays the mockup A scenario.
    Ships in the build; only runs when no shell is present. */
