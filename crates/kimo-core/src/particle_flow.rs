@@ -538,4 +538,71 @@ mod tests {
         let mut sim = Simulation::new(flow()).unwrap();
         assert!(sim.advance(-1.0).is_err());
     }
+
+    #[test]
+    #[ignore]
+    fn pv3_frames() {
+        let dir = std::env::var("KIMO_PV3_FRAMES").unwrap_or_else(|_| "/tmp/pv3-frames".into());
+        std::fs::create_dir_all(&dir).unwrap();
+        let camera = Camera { eye: [0.0, 0.4, -3.2], pan: 0.0, tilt: -0.08, roll: 0.0, sensor_height: 24.0, focal_length: 35.0, near: 0.1 };
+        let base = |blend: Blend| Flow {
+            emitter: Emitter {
+                seed: 7,
+                count: 4000,
+                origin: [0.0, -0.8, 0.0],
+                spread: [0.25, 0.05, 0.25],
+                base_velocity: [0.0, 1.2, 0.0],
+                velocity_jitter: 0.4,
+                birth_rate: 1500.0,
+                lifetime: [1.6, 2.4],
+                color_stops: vec![
+                    ColorStop { offset: 0.0, rgb: [1.0, 0.9, 0.4] },
+                    ColorStop { offset: 0.35, rgb: [1.0, 0.45, 0.1] },
+                    ColorStop { offset: 0.7, rgb: [0.6, 0.15, 0.5] },
+                    ColorStop { offset: 1.0, rgb: [0.1, 0.2, 0.7] },
+                ],
+                alpha_start: 0.85,
+                alpha_end: 0.5,
+                fade_in: 0.1,
+                fade_out: 0.15,
+                size_start: 0.008,
+                size_end: 0.05,
+                blend,
+                hardness: 5.0,
+            },
+            field: Advect::Curl3 { noise: "perlin".into(), seed: 5, frequency: 0.9, amplitude: 1.4, octaves: 3 },
+            gravity: [0.0, -0.15, 0.0],
+            drag: 0.05,
+            coupling: 3.0,
+            dt: 0.004,
+        };
+        // Lifecycle panels: additive, no mesh, six sim times.
+        let times = [0.15, 0.4, 0.8, 1.2, 1.8, 2.4];
+        let (pw, ph) = (640usize, 540usize);
+        let mut sheet = Frame::try_new(1920, 1080).unwrap();
+        let mut stats = Vec::new();
+        for (k, t) in times.iter().enumerate() {
+            let mut sim = Simulation::new(base(Blend::Additive)).unwrap();
+            sim.advance(*t).unwrap();
+            let (f, out) = render(&mut sim, &camera, pw, ph, None, [0.5, 20.0]).unwrap();
+            crate::render::write_image(&f, &format!("{dir}/life-{k}.png")).unwrap();
+            stats.push((t, out.active, out.drawn));
+            let (ox, oy) = ((k % 3) * pw, (k / 3) * ph);
+            for y in 0..ph {
+                let s = &f.d[y * pw * 4..(y + 1) * pw * 4];
+                let d0 = ((oy + y) * 1920 + ox) * 4;
+                sheet.d[d0..d0 + pw * 4].copy_from_slice(s);
+            }
+        }
+        crate::render::write_image(&sheet, &format!("{dir}/contact.png")).unwrap();
+        eprintln!("lifecycle stats: {stats:?}");
+        // Mesh interaction: premultiplied alpha over a shaded sphere, curl advection.
+        let sphere = generate(&Primitive::Sphere { radius: 0.9, longitude_slices: 48, latitude_slices: 24 }).unwrap();
+        let mut sim = Simulation::new(base(Blend::PremultipliedAlpha)).unwrap();
+        sim.advance(1.6).unwrap();
+        let (f, out) = render(&mut sim, &camera, 1920, 1080, Some(&sphere), [0.5, 20.0]).unwrap();
+        crate::render::write_image(&f, &format!("{dir}/mesh-interaction.png")).unwrap();
+        eprintln!("mesh interaction: active={} drawn={} occluded={}", out.active, out.drawn, out.occluded_by_mesh);
+        assert!(out.occluded_by_mesh > 0, "some particles must pass behind the sphere");
+    }
 }
