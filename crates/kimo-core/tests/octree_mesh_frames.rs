@@ -28,6 +28,29 @@ fn mesh_frame(w:usize,h:usize)->(kimo_core::effects::Frame,usize,octree::Adaptiv
 
 fn hash_of(f:&kimo_core::effects::Frame)->u64{let mut raw=Vec::with_capacity(f.d.len()*4);for v in &f.d{raw.extend_from_slice(&v.to_le_bytes());}fnv(&raw)}
 
+#[test]fn adaptive_sphere_torus_frames(){
+ let scenes=[("sphere",Graph{nodes:vec![Field::Sphere{center:[0.;3],radius:1.}],output:0}),
+             ("torus",Graph{nodes:vec![Field::Torus{center:[0.;3],major_radius:1.,minor_radius:0.4}],output:0})];
+ for(name,g)in scenes{
+  let m=octree::extract_mesh(&g,&cfg()).unwrap();
+  assert_eq!((m.boundary_edges,m.nonmanifold_edges),(0,0),"{name} closed manifold crack-free");
+  let material=Material{albedo:[0.74,0.68,0.6],metallic:0.,roughness:0.55};
+  let lights=[Light::Directional{travel_direction:[-0.3,-0.5,1.],radiance:[2.5;3]}];
+  let out=lit_raster::render(&m.stream,&camera(),320,180,&material,&lights).unwrap();
+  println!("ADCM-FRAME {name} 320x180 covered={} tris={} euler={}",out.covered,m.stream.indices.len(),m.euler_characteristic);
+  assert!(out.covered>2000,"{name} mesh must cover frame area");
+  if std::env::var("KIMO_SDF_FRAMES").is_ok(){
+   std::fs::create_dir_all("/tmp/pm3-frames").unwrap();
+   let out=lit_raster::render(&m.stream,&camera(),640,360,&material,&lights).unwrap();
+   let rgba=kimo_core::render::to_rgba8_tpdf(&out.frame);
+   let path=format!("/tmp/pm3-frames/oct2_{name}_adaptive.png");
+   let mut ch=std::process::Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s","640x360","-i","-","-frames:v","1",&path]).stdin(std::process::Stdio::piped()).spawn().unwrap();
+   std::io::Write::write_all(&mut ch.stdin.take().unwrap(),&rgba).unwrap();assert!(ch.wait().unwrap().success());
+   println!("ADCM-FRAME {name} 640x360 dumped {path}");
+  }
+ }
+}
+
 #[test]fn adaptive_crease_mesh_frame_topology_and_hash(){
  let(frame,covered,m)=mesh_frame(320,180);
  let hash=hash_of(&frame);
