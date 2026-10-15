@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kimo · spectator</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header id="topbar">
+  <span class="wordmark">Kimo</span><span class="sub">spectator</span>
+  <span class="pill pill-live" id="conn-pill">● connecting · loopback :7421</span>
+  <span class="pill" id="rev-pill">rev —</span>
+  <span class="pill" id="rate-pill">tools —/min</span>
+  <span class="right-note">SPECTATOR · READ-ONLY · <span id="feed-label">starting</span></span>
+</header>
+<main>
+  <aside id="calllog" class="card">
+    <div class="card-head"><span>CALL LOG</span><span class="dim">TOOL_START / TOOL_END</span></div>
+    <div id="log-rows"></div>
+  </aside>
+  <section id="center">
+    <div id="frames">
+      <div class="card" id="viewport-card">
+        <div class="card-head"><span>VIEWPORT · SCENE3D</span><span class="dim">PREVIEW (THREE.JS)</span></div>
+        <div class="frame-body"><canvas id="gl"></canvas></div>
+      </div>
+      <div class="card" id="engine-card">
+        <div class="card-head"><span>ENGINE FRAME</span><span class="dim">TRUE RENDER · F <span id="frame-no">—</span></span></div>
+        <div class="frame-body" id="engine-frame"><canvas id="engine-canvas"></canvas><span class="tagline">your vision.</span></div>
+      </div>
+    </div>
+    <div class="card" id="graph-card">
+      <div class="card-head"><span>NODE GRAPH · PIPELINE</span><span class="dim">READ-ONLY · LIVE PATH ANIMATED</span></div>
+      <div id="graph-body"><svg id="edges"></svg><div id="nodes"></div></div>
+    </div>
+  </section>
+  <aside id="rightrail">
+    <div class="card" id="passstack">
+      <div class="card-head"><span>PASS STACK</span><span class="dim">LAST RENDER</span></div>
+      <div id="pass-rows"></div>
+    </div>
+    <div class="card" id="inspector">
+      <div class="card-head"><span>INSPECTOR</span><span class="dim" id="insp-name">—</span></div>
+      <div id="insp-rows"></div>
+    </div>
+  </aside>
+</main>
+<footer id="timeline" class="card">
+  <div class="card-head"><span>TIMELINE</span><span class="dim" id="tc">00:00.0 · 24 FPS</span></div>
+  <div id="tl-body">
+    <div id="tl-ruler"></div>
+    <div id="tl-tracks"></div>
+    <div id="playhead"></div>
+  </div>
+</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>
