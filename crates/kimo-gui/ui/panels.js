@@ -248,7 +248,12 @@ function kv({ spec, data, w, h }) {
   let html = head(spec, data);
   html += `<div class="kv ${o.lines ? 'lines' : ''} ${o.topLine ? 'topline' : ''} ${o.secRule ? 'secrule' : ''}" style="top:${o.top ?? (data.sub ? 69 : 46)}px${o.pad != null ? `;padding:0 ${o.pad}px` : ''}">`;
   for (const b of (data.blocks || [])) html += block(b, w - 30);
-  return html + '</div>';
+  html += '</div>';
+  // GUI-FIX-1: the last read's answer (get_* / list_* / inspect_* / QA), pinned to the panel's bottom edge, quiet styling:
+  // a read is not a value of the project, so it never renders as an Inspector row
+  const R = data.read;
+  if (R && R.rows && R.rows.length) html += `<div class="readcard${F(R)}"><div class="rh"><span class="rt">read</span>${E(R.tool)}</div>${R.rows.map(r => `<div class="rr"><span class="rk">${E(r[0])}</span><span class="rv">${E(r[1])}</span></div>`).join('')}</div>`;
+  return html;
 }
 function block(b, w) {
   if (b.sec !== undefined) return `<div class="sec" ${b.h ? `style="height:${b.h}px"` : ''}>${E(b.sec)}</div>`;
@@ -675,7 +680,11 @@ function vectorscope(cx, cy, r, seed) {
   }
   return s;
 }
-function scopes({ spec, data, w, h }) {
+function scopes(a) {   // GUI-FIX-1: a colour read's numbers (get_scopes, analyze_color, a WB pick / shot match) as one stats line
+  const S = a.data && a.data.stats;
+  return scopesBody(a) + (S && S.text ? `<div class="scopestats${F(S)}">${E(S.text)}</div>` : '');
+}
+function scopesBody({ spec, data, w, h }) {
   const o = spec.opts || {};
   const dock = data.img ? scopeDock(data.img, o, w, h, data.wave ? scopeGeom(o, w, h).split : (o.split ?? Math.round(w * .5))) : '';
   if (!data.wave) {   // legacy synthetic look (no binned scope data from the engine)

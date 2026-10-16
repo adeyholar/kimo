@@ -14,6 +14,7 @@ import { READONLY, inferMode } from './modes.js';
 import { COV_C, pipelineOps, projectOps, qaOps, space, C_MUT, cSnap, cRestore, cPush } from './project_ops.js';
 import { COV_A, covAOps, covASee, covAPre, covAHistory } from './cov_a.js';
 import { COVB, covbOps, covbLearn, covbHistory } from './cov_b.js';
+import { readRows, callRows, CHIP, colourRows, scopeLine } from './reads.js';
 
 export const FAMILIES = [
   ['pipeline', COV_C.pipeline], ['project', COV_C.project], ['qa', COV_C.qa],   /* project_ops.js: colour pipeline rows, m02 history / diff / batch / media, QA + cache in the HUD toast + rail row */
@@ -90,11 +91,12 @@ function inspectorDiff(state, MODES, ev, fam) {
   const label = k => String(k).replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
   const set = (k, to, from) => {
     const row = kv.blocks.find(b => b.k && b.k.toLowerCase() === String(k).toLowerCase().replace(/_/g, ' '));
-    if (row) { if (from != null || row.v != null) row.from = from != null ? fmtVal(from, k) : row.v; row.v = fmtVal(to, k); row._flash = now(); return true; }
+    const fx = (v, kk) => (/^normalize_/.test(String(ev.tool_name)) && /volume/i.test(String(kk)) && typeof v === 'number' ? 'x' + fmtVal(v) : fmtVal(v, kk));
+    if (row) { if (from != null || row.v != null) row.from = from != null ? fx(from, k) : row.v; row.v = fx(to, k); row._flash = now(); return true; }
     return false;
   };
   if (!(P.key && P.key.ease)) {   /* an ease change has no value row to update: it gets its own row below */
-    if (param != null && (P.to != null || P.value != null)) { if (set(param, P.to ?? P.value, P.from)) return true; }
+    if (param != null && (P.to != null || P.value != null) && fmtVal(P.to ?? P.value, param) !== '') { if (set(param, P.to ?? P.value, P.from)) return true; }   /* a list / object value has no row text: rewriting a row with '' is no visible change */
     if (/^(x|y|pos_x|pos_y)$/i.test(String(param)) && kv.blocks.some(b => b.k && /^position$/i.test(b.k))) return true;   // xfOps wrote Position
   }
   // Unknown or unmapped: a small section for the latest call's payload (replaces the previous one).
@@ -104,13 +106,15 @@ function inspectorDiff(state, MODES, ev, fam) {
   const HIDE = /^(dur_ms|duration_ms|duration|start|end|s|e|changed|mutated|result|images|ts|ts_ms|stage|elapsed_ms|progress|pct)$/;
   const rank = k => { const i = FIRST.indexOf(k); return i < 0 ? FIRST.length : i; };
   const rows = Object.entries(P).filter(([k, v]) => v != null && typeof v !== 'object' && !HIDE.test(k) && !RAW_ID.test(String(v))).sort((a, b) => rank(a[0]) - rank(b[0])).slice(0, 4);
-  const val = P.to ?? P.value, head = param != null && val != null;
-  const rest = head ? rows.filter(([k]) => !['param', 'from', 'to', 'value'].includes(k)).slice(0, 3) : rows;
+  const val = P.to ?? P.value, head = param != null && val != null && fmtVal(val, param) !== '';
+  const rest = head ? rows.filter(([k]) => !['param', 'from', 'to', 'value'].includes(k)).slice(0, 3) : rows.filter(([k]) => !(k === 'param' && param != null && val != null));   /* a param whose value has no row text (a list) is not a change by itself */
   if (!head && !rest.length && !P.key) return false;
   kv.blocks.push({ sec: ev.tool_name, _live: true });
   // the change itself leads: "Amount 0 → 0.35"; a keyframe's own key, "Scale @2s 100% → 125%"
+  // normalize_loudness lands a linear volume factor (2.505 for +8 dB): marked "x2.505" so it never reads as LUFS or dB
+  const fv = (v, k) => (/^normalize_/.test(String(ev.tool_name)) && /volume/i.test(String(k)) && typeof v === 'number' ? 'x' + fmtVal(v) : fmtVal(v, k));
   if (P.key) kv.blocks.push({ k: label(P.key.label), v: P.key.to, from: P.key.from, _live: true, _flash: now() });
-  else if (head) kv.blocks.push({ k: label(param), v: fmtVal(val, param), ...(P.from != null ? { from: fmtVal(P.from, param) } : {}), _live: true, _flash: now() });
+  else if (head) kv.blocks.push({ k: label(param), v: fv(val, param), ...(P.from != null ? { from: fv(P.from, param) } : {}), _live: true, _flash: now() });
   for (const [k, v] of rest) kv.blocks.push({ k: label(k), v: fmtVal(v, k), _live: true, _flash: now() });
   return true;
 }
@@ -213,7 +217,19 @@ function gradeOps(state, MODES, ev) {
   if (tn === 'match_grade' || tn === 'match_color') { const s1 = box(A.source_region, 'source'), s2 = box(A.ref_region, A.ref_clip_id ? `ref · ${A.ref_clip_id}` : 'ref'); if (s1) regs.push(s1); if (s2) regs.push(s2); }
   if (regs.length) { vw.overlay = (vw.overlay || []).filter(o => o._kind !== tn).concat(regs.filter(Boolean).map(o => ({ ...o, _call: ev.call_id, _kind: tn }))); hit = true; }
   if ((tn === 'match_grade' || tn === 'match_color' || tn === 'pick_white_balance') && !regs.length) { vw.wipe = 1; hit = true; }
+  // GUI-FIX-1: what the pick / match computed, in the Grade list of the screen it lands on and the Color scopes' stats line
+  if (tn === 'match_grade' || tn === 'match_color' || tn === 'pick_white_balance') {
+    const tl = timelineView(state, MODES), nm = id => { if (id == null) return null; const [t, i] = tl ? findClip(tl, { clip_id: id }) : [null, -1]; const lb = t ? t.clips[i].label : null; return lb && !RAW_ID.test(String(lb)) ? lb : (RAW_ID.test(String(id)) ? null : String(id)); };
+    const rows = colourRows(tn, A, R, nm(A.ref_clip_id));
+    const K = (MODES[mode] && Object.entries(MODES[mode].panels).find(([, sp]) => sp.kind === 'kv')) || null;
+    if (rows.length && K) { const KV = V2[K[0]] || (V2[K[0]] = {}); KV.blocks = (KV.blocks || []).filter(b => !b._cread); for (const b of KV.blocks) b.ch = false; const t = now(); KV.blocks.push({ sec: tn, _grade: true, _cread: true }, ...rows.map(([k, v]) => ({ k, v, ch: true, _grade: true, _cread: true, _flash: t }))); hit = true; }
+    scopeStats(state, MODES, scopeLine(tn, R));
+  }
   return hit;
+}
+function scopeStats(state, MODES, text) {
+  if (!text) return;
+  for (const [m, M] of Object.entries(MODES)) for (const [k, sp] of Object.entries(M.panels)) if (sp.kind === 'scopes') { const V = state.views[m] || (state.views[m] = {}); (V[k] || (V[k] = {})).stats = { text, _flash: now() }; }
 }
 
 // Graphics (m09): HUD frames, detection boxes, counters, prompt boxes, shapes and paths land on the viewer
@@ -584,7 +600,7 @@ function maskOps(state, MODES, ev) {
     lane(`track matte${A.mode ? ' ' + String(A.mode) : ''}`, null, lo != null && hi != null && hi > lo ? { area: [[lo, 1], [hi, 1]], color: '#6f6c66', stroke: '#e8e0cc' } : {});
     if (lo != null && hi != null) { const L = KK.lanes.find(l => l.label.startsWith('track matte')); if (L && L.keys.length === 0 && KK.ruler && (lo < KK.ruler.t0 || hi > KK.ruler.t1)) lane(L.label, null); }   // refit the ruler to include the span
   }
-  if (tn === 'remove_track_matte') { if (K) K.blocks = (K.blocks || []).filter(b => b.sec !== 'Key' && b._sec !== 'Key'); if (KK) KK.lanes = (KK.lanes || []).filter(l => !l.label.startsWith('track matte')); hit = true; }
+  if (tn === 'remove_track_matte') { const cnt = () => ((K && K.blocks) || []).length + ((KK && KK.lanes) || []).length, n0 = cnt(); if (K) K.blocks = (K.blocks || []).filter(b => b.sec !== 'Key' && b._sec !== 'Key'); if (KK) KK.lanes = (KK.lanes || []).filter(l => !l.label.startsWith('track matte')); hit = cnt() !== n0; }   /* nothing drawn to take away: the Inspector says it (router callSection) */
   if (tn === 'reorder_mask' && numOf(A.index) != null && KK && KK.lanes) {   // the mask's lanes move to its new place in the stack order
     const mine = KK.lanes.filter(l => l.label.startsWith(mid + ' ')), rest = KK.lanes.filter(l => !l.label.startsWith(mid + ' ')); if (mine.length) { const at = Math.max(0, Math.min(rest.length, Math.round(numOf(A.index)))); KK.lanes = [...rest.slice(0, at), ...mine, ...rest.slice(at)]; for (const l of mine) l._flash = now(); hit = true; } }
   if (tn === 'remove_mask' || tn === 'remove_mask_layer') { ov(); if (tn === 'remove_mask') vw.overlay = (vw.overlay || []).filter(o => !String(o._kind || '').startsWith('mask:'));
@@ -741,8 +757,19 @@ function audioOps(state, MODES, ev) {
   // loudness readout + meters: every audio call moves the meters (a hit then decay); loudness tools set the number
   const L = Object.entries(M.panels).filter(([, s]) => s.kind === 'loudness').map(([k]) => V[k] || (V[k] = {}))[0];
   if (L) {
-    const lufs = num(P.lufs ?? P.to ?? get('target_lufs') ?? get('lufs'));
+    // the big number is loudness in LUFS, never a gain: normalize_loudness's landed value (P.to, e.g. 2.505) is the
+    // clip's volume factor, so the readout is the engine's result (measured + gain = where the clip now sits, or the
+    // target), and the gain gets its own row in dB (GUI-FIX-1; it read "2.5 LUFS" before)
+    const R = P.result && typeof P.result === 'object' ? P.result : {};
+    const meas = num(R.measured_lufs), gdb = num(R.gain_db);
+    const lufs = num(R.integrated_lufs ?? (meas != null && gdb != null ? meas + gdb : null) ?? R.target_lufs ?? R.lufs ?? P.lufs ?? (/lufs|loud/i.test(String(P.param ?? '')) ? P.to : null) ?? get('target_lufs') ?? get('lufs'));
     if (/loud|normaliz|lufs/.test(n) && lufs != null) { L.lufs = lufs.toFixed(1); L._flash = t; }
+    if (/loud|normaliz|lufs/.test(n)) {
+      const tg = num(R.target_lufs ?? get('target_lufs')); if (tg != null && /normaliz/.test(n)) L.target = tg.toFixed(1);
+      const sg = x => (x > 0.049 ? '+' : x < -0.049 ? '-' : '') + Math.abs(x).toFixed(1);
+      const add = [meas != null && ['Input', `${sg(meas)} LUFS`], gdb != null && ['Gain', `${sg(gdb)} dB`], num(R.true_peak_dbfs) != null && ['Peak', `${sg(R.true_peak_dbfs)} dBTP`], num(R.true_peak_dbfs) == null && num(R.sample_peak_dbfs) != null && ['Peak', `${sg(R.sample_peak_dbfs)} dBFS`]].filter(Boolean);
+      if (add.length) { const keep = (L.rows || []).filter(r => !add.some(a => a[0] === r[0])); L.rows = [...add, ...keep].slice(0, 3); for (const r of add) r._flash = t; L._flash = t; }
+    }
     const gain = num(get('gain') ?? get('gain_db')) ?? 0;
     for (const m of (L.meters || [])) {
       const base = m.v ?? .5, lvl = Math.max(0, Math.min(1, base + .12 + gain * .03));
@@ -955,6 +982,7 @@ export function route(ev, state, MODES) {
     if (typeof nm === 'string' && nm.trim()) state.session.project = nm.trim().slice(0, 40);
   }
   if (ev.phase === 'start' && fam === 'edit') (state._editArgs || (state._editArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
+  if (ev.phase === 'start' && ev.call_id != null) (state._callArgs || (state._callArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
   const T = ev.target || {}, P = ev.payload || {};
   const param = T.param || P.param, val = P.to ?? P.value;
   const args = { ...(T.clip_id ? { clip: T.clip_id } : {}), ...(param && val != null ? { [param]: fmtVal(val, param) } : {}) };
@@ -975,7 +1003,9 @@ export function route(ev, state, MODES) {
     const t0 = state._t0 && state._t0[id]; if (t0 != null) delete state._t0[id];
     const dur = numOf(P.dur_ms) ?? numOf(ev.duration_ms) ?? (t0 != null && ev.ts_ms != null && ev.ts_ms >= t0 ? ev.ts_ms - t0 : null); ev._dur = dur;
     // the landed value replaces the rail's start-time args: "scale: 104% → 112%"
-    const landed = !err && P.key ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [P.key.label]: `${P.key.from} → ${P.key.to}` } : !err && param && val != null && typeof val !== 'object' && fmtVal(val, param) !== '' ?   /* a key list (to: [{t, v}…]) is not a landed value */ { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
+    // normalize_loudness lands a linear volume factor: the rail reads it "x1 → x2.505", never a bare number (GUI-FIX-1)
+    const lfv = v => (/^normalize_/.test(String(ev.tool_name)) && /volume/i.test(String(param)) && typeof v === 'number' ? 'x' + fmtVal(v) : fmtVal(v, param));
+    const landed = !err && P.key ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [P.key.label]: `${P.key.from} → ${P.key.to}` } : !err && param && val != null && typeof val !== 'object' && fmtVal(val, param) !== '' ?   /* a key list (to: [{t, v}…]) is not a landed value */ { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? lfv(P.from) + ' → ' : '') + lfv(val) } : undefined;
     out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(P.result !== undefined ? { result: P.result } : {}), ...(landed ? { args: railArgs(state, landed) } : ev._railArgs ? { args: ev._railArgs } : {}) });
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
@@ -987,9 +1017,12 @@ export function route(ev, state, MODES) {
       const hit = (restoredA || ev._tlDone || timelineOps(state, MODES, ev, fam)) | (fam === 'audio' ? audioOps(state, MODES, ev) : false) | (fam === 'export' ? exportOps(state, MODES, ev) : false);
       const df = callDiff(state, ev); if (df) { const te = out.find(x => x.type === 'tool_end'); if (te) te.diff = df; }   // the picked call's Inspector Diff
       const diff = ev._kvDone || inspectorDiff(state, MODES, ev, fam);   // sceneOps already wrote the inspector
-      if (!hit && !diff) hud(state, ev, fam, ev.tool_name + ' ✓'); else hud(state, ev, fam, ev._hudText || ev.tool_name + ' ✓');
+      if (fam === 'qa' && ev._readRows) readCard(state, MODES, ev.tool_name, ev._readRows);   // QA answers stay on the info panel too
+      const sect = !diff && !ev._readRows && (!hit || fam === 'audio') && callSection(state, MODES, ev);   /* audio's meter hit decays: not a lasting visual */
+      if (!hit && !diff && !sect) hud(state, ev, fam, ev.tool_name + ' ✓'); else hud(state, ev, fam, ev._hudText || ev.tool_name + ' ✓');
       if (cBefore) cPush(state, cBefore, cSnap(state, MODES), String(ev.tool_name), P.result);
     } else { if (fam === 'export') exportOps(state, MODES, ev); hud(state, ev, fam, ev._hudErr || ev.tool_name + ' failed'); }
+    if (state._callArgs) delete state._callArgs[ev.call_id];
   }
   return out;
 }
@@ -1012,6 +1045,43 @@ const summary = r => {
   }
   return parts.join(', ');
 };
+// GUI-FIX-1: a read's answer as a quiet card pinned to the bottom of the current screen's info panel (kv). It is
+// not an Inspector row (a read changes no value), the next read replaces it, and the screen never hops.
+function readCard(state, MODES, tool, rows) {
+  if (!rows || !rows.length) return false;
+  const M = MODES[state.mode]; if (!M) return false;
+  const V = views(state);
+  // the Color screen's info panel is the pipeline list, a pure state display that a read leaves byte-identical
+  // (cov_c contract): there the answer goes on the scopes' stats line instead
+  if (Object.values(M.panels).some(sp => sp.kind === 'scopes') && Object.keys(M.panels).includes('pipe')) {
+    const sk = Object.entries(M.panels).find(([, sp]) => sp.kind === 'scopes')[0];
+    (V[sk] || (V[sk] = {})).stats = { text: `${tool} · ` + rows.slice(0, 3).map(r => `${r[0].toLowerCase()} ${r[1]}`).join(' · '), _flash: now() };
+    return true;
+  }
+  const e = Object.entries(M.panels).find(([, s]) => s.kind === 'kv'); if (!e) return false;
+  const K = V[e[0]] || (V[e[0]] = {});
+  K.read = { tool: String(tool), rows: rows.slice(0, 4), _flash: now() };
+  return true;
+}
+// GUI-FIX-1: a successful mutating call that no panel code drew (text styling and animators, an audio-effect key, a
+// matte removal, a physics bake...) gets a short section in the Inspector of the screen it lands on, from its own
+// args and result; text calls also put a chip on their clip in the timeline.
+function callSection(state, MODES, ev) {
+  const A = (state._callArgs && state._callArgs[ev.call_id]) || (ev.payload || {}).args || {}, T = ev.target || {};
+  const tl = timelineView(state, MODES);
+  const name = id => { if (id == null) return null; if (!RAW_ID.test(String(id))) return String(id); const [t, i] = tl ? findClip(tl, { clip_id: id }) : [null, -1]; const lb = t ? t.clips[i].label : null; return lb && !RAW_ID.test(String(lb)) ? lb : null; };
+  const rows = callRows(String(ev.tool_name), A, (ev.payload || {}).result, (ev.payload || {}).changed, name(T.clip_id ?? A.clip_id));
+  if (!rows.length) return false;
+  const [, V] = modeViews(state, MODES, ev), m = (state.explicitMode ? null : inferMode(String(ev.tool_name))) || state.mode;
+  const e = MODES[m] && Object.entries(MODES[m].panels).find(([, s]) => s.kind === 'kv'); if (!e) return false;
+  const K = V[e[0]] || (V[e[0]] = {}); K.blocks = K.blocks || [];
+  const i = K.blocks.findIndex(b => b._live); if (i >= 0) K.blocks.splice(i);
+  const t = now();
+  K.blocks.push({ sec: String(ev.tool_name), _live: true }, ...rows.map(r => ({ k: r[0], v: r[1], ...(r[2] ? { chip: true } : {}), ch: true, _live: true, _flash: t })));
+  const chipOf = CHIP[String(ev.tool_name)], chip = chipOf && rows.some(r => r[2]) ? [null, String(chipOf(A))] : null;
+  if (chip && tl && (T.clip_id ?? A.clip_id) != null) { const [tr, k] = findClip(tl, { clip_id: T.clip_id ?? A.clip_id, track_id: T.track_id }); if (tr) { const c = tr.clips[k]; c.fx = [...(c.fx || []).filter(x => x !== chip[1]), chip[1]]; c._flash = t; } }
+  return true;
+}
 function inspectOps(state, MODES, ev, id) {
   const P = ev.payload || {}, T = ev.target || {}, A = P.args || {};
   const out = [];
@@ -1027,6 +1097,7 @@ function inspectOps(state, MODES, ev, id) {
     const err = ev.phase === 'error', dur = P.dur_ms ?? ev.duration_ms, sm = err ? '' : summary(P.result);
     out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, read: true });
     hud(state, ev, 'inspect', ev.tool_name + (err ? ' failed' : sm ? ' · ' + sm : ' ✓'));
+    if (!err) { readCard(state, MODES, ev.tool_name, readRows(String(ev.tool_name), P.result)); scopeStats(state, MODES, scopeLine(String(ev.tool_name), P.result)); }   // the answer stays on the screen's info panel
   }
   return out;
 }

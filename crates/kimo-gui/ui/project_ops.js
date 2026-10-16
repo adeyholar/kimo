@@ -354,6 +354,11 @@ export function qaOps(state, MODES, ev) {
     rail = { freed: `${bytes(R.freed_bytes ?? 0)}, ${pl(n(R.cleared_entries), 'frame')}` }; toast = `frame cache cleared · ${pl(n(R.cleared_entries), 'frame')}, ${bytes(R.freed_bytes ?? 0)} freed`;
   } else return false;
   ev._railArgs = rail; ev._hudText = toast; ev._kvDone = true;
+  // GUI-FIX-1: the same answer stays on the current screen's info panel (router.js readCard), not only in the toast
+  if (tn === 'diff_frames') ev._readRows = [['Compared', `${side(state, MODES, R.a || A.a)} vs ${side(state, MODES, R.b || A.b)}`], ['Changed', rail.changed]];
+  else if (tn === 'lint_frame') ev._readRows = [['Frame', Object.keys(rail)[0]], ['Findings', Object.values(rail)[0]]];
+  else if (tn === 'cache_set_budget') ev._readRows = [['Frame cache', rail.budget], ['Used', bytes(R.bytes ?? 0)]];
+  else ev._readRows = [['Freed', bytes(R.freed_bytes ?? 0)], ['Frames', String(n(R.cleared_entries))]];
   return true;
 }
 

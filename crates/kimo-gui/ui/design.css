@@ -319,3 +319,15 @@ body::before{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;wi
    shadows each repaint re-rasterised whole tiles (28 ms of raster per edit vs 10 ms without it). While it flashes, the
    element gets its own small compositor layer, so the repaint touches only its own pixels. Nothing drawn changes. */
 .clip.flash,.trk.flash .lab,.kv .row.flash{will-change:transform}
+
+/* GUI-FIX-1: a read's answer pinned to the bottom of the info panel (kv) and a colour read's stats line on the scopes.
+   Quiet: no blur, no transition; the flash is the same one-shot background pulse an Inspector row gets. */
+.readcard{position:absolute;left:var(--kv-pl,15px);right:var(--kv-pr,15px);bottom:12px;background:#191918;border:1px solid var(--line2,#2c2b29);border-radius:6px;padding:6px 10px 7px;font-size:var(--kv-fs,16px);line-height:1.35;z-index:2}
+.readcard .rh{display:flex;align-items:baseline;gap:8px;color:var(--text);font-family:var(--mono);font-size:.82em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-bottom:2px;border-bottom:1px solid var(--line2,#2c2b29);margin-bottom:3px}
+.readcard .rt{color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-size:.86em}
+.readcard .rr{display:flex;justify-content:space-between;gap:12px;white-space:nowrap}
+.readcard .rk{flex:none;color:var(--klabel,var(--text));font-family:var(--label-font)}
+.readcard .rv{min-width:0;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);color:var(--cream);text-align:right}
+.readcard.flash{animation:kflashrow .7s ease-out 1;will-change:transform}
+.scopestats{position:absolute;right:14px;top:12px;max-width:70%;font-family:var(--mono);font-size:13px;color:var(--cream);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(18,18,17,.82);padding:2px 6px;border-radius:4px}
+.scopestats.flash{animation:kflashrow .7s ease-out 1;will-change:transform}
