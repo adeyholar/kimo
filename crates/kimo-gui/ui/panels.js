@@ -43,7 +43,7 @@ function head(spec, data, extra = '') {
 export function tickRunning(state) {
   for (const el of document.querySelectorAll('[data-run]')) {
     const c = state.calls.find(x => String(x.id) === el.dataset.run);
-    if (c && c.status === 'running') el.textContent = fmtDur(performance.now() - c.t);
+    if (c && c.status === 'running') { el.textContent = fmtDur(performance.now() - c.t); const p = el.closest('[data-panel]'); if (p) p._h = null; }   /* ticked in place: the panel's markup cache no longer matches its DOM */
   }
 }
 function agent({ spec, state, data, w, h }) {
@@ -378,6 +378,11 @@ export function panRows(tracks, o, h, pan) {
   pan.k = Math.min(Math.max(pan.k || 0, 0), kmax); pan.kmax = kmax;
   return pan.k;
 }
+// The last timeline's markup in parts (head + ruler, one string per track, playhead / razor): app.js rewrites only
+// the tracks whose markup changed, so an edit on one track never re-parses the other five. RUNS caches the merged
+// overview runs (a 1k-clip track is a few hundred seams in one gradient) by geometry.
+export let TL_PARTS = null;
+const RUNS = new Map();
 function timeline({ spec, data, w, h, pan }) {
   const o = spec.opts || {};
   const x0 = o.x0 ?? 48, x1 = w - (o.xr ?? 12);
@@ -387,17 +392,20 @@ function timeline({ spec, data, w, h, pan }) {
   let html = head(spec, data);
   html += `<div class="tl">` + ruler(r, X, o.rulerY ?? 6);
   let y = o.trackY ?? 30;
+  const pre = html;
   const TR = data.tracks || [], k0 = pan ? panRows(TR, o, h, pan) : 0;
+  const tracks = [];   /* each track's markup on its own, so a frame can rewrite just the track that changed (app.js paint) */
   for (const t of (k0 ? TR.slice(k0) : TR)) {
+    let tr = '';
     const th = t.h ?? o.trackH ?? 38;
-    html += `<div class="trk ${t.cls || ''}${t.mute ? ' muted' : ''}${F(t)}" style="top:${y}px;height:${th}px">`;
-    if (t.area) html += `<svg style="position:absolute;left:${px(X(t.area.s ?? r.t0))}px;top:0;width:${px((x1) - X(t.area.s ?? r.t0))}px;height:${th}px" viewBox="0 0 ${px(x1 - X(t.area.s ?? r.t0))} ${th}"><rect width="100%" height="100%" rx="7" fill="${t.area.bg || '#2a2824'}"/><path d="${smoothArea(x1 - X(t.area.s ?? r.t0), th, t.area)}" fill="${t.area.fill || '#4a4741'}"/></svg>`;
-    if (t.mute || t.solo) html += `<span class="ms" style="left:${o.msX ?? 34}px">${t.mute ? '<b class="m">M</b>' : ''}${t.solo ? '<b class="s">S</b>' : ''}</span>`;
-    if (t.label) html += t.chip ? `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? 120}px">${E(t.label)}</span>` : `<span class="lab">${E(t.label)}</span>`;
-    if (t.lane) { const li = t.laneInset ?? o.laneInset ?? 3; html += `<div class="lane" style="position:absolute;left:${x0}px;right:${w - x1}px;top:${li}px;bottom:${li}px;background:${t.lane}"></div>`; }
+    tr += `<div class="trk ${t.cls || ''}${t.mute ? ' muted' : ''}${F(t)}" style="top:${y}px;height:${th}px">`;
+    if (t.area) tr += `<svg style="position:absolute;left:${px(X(t.area.s ?? r.t0))}px;top:0;width:${px((x1) - X(t.area.s ?? r.t0))}px;height:${th}px" viewBox="0 0 ${px(x1 - X(t.area.s ?? r.t0))} ${th}"><rect width="100%" height="100%" rx="7" fill="${t.area.bg || '#2a2824'}"/><path d="${smoothArea(x1 - X(t.area.s ?? r.t0), th, t.area)}" fill="${t.area.fill || '#4a4741'}"/></svg>`;
+    if (t.mute || t.solo) tr += `<span class="ms" style="left:${o.msX ?? 34}px">${t.mute ? '<b class="m">M</b>' : ''}${t.solo ? '<b class="s">S</b>' : ''}</span>`;
+    if (t.label) tr += t.chip ? `<span class="labchip" style="left:${o.chipX ?? 10}px;width:${o.chipW ?? 120}px">${E(t.label)}</span>` : `<span class="lab">${E(t.label)}</span>`;
+    if (t.lane) { const li = t.laneInset ?? o.laneInset ?? 3; tr += `<div class="lane" style="position:absolute;left:${x0}px;right:${w - x1}px;top:${li}px;bottom:${li}px;background:${t.lane}"></div>`; }
     if (t.wave) {
       const a = X(t.wave.s ?? r.t0), b = X(t.wave.e ?? r.t1), wh = th - 6;
-      html += `<svg style="position:absolute;left:${px(a)}px;top:3px;width:${px(b - a)}px;height:${wh}px" viewBox="0 0 ${px(b - a)} ${wh}"><path d="${t.wave.peaks ? peaksPath(b - a, wh, t.wave.peaks) : wave(b - a, wh, t.wave.seed || 3, t.wave.amp ?? .8, t.wave.dens ?? 1)}" fill="${t.wave.color || '#5f5c56'}"/>` +
+      tr += `<svg style="position:absolute;left:${px(a)}px;top:3px;width:${px(b - a)}px;height:${wh}px" viewBox="0 0 ${px(b - a)} ${wh}"><path d="${t.wave.peaks ? peaksPath(b - a, wh, t.wave.peaks) : wave(b - a, wh, t.wave.seed || 3, t.wave.amp ?? .8, t.wave.dens ?? 1)}" fill="${t.wave.color || '#5f5c56'}"/>` +
         (t.wave.env ? `<path d="${catmull(t.wave.env.map(p => [X(p[0]) - a, wh * (1 - p[1])]))}" fill="none" stroke="var(--ember)" stroke-width="${o.envW ?? 1.5}"/>` : '') +
         (t.wave.beats ? t.wave.beats.map(bt => `<line x1="${px(X(bt) - a)}" x2="${px(X(bt) - a)}" y1="${o.beatY0 ?? 0}" y2="${o.beatY1 ?? 5}" stroke="var(--cream)" stroke-width="${o.beatW ?? 1.2}"/>`).join('') : '') +
         `</svg>`;
@@ -405,33 +413,48 @@ function timeline({ spec, data, w, h, pan }) {
     // virtualized: a track below the panel draws nothing; clips outside the ruler are skipped; clips under MINW px
     // wide (a long timeline fitted into the panel) merge into one plain run per stretch, so the panel holds at most
     // about one element per few pixel columns whatever the clip count (tests/timeline_perf_test.py: 1,000 clips)
-    if (y >= h) { html += '</div>'; y += th + (o.trackGap ?? 0); continue; }
+    if (y >= h) { tr += '</div>'; tracks.push(tr); html += tr; y += th + (o.trackGap ?? 0); continue; }
     const MINW = 12; let run = null;   // under 12 px a clip has no room for its label; its edges stay as 1 px seams in the run
     // a flashing (just edited) narrow clip draws on its own so the edit stays visible; when a burst flashes more than
     // FLASH_SOLO of them on one track (a 1,000-clip load), they merge like the rest and their run carries the flash
     const FLASH_SOLO = 24; let nf = 0; for (const c of (t.clips || [])) if (c._flash != null && F(c).trim() && ++nf > FLASH_SOLO) break;
-    const flush = () => { if (!run) return; const w0 = Math.max(1, run[1] - run[0]), cuts = run[2].filter(x => x > run[0] + .5 && x < run[1] - .5).map(x => px(x - run[0]));
-      const bg = cuts.length ? `;background:linear-gradient(90deg,${cuts.map((x, i) => `var(--clip) ${i ? px(cuts[i - 1] + 1) : 0}px ${x}px,transparent ${x}px ${px(x + 1)}px`).join(',')},var(--clip) ${px(cuts[cuts.length - 1] + 1)}px)` : '';
-      html += `<div class="clip crun${run[3] || ''}" style="left:${px(run[0])}px;width:${px(w0)}px${bg}"></div>`; run = null; };
-    for (const c of (t.clips || [])) {
-      const a = X(c.s), b = X(c.e);
+    const flush = () => { if (!run) return;
+      let h1 = 0x811c9dc5 | 0, h2 = 7; const mix = v => { const q = Math.round(v * 1000); h1 = Math.imul(h1 ^ q, 16777619); h2 = (Math.imul(h2, 31) + q) | 0; };
+      mix(run[0]); mix(run[1]); for (const x of run[2]) mix(x);
+      const key = `${h1}:${h2}:${run[2].length}${run[3] || ''}`;   /* a run unchanged since the last frame reuses its markup */
+      let s = RUNS.get(key);
+      if (s == null) {
+        const w0 = Math.max(1, run[1] - run[0]), cuts = run[2].filter(x => x > run[0] + .5 && x < run[1] - .5).map(x => px(x - run[0]));
+        const bg = cuts.length ? `;background:linear-gradient(90deg,${cuts.map((x, i) => `var(--clip) ${i ? px(cuts[i - 1] + 1) : 0}px ${x}px,transparent ${x}px ${px(x + 1)}px`).join(',')},var(--clip) ${px(cuts[cuts.length - 1] + 1)}px)` : '';
+        s = `<div class="clip crun${run[3] || ''}" style="left:${px(run[0])}px;width:${px(w0)}px${bg}"></div>`;
+        if (RUNS.size >= 256 || (RUNS.chars = (RUNS.chars || 0) + s.length) > 1.5e6) { RUNS.clear(); RUNS.chars = s.length; }   /* bounded: a few hundred runs, ~1.5M chars */
+        RUNS.set(key, s);
+      }
+      tr += s; run = null; };
+    const CL = t.clips || [];
+    for (let ci = 0; ci < CL.length; ci++) {
+      const c = CL[ci], a = X(c.s), b = X(c.e);
       if (b < x0 - 1 || a > x1 + 1) continue;
       const fl = F(c).trim();
       if (b - a < MINW && !c.keys && (!fl || nf > FLASH_SOLO) && !c.pill && !c.cls && !c.bg && !c.thumb && !c.cover && !c.fx) { if (run && a <= run[1] + 1) { run[2].push(a); run[1] = Math.max(run[1], b); if (fl) run[3] = ' ' + fl; } else { flush(); run = [a, b, [], fl ? ' ' + fl : '']; } continue; }
       flush();
-      html += `<div class="clip ${c.cls || ''}${F(c)}" style="left:${px(a)}px;width:${px(b - a)}px${c.bg ? ';background:' + c.bg : ''}">` +
+      const nx = CL[ci + 1], xn = nx && nx.s != null ? X(nx.s) : null, cw = xn != null && xn > a + 2 && xn < b + 1 ? px(xn) - px(a) - 1 : b - a;   /* back to back (or the next clip laid over this one's tail): this clip ends 1 px before the next */
+      tr += `<div class="clip ${c.cls || ''}${F(c)}" style="left:${px(a)}px;width:${px(cw)}px${c.bg ? ';background:' + c.bg : ''}">` +
         (c.thumb ? `<span class="ct"><img src="${E(c.thumb)}" alt=""></span>` : c.sw ? '<span class="ct sw"></span>' : '') + (c.cover ? `<img src="${E(c.cover)}" alt="">` : '') + (c.label ? `<span class="cl">${E(c.label)}</span>` : '') +
         (c.pill ? `<span class="cpill">${E(c.pill)}</span>` : '') +
         (c.keys ? c.keys.map(k => `<i class="ckey${k.em ? ' em' : ''}" style="left:${px(X(k.t) - a)}px"></i>`).join('') : '') +
         (c.fx ? (o.fxRow ? `<span class="fxrow">${c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')}</span>` : c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')) : '') + '</div>';
     }
     flush();
-    html += '</div>';
+    tr += '</div>'; tracks.push(tr); html += tr;
     y += th + (o.trackGap ?? 0);
   }
-  if (data.playhead != null && inView(X(data.playhead))) html += `<div class="playhead" style="left:${px(X(data.playhead))}px;top:${o.phTop ?? 4}px;bottom:${o.phBot ?? 8}px"></div>`;
-  if (data.razor && flashing(data.razor.t) && inView(X(data.razor.at))) html += `<div class="razor" style="left:${px(X(data.razor.at))}px;top:${o.trackY ?? 30}px;bottom:4px"></div>`;
-  return html + '</div>';
+  let post = '';
+  if (data.playhead != null && inView(X(data.playhead))) post += `<div class="playhead" style="left:${px(X(data.playhead))}px;top:${o.phTop ?? 4}px;bottom:${o.phBot ?? 8}px"></div>`;
+  if (data.razor && flashing(data.razor.t) && inView(X(data.razor.at))) post += `<div class="razor" style="left:${px(X(data.razor.at))}px;top:${o.trackY ?? 30}px;bottom:4px"></div>`;
+  html += post + '</div>';
+  TL_PARTS = { html, pre, tracks, post };
+  return html;
 }
 
 // ---------- key lanes (mask keys, keyframes, simulation cache, residual) ----------

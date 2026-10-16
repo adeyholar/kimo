@@ -3,7 +3,7 @@
 // object; a single rAF-batched render paints the current mode.
 import { connect } from './bridge.js';
 import { MODES, inferMode } from './modes.js';
-import { KINDS, POST, tickRunning, pickedRows } from './panels.js';
+import { KINDS, POST, tickRunning, pickedRows, TL_PARTS } from './panels.js';
 import { route, freezeNow } from './router.js';
 
 const DESIGN_W = 1376, DESIGN_H = 768;
@@ -198,7 +198,7 @@ function stepSprings(now) {
 const queue = [];
 let rafId = 0, dirty = true, hidden = document.visibilityState === 'hidden';
 export const QMAX = 2048;
-export const metrics = { raf: 0, renders: 0, ticks: 0, events: 0, coalesced: 0, dropped: 0, qmax: 0 };
+export const metrics = { raf: 0, renders: 0, scoped: 0, panelWrites: 0, textPatches: 0, trackWrites: 0, ticks: 0, events: 0, coalesced: 0, dropped: 0, qmax: 0 };
 function enqueue(ev) {
   metrics.events++;
   // Hidden: fold the event into state right away (the reducer never touches
@@ -243,6 +243,13 @@ function computeParade(src) {
   img.src = src;
 }
 function schedule() { dirty = true; requestFrame(); }
+// A frame that only carries split_clip / move_clip events repaints the timeline and the rail (the call's row)
+// and nothing else: no layout pass, no top bar, no Inspector, no viewer. Those catch up on the next frame that
+// carries no clip edit (one rAF, queued only while something is owed), so a stream of edits never repaints them.
+const CLIP_EDIT = /^(split_clip|move_clip)$/;
+const deferred = { on: false };
+function isClipEdit(ev) { const n = ev && (ev.tool_name ?? (ev.type === 'tool_start' || ev.type === 'tool_end' || ev.type === 'tool_progress' ? ev.name : null)); return n != null && CLIP_EDIT.test(n); }
+function renderScoped() { for (const [name, spec] of Object.entries(MODES[state.mode].panels)) if (spec.kind === 'timeline' || spec.kind === 'agent') renderPanel(name); }
 function requestFrame() { if (!rafId && !hidden) rafId = requestAnimationFrame(frame); }
 function frame() {
   rafId = 0; metrics.raf++; freezeNow(performance.now());
@@ -250,8 +257,10 @@ function frame() {
 }
 function frameBody() {
   if (queue.length > 1) metrics.coalesced += queue.length - 1;
-  for (const ev of queue.splice(0)) for (const e of route(ev, state, MODES)) apply(e);
-  if (dirty) { dirty = false; panDirty.clear(); render(); metrics.renders++; }
+  const evs = queue.splice(0), editOnly = evs.length > 0 && !dirty && evs.every(isClipEdit);
+  for (const ev of evs) for (const e of route(ev, state, MODES)) apply(e);
+  if (editOnly && !layoutDirty && builtMode === state.mode) { dirty = false; renderScoped(); metrics.renders++; metrics.scoped++; deferred.on = true; requestFrame(); }
+  else if (dirty || deferred.on) { dirty = false; deferred.on = false; panDirty.clear(); render(); metrics.renders++; }
   else if (panDirty.size) { for (const n of panDirty) renderPanel(n); panDirty.clear(); metrics.renders++; }
   // meter ballistics: frames only while a hit/decay window is open, then nothing
   if (state.animUntil && performance.now() < state.animUntil) { dirty = true; requestFrame(); } else state.animUntil = 0;
@@ -297,32 +306,32 @@ function elapsed() {
 
 function renderTop() {
   const M = MODES[state.mode];
-  { const pj = state.session.project, has = pj != null && String(pj).trim() !== '' && pj !== '—', pe = document.getElementById('proj'); pe.textContent = has ? pj : ''; pe.style.display = has ? '' : 'none'; if (pe.previousElementSibling) pe.previousElementSibling.style.display = has ? '' : 'none'; }   // no '/ —' without a project name
+  { const pj = state.session.project, has = pj != null && String(pj).trim() !== '' && pj !== '—', pe = document.getElementById('proj'); setText(pe, has ? String(pj) : ''); setDisp(pe, has ? '' : 'none'); setDisp(pe.previousElementSibling, has ? '' : 'none'); }   // no '/ —' without a project name
   const pill = document.getElementById('livepill');
   pill.classList.toggle('down', state.status.kind === 'down');
-  document.getElementById('pill-state').textContent = state.status.kind === 'down' ? state.status.label : 'live';
+  setText(document.getElementById('pill-state'), state.status.kind === 'down' ? String(state.status.label) : 'live');
   const ag = state.session.agent, agEl = document.getElementById('pill-agent'), hasAg = ag != null && String(ag).trim() !== '' && ag !== '—';
-  agEl.textContent = hasAg ? ag : ''; agEl.style.display = hasAg ? '' : 'none'; if (agEl.previousElementSibling) agEl.previousElementSibling.style.display = hasAg ? '' : 'none';   // no empty segment between hyphens
+  setText(agEl, hasAg ? String(ag) : ''); setDisp(agEl, hasAg ? '' : 'none'); setDisp(agEl.previousElementSibling, hasAg ? '' : 'none');   // no empty segment between hyphens
   let act = state.activity;
   if (!state.explicitActivity || act == null) act = M.activity || state.mode;
   if (act === '#calls') act = `${state.callCount} calls`;
-  document.getElementById('pill-act').textContent = act;
+  setText(document.getElementById('pill-act'), String(act));
   const right = document.getElementById('tb-right');
-  right.className = 'right ' + (M.rightCls || '');
-  document.getElementById('clock').textContent = fmtClock(elapsed());
+  const rc = 'right ' + (M.rightCls || ''); if (right.className !== rc) right.className = rc;
+  setText(document.getElementById('clock'), fmtClock(elapsed()));
 }
 
 function renderFooter() {
   const M = MODES[state.mode];
   const f = document.getElementById('footer');
-  if (!M.foot) { f.innerHTML = ''; return; }
+  if (!M.foot) { paint(f, ''); return; }
   const st = state.stats;
   const saved = st.saved_s ?? (st.saved_at ? Math.round((performance.now() - st.saved_at) / 1000) : null);
   const parts = [];
   if (st.cpu != null) parts.push(`<span>cpu <span class="num">${String(Math.round(st.cpu)).padStart(2, ' ')}%</span></span>`);
   if (st.ffmpeg) parts.push(`<span>ffmpeg ${st.ffmpeg}</span>`);
   if (saved != null) parts.push(`<span>saved <span class="num">${saved}s</span> ago</span>`);
-  f.innerHTML = parts.join('');
+  paint(f, parts.join(''));
 }
 
 // A picked call can carry more rows than a short Inspector holds: the tail (Result, then the last Args) gives way,
@@ -337,6 +346,39 @@ function fitPicked(el) {
   const more = document.createElement('div'); more.className = 'row dim'; more.innerHTML = `<span class="k"></span><span class="v">+${n} more</span>`; kv.appendChild(more);
   while (kv.children.length > 3 && over()) { more.previousElementSibling.remove(); more.lastElementChild.textContent = `+${++n} more`; }
 }
+/* Write only what changed. A panel whose markup is the same as last frame keeps its DOM (and whatever its POST
+   painted), so a frame that edits the timeline repaints the timeline, the rail row and the call's own text, not every
+   panel. Panel boxes are read once per layout (grid tracks are fixed for a layout), so a render never forces one. */
+function setText(el, v) { if (el && el.textContent !== v) el.textContent = v; }
+function setDisp(el, v) { if (el && el.style.display !== v) el.style.display = v; }
+function paint(el, html) {
+  if (el._h === html) return false;
+  const P = TL_PARTS && TL_PARTS.html === html ? TL_PARTS : null, Q = el._p;   /* a timeline: rewrite only the tracks that changed */
+  el._p = P;
+  if (P && Q && P.pre === Q.pre && P.tracks.length && P.tracks.length === Q.tracks.length) {
+    const tl = el.querySelector(':scope > .tl'), trs = tl ? tl.querySelectorAll(':scope > .trk') : [];
+    if (trs.length === P.tracks.length) {
+      for (let i = 0; i < trs.length; i++) if (P.tracks[i] !== Q.tracks[i]) { trs[i].outerHTML = P.tracks[i]; metrics.trackWrites++; }
+      if (P.post !== Q.post) { const last = tl.querySelectorAll(':scope > .trk'), end = last[last.length - 1]; while (end.nextSibling) end.nextSibling.remove(); if (P.post) end.insertAdjacentHTML('afterend', P.post); }
+      el._h = html; return true;
+    }
+  }
+  if (el._h != null && html.length < 4096 && !html.includes('flash') && retext(el, el._h, html)) { el._h = html; metrics.textPatches++; return false; }
+  el.innerHTML = html; el._h = html; metrics.panelWrites++; return true;
+}
+/* Same tags and attributes, only the words differ (a viewer HUD caption naming the new call): the text nodes are
+   updated in place and every element stays. Markup carrying a flash is always rebuilt, so its flash replays. */
+const TAG = /<[^>]*>/g, tpl = document.createElement('template');
+function texts(root) { const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), out = []; while (w.nextNode()) out.push(w.currentNode); return out; }
+function retext(el, prev, html) {
+  const a = prev.match(TAG) || [], b = html.match(TAG) || [];
+  if (a.length !== b.length || a.some((t, i) => t !== b[i])) return false;
+  tpl.innerHTML = html; const now = texts(tpl.content), old = texts(el);
+  if (now.length !== old.length) return false;
+  for (let i = 0; i < now.length; i++) if (old[i].nodeValue !== now[i].nodeValue) old[i].nodeValue = now[i].nodeValue;
+  return true;
+}
+function box(el) { return el._sz || (el._sz = [el.clientWidth, el.clientHeight]); }
 function render() {
   if (layoutDirty) buildLayout();
   renderTop();
@@ -348,11 +390,11 @@ function render() {
     const el = nodes[name]; if (!el) continue;
     const fn = KINDS[spec.kind];
     if (!fn) continue;
-    const w = el.clientWidth, h = el.clientHeight;
+    const [w, h] = box(el);
     let data = V[name] || {};
     if (name === pickPanel && pickCall) data = { sub: `${pickCall.name}${pickCall.status === 'running' ? '' : ''}`, blocks: pickedRows(pickCall) };   // a clicked rail row, in the existing inspector
     const args = { spec, data, view: V, state, w, h, mode: state.mode, pan: pans[state.mode + ':' + name] };
-    el.innerHTML = fn(args);
+    if (!paint(el, fn(args))) continue;
     if (name === pickPanel && pickCall) fitPicked(el);
     if (POST[spec.kind]) POST[spec.kind](el, args);
   }
@@ -391,8 +433,8 @@ function onWheel(e) {
 main.addEventListener('wheel', onWheel, { passive: false });
 function renderPanel(name) {
   const spec = (MODES[state.mode] || {}).panels[name], el = nodes[name]; if (!spec || !el) return;
-  const V = view(state.mode), args = { spec, data: V[name] || {}, view: V, state, w: el.clientWidth, h: el.clientHeight, mode: state.mode, pan: pans[state.mode + ':' + name] };
-  el.innerHTML = KINDS[spec.kind](args);
+  const [w, h] = box(el), V = view(state.mode), args = { spec, data: V[name] || {}, view: V, state, w, h, mode: state.mode, pan: pans[state.mode + ':' + name] };
+  if (!paint(el, KINDS[spec.kind](args))) return;
   if (POST[spec.kind]) POST[spec.kind](el, args);
 }
 // click a rail row: its args / latency / result in the existing inspector; click it again or Esc to go back

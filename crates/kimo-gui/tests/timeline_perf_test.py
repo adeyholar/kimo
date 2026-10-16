@@ -12,12 +12,16 @@ measures, in the page (headless Chromium, 1376x768):
       edits, and after a fast scrub (also the raw, pre-GC peak). No runaway growth: after-scrub <= after-load + 2 MB.
   (d) GUI processing per edit under load: one split_clip or move_clip (start + complete) per frame on the 1k
       timeline; the app's frame callback that drains it (reducer + render + DOM write). This is GUI-side time,
-      not engine latency. Target < 10 ms.
+      not engine latency. Asserted: p95 AND max < 10 ms for split and for move in every one of --runs runs (default
+      3; run 1 on this page, each further run on a fresh page with the same 1k timeline), misses listed. Every DOM
+      change is attributed to its panel and frame (MutationObserver): an edit's frame may touch only the timeline and
+      the rail (the call's row); the Inspector, viewer HUD and top bar catch up on the next frame with no edit.
   (e) DOM while panning: whole-page element count and timeline .clip / .crun elements sampled on every vsync of the
       full-timeline pan and of the fast scrub (min / p50 / max, every sample with --dom-log); the page must stay at
       <= 400 elements on every sample and the timeline bounded by the visible window, never one element per clip.
   Also: the vertical wheel brings track V6 (below the panel) into view.
-Exit 0 when (e) is bounded, V6 is reachable, no page errors, edit frame work p95 <= 16.7 ms and the heap does not run
+Also: zoomed in, back-to-back clips keep a >= 1 px seam and no clip name runs past its clip.
+Exit 0 when (d) holds in every run, (e) is bounded, seams hold, V6 is reachable, no page errors and the heap does not run
 away; target misses for (a)/(b)/(d) are printed as MISS beside the number.
 
     python3 crates/kimo-gui/tests/timeline_perf_test.py [--clips 1000] [--edits 240] [--shot out.png]
@@ -25,10 +29,35 @@ away; target misses for (a)/(b)/(d) are printed as MISS beside the number.
 import argparse, asyncio, functools, http.server, json, random, socketserver, sys, threading
 from pathlib import Path
 CRATE = Path(__file__).resolve().parents[1]
-ap = argparse.ArgumentParser(); ap.add_argument('--clips', type=int, default=1000); ap.add_argument('--edits', type=int, default=240); ap.add_argument('--shot'); ap.add_argument('--dom-log'); A = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument('--clips', type=int, default=1000); ap.add_argument('--edits', type=int, default=240); ap.add_argument('--shot'); ap.add_argument('--dom-log'); ap.add_argument('--runs', type=int, default=3); A = ap.parse_args()
 DOM_MAX = 400
+
+# every DOM mutation while edits stream, attributed to the panel it lands in (a text-node change in place is
+# 'name:text'; header elements by id) and to the frame it happened in: the edit's own frame (the first app frame
+# after the edit was handed over, which drains it) or a later one (the catch-up frame that brings the Inspector,
+# the viewer HUD and the top bar up to date once no edit is pending). EDIT_SCOPE is all an edit frame may touch:
+# the timeline and the rail (the call's row).
+MUT_ON = """() => { window.__mut = { edit: {}, after: {} }; window.__editFr = -1; window.__mh = rs => { for (const r of rs) {
+  const n = r.target.nodeType === 1 ? r.target : r.target.parentElement, p = n && n.closest('[data-panel]');
+  const k = p ? p.dataset.panel + (r.type === 'characterData' ? ':text' : '') : (n && (n.closest('[id]') || {}).id) || '?';
+  const b = window.__mut[window.__fr === window.__editFr ? 'edit' : 'after']; b[k] = (b[k] || 0) + 1; } }; window.__mo = new MutationObserver(window.__mh);
+  window.__mo.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true }); }"""
+MUT_OFF = "() => { window.__mh(window.__mo.takeRecords()); window.__mo.disconnect(); return window.__mut; }"
+EDIT_SCOPE = {'tl', 'agent'}
+TICKS = {'clock'}   # the header's session clock ticks once a second on its own timer, edits or not
+
+# zoomed in, back-to-back clips: every touching pair keeps a 1 px seam (>= .95 px in layout units, which are 1/64 px), and no clip name runs past its own clip
+# (a name that does not fit ends in an ellipsis inside the clip)
+SEAMS = """() => { const out = { pairs: 0, overlap: 0, minGap: null, past: 0, ellipsis: 0, labels: 0 };
+  for (const t of document.querySelectorAll('[data-panel=tl] .trk')) {
+    const cs = [...t.querySelectorAll('.clip:not(.crun)')].map(c => [c, c.getBoundingClientRect()]).sort((a, b) => a[1].left - b[1].left);
+    for (let i = 0; i + 1 < cs.length; i++) { const g = cs[i + 1][1].left - cs[i][1].right; if (g < -.5) out.overlap++; else if (g < 3) { out.pairs++; out.minGap = out.minGap == null ? g : Math.min(out.minGap, g); } }
+    for (const [c, r] of cs) { const l = c.querySelector('.cl'); if (!l) continue; out.labels++; const q = l.getBoundingClientRect();
+      if (q.right > r.right + .5 || q.left < r.left - .5) out.past++;
+      if (l.scrollWidth > l.clientWidth && getComputedStyle(l).textOverflow === 'ellipsis') out.ellipsis++; } }
+  return out; }"""
 PROBE = """(() => { const rAF = window.requestAnimationFrame.bind(window); window.__app = [];
-  window.requestAnimationFrame = cb => rAF(t => { const a = performance.now(); cb(t); const b = performance.now(); window.__app.push([t, b - a, b]); });
+  window.__fr = 0; window.requestAnimationFrame = cb => rAF(t => { window.__fr++; const a = performance.now(); cb(t); const b = performance.now(); window.__app.push([t, b - a, b]); });
   window.__obs = null; window.__watch = () => { const S = window.__obs = []; window.__stop = false; const loop = t => {
     const tl = document.querySelector('[data-panel=tl]');
     S.push([t, document.getElementsByTagName('*').length, tl ? tl.querySelectorAll('.clip:not(.crun)').length : -1, tl ? tl.querySelectorAll('.crun').length : -1]);
@@ -87,24 +116,49 @@ async def main():
         print(f"(a) mount 1k clips: events in -> DOM committed {mount_dom:.1f} ms [{mark(mount_dom < 100)}] (hand-off {m['t1'] - m['t0']:.1f} ms, app frame {mount_work:.1f} ms), -> next frame painted {mount_paint:.1f} ms; "
               f"DOM at mount {s0['dom']} elements ({s0['clips']} .clip + {s0['runs']} .crun), after the add flash {s1['dom']} ({s1['clips']} + {s1['runs']})")
 
-        # (d) GUI processing per split_clip / move_clip, one edit per frame on the 1k timeline
-        per = {'split_clip': [], 'move_clip': []}; ints = []
-        for k in range(A.edits):
-            cid, tid, s, e = clips[rnd.randrange(len(clips))]; n = 'split_clip' if k % 2 == 0 else 'move_clip'
-            if n == 'split_clip':
-                at = round((s + e) / 2, 3); ev = {'tool_name': n, 'call_id': f'e{k}', 'phase': 'complete', 'target': {'track_id': tid, 'clip_id': cid}, 'payload': {'dur_ms': 1.0, 'result': {'ok': True}, 'at': at, 'clip': f'{cid}_s{k}', 'changed': {'clips_added': [{'clip_id': f'{cid}_s{k}', 'track_id': tid}]}}}
-                st = {'tool_name': n, 'call_id': f'e{k}', 'phase': 'start', 'target': {'track_id': tid, 'clip_id': cid}, 'payload': {'args': {'clip_id': cid, 'at': at}}}
-            else:
-                to = round(s + .25, 3); ev = {'tool_name': n, 'call_id': f'e{k}', 'phase': 'complete', 'target': {'track_id': tid, 'clip_id': cid}, 'payload': {'dur_ms': 1.0, 'result': {'ok': True}, 'param': 'start', 'from': s, 'to': to, 's': to, 'e': to + (e - s)}}
-                st = {'tool_name': n, 'call_id': f'e{k}', 'phase': 'start', 'target': {'track_id': tid, 'clip_id': cid}, 'payload': {'args': {'clip_id': cid, 'start': to}}}
-            await pg.evaluate('() => { window.__app = []; }')
-            await pg.evaluate('es => es.forEach(e => __kimo.apply(e))', [st, ev]); await pg.wait_for_timeout(34)
-            app = await pg.evaluate('window.__app')
-            if app: per[n].append(app[0][1]); ints += [y[0] - x[0] for x, y in zip(app, app[1:])]
+        # (d) GUI processing per split_clip / move_clip, one edit per frame on the 1k timeline, over --runs runs (the
+        # first on this page, the rest each on a fresh page that loads the same 1k timeline first). Every DOM change
+        # an edit frame makes is recorded by a MutationObserver and attributed to the panel (or header element) it
+        # landed in: the edit's repaint must stay in the timeline; outside it only the call's own words may change
+        # (its rail row, the Inspector's call card, the viewer HUD caption as text, the header's call count).
+        async def edit_run(pg, rnd):
+            per = {'split_clip': [], 'move_clip': []}; catch = []
+            await pg.evaluate(MUT_ON); await pg.evaluate('() => __watch()')
+            for k in range(A.edits):
+                cid, tid, s, e = clips[rnd.randrange(len(clips))]; n = 'split_clip' if k % 2 == 0 else 'move_clip'
+                if n == 'split_clip':
+                    at = round((s + e) / 2, 3); ev = {'tool_name': n, 'call_id': f'e{k}', 'phase': 'complete', 'target': {'track_id': tid, 'clip_id': cid}, 'payload': {'dur_ms': 1.0, 'result': {'ok': True}, 'at': at, 'clip': f'{cid}_s{k}', 'changed': {'clips_added': [{'clip_id': f'{cid}_s{k}', 'track_id': tid}]}}}
+                    st = {'tool_name': n, 'call_id': f'e{k}', 'phase': 'start', 'target': {'track_id': tid, 'clip_id': cid}, 'payload': {'args': {'clip_id': cid, 'at': at}}}
+                else:
+                    to = round(s + .25, 3); ev = {'tool_name': n, 'call_id': f'e{k}', 'phase': 'complete', 'target': {'track_id': tid, 'clip_id': cid}, 'payload': {'dur_ms': 1.0, 'result': {'ok': True}, 'param': 'start', 'from': s, 'to': to, 's': to, 'e': to + (e - s)}}
+                    st = {'tool_name': n, 'call_id': f'e{k}', 'phase': 'start', 'target': {'track_id': tid, 'clip_id': cid}, 'payload': {'args': {'clip_id': cid, 'start': to}}}
+                await pg.evaluate('() => { window.__app = []; }')
+                await pg.evaluate('es => { window.__editFr = window.__fr + 1; es.forEach(e => __kimo.apply(e)); }', [st, ev]); await pg.wait_for_timeout(34)
+                app = await pg.evaluate('window.__app')
+                if app: per[n].append(app[0][1]); catch.extend(x[1] for x in app[1:])
+            await pg.evaluate('() => { window.__stop = true; }'); await pg.wait_for_timeout(50)
+            doms = [o[1] for o in await pg.evaluate('window.__obs')]
+            return per, await pg.evaluate(MUT_OFF), catch, doms
+        runs = [await edit_run(pg, rnd)]
         await pg.wait_for_timeout(1300); h2 = await heap(); s2 = await pg.evaluate(SNAP)
-        allw = per['split_clip'] + per['move_clip']
-        for n, xs in per.items(): print(f"(d) GUI processing per {n} under load ({len(xs)} events, reducer + render + DOM, not engine latency): {tri(xs)} [{mark(pct(xs, 95) < 10)}]")
-
+        for r in range(1, A.runs):
+            q = await b.new_page(viewport={'width': 1376, 'height': 768}); q.on('pageerror', lambda e: errs.append(str(e)))
+            await q.add_init_script(PROBE)
+            await q.goto(f'http://127.0.0.1:{srv.server_address[1]}/ui/index.html?feed=off'); await q.wait_for_timeout(600)
+            await q.evaluate('() => __kimo.apply({type: "mode", mode: "edit"})'); await q.wait_for_timeout(300)
+            await q.evaluate('es => es.forEach(e => __kimo.apply(e))', evs); await q.wait_for_timeout(1500)
+            runs.append(await edit_run(q, random.Random(9 + r))); await q.close()
+        for r, (per, mut, catch, doms) in enumerate(runs):
+            for n, xs in per.items():
+                miss = [round(x, 1) for x in xs if x >= 10]
+                good = pct(xs, 95) < 10 and max(xs or [99]) < 10; ok &= good
+                print(f"(d) run {r + 1}/{len(runs)}: GUI processing per {n} on the 1k timeline ({len(xs)} events, reducer + render + DOM write, not engine latency): {tri(xs)} "
+                      f"[{'ok' if good else 'MISS'} p95 and max < 10]; frames >= 10 ms: {len(miss)}{' ' + str(miss) if miss else ''}")
+            stray = {k: v for k, v in mut['edit'].items() if k not in EDIT_SCOPE | TICKS}
+            print(f"    DOM changes in the {sum(len(x) for x in per.values())} edit frames, by region: {mut['edit']} [{'ok: timeline + rail only' if not stray else 'FAIL outside the timeline + rail: ' + str(stray)}]")
+            print(f"    catch-up frames (Inspector / viewer HUD / top bar, no edit in them): {len(catch)}, work {tri(catch)}; their DOM changes: {mut['after']}")
+            print(f"    page DOM on every vsync during the edits ({len(doms)} samples): min {min(doms)} / max {max(doms)} elements [{mark(max(doms) <= DOM_MAX)} <= {DOM_MAX}]")
+            ok &= not stray and mut['edit'].get('tl', 0) > 0 and max(doms) <= DOM_MAX
         # (b) + (e) pan: zoom in with ctrl+wheel, then continuous wheel panning across the whole timeline and back
         bx = s2['box']; await pg.mouse.move(bx[0] + bx[2] * .5, bx[1] + bx[3] * .6)
         await pg.keyboard.down('Control')
@@ -113,6 +167,10 @@ async def main():
         RUL = '() => [...document.querySelectorAll("[data-panel=tl] .ruler span")].map(e => e.textContent)'
         await pg.mouse.wheel(-100000, 0); await pg.wait_for_timeout(200)    # to the start of the timeline
         z = await pg.evaluate(RUL); ends_seen = []
+        sm = await pg.evaluate(SEAMS); seams_ok = sm['pairs'] > 0 and sm['minGap'] >= .95 and sm['past'] == 0
+        print(f"clip seams zoomed to {z[0]}..{z[-1]}: {sm['pairs']} back-to-back pairs on screen, smallest gap {sm['minGap'] if sm['minGap'] is None else round(sm['minGap'], 2)} px ({sm['overlap']} pairs overlap after the moves, not counted); "
+              f"{sm['labels']} clip names, {sm['past']} running past their clip, {sm['ellipsis']} cut with an ellipsis [{'ok' if seams_ok else 'FAIL'}]")
+        ok &= seams_ok
         await pg.evaluate('() => { window.__app = []; __watch(); }')
         STEP = 130
         for direction in (1, -1):                                          # start -> end of the timeline -> start
@@ -156,7 +214,7 @@ async def main():
         if A.shot: await pg.screenshot(path=A.shot)
         print('page errors', errs[:2]); await b.close()
     srv.shutdown()
-    ok &= pct(allw, 95) <= 16.7 and not errs
+    ok &= not errs
     print('RESULT:', f'page DOM <= {DOM_MAX} on every pan/scrub sample, V6 reachable, heap flat, edits within frame budget' if ok else 'FAIL'); return 0 if ok else 1
 if __name__ == '__main__':
     sys.exit(asyncio.run(main()))

@@ -160,7 +160,7 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 .trk .lab{position:absolute;left:var(--lab-x,10px);top:0;bottom:0;display:flex;align-items:center;font-size:var(--lab-fs,16px);color:var(--lab-c,var(--dim));font-family:var(--label-font)}
 .trk .labchip,.labchip{position:absolute;top:50%;transform:translateY(-50%);height:var(--chip-h,24px);line-height:var(--chip-h,24px);padding:0 var(--chip-px,9px);border-radius:var(--chip-r,4px);background:var(--chip-bg,var(--raise));font-family:var(--chip-font,var(--mono));font-size:var(--chip-fs,11.5px);color:var(--chip-c,var(--text));overflow:hidden;white-space:nowrap}
 .clip{position:absolute;top:0;bottom:0;border-radius:var(--clip-r,7px);background:var(--clip);overflow:hidden;display:flex;align-items:center;font-size:var(--clip-fs,16px);color:var(--cream);white-space:nowrap}
-.clip .cl{position:relative;padding:0 10px;z-index:1}
+.clip .cl{position:relative;padding:0 10px;z-index:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .clip .ct{flex:none;position:relative;margin-left:4px;width:var(--ct-w,44px);height:calc(100% - 8px);border-radius:4px;overflow:hidden;background:#24221f}
 .clip .ct img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:1}
 .clip .ct + .cl{padding-left:8px}
@@ -307,5 +307,8 @@ body.calls-sans{--call-font:var(--sans)}
 .kv .row + .sec{margin-top:var(--sec-mt,0)}
 
 .panel.vis{overflow:visible}
+/* each panel is its own layout + paint island: a write inside one (the timeline on an edit) never relayouts or
+   repaints its neighbours. A .vis panel draws past its edge, so it stays uncontained */
+.panel:not(.vis){contain:layout paint}
 .kv .row.tight{height:var(--tight-h,25.5px);border-bottom:none}
 .kv .gapv{height:var(--gapv,0)}
