@@ -251,6 +251,15 @@ frame is done) beside `pct` and `elapsed_ms`. To watch in a plain browser instea
 `python3 crates/kimo-mcp/tools/spectator_sse_relay.py` and open the UI with `?feed=sse`. Event fields:
 `crates/kimo-mcp/src/spectator.rs`.
 
+Call events are strictly one per call: every `tools/call` gets exactly one `start` and exactly one `complete` or
+`error`, in call order, with its `call_id` and the request's JSON-RPC id as `rpc_id`, and one `project_changed` per
+call that changed the project. They travel on their own lossless lane: never coalesced, never dropped while an app is
+connected, and written as whole lines only. An app that is slow to read (a busy window) is waited for, not cut off.
+Memory is bounded at 64 MiB of queued events; past that, the next call waits for the app to catch up (backpressure)
+rather than losing anything, and nothing ever waits while no app is listening. Canvas frames have a separate
+latest-only lane (the newest two), so they can never crowd out, drop or delay call events. Only the headless canvas
+frames below coalesce.
+
 ## How an AI sees the tools
 
 Call a group with `{"action": "<tool name>", "args": {...}}`, for example `{"name": "vfx3d", "action": "add_scene3d", "args": {...}}`. Calling a tool by its own name also works.

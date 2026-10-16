@@ -63,7 +63,7 @@ fn main() {
             "tools/call" => {
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
-                spectator::call_start(name, &args, &ss);
+                spectator::call_start(name, &args, id.as_ref(), &ss);
                 let text = |r: Result<Value, String>| match r { Ok(v) => json!({"content":[{"type":"text","text":serde_json::to_string(&v).unwrap()}],"isError":false}), Err(e) => json!({"content":[{"type":"text","text":e}],"isError":true}) };
                 let r = match name {
                     "kimo_search" => { let qs = args.get("query").and_then(|v| v.as_str()).unwrap_or(""); let mut r = toolgroups::search(qs, args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize);
