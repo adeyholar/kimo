@@ -21,6 +21,20 @@
 //!   * it never starts while the memory budget is more than half used, so a preview can not push a tool call
 //!     over the budget, and a panic inside the renderer only drops that frame.
 //! `KIMO_SPECTATOR_FRAMES=0` turns the live frames off (the tool events stay).
+//!
+//! Two modes. Headless (the default) is everything above: frames coalesce by call cadence and the dispatch thread
+//! never waits. Spectator demo mode (opt-in: `KIMO_SPECTATOR_DEMO=on|<ms>` or `kimo-mcp --spectator-demo` /
+//! `--demo-pace-ms <ms>`; pace 50..=100 ms, default `DEMO_PACE_DEFAULT_MS`) is for watching and recording: every
+//! tools/call gets its own frame, tagged with that call (`demo: true`, `seq`, `call_id`, `rpc_id`, `tool`), rendered from
+//! the project exactly as that call left it. After the call's response is written the dispatch thread holds the next
+//! request until that frame has reached the spectator and the pace has passed since (`demo_wait`). Demo frames ride the
+//! lossless state lane (spectator.rs), not the latest-only frame lane, so they are never coalesced or dropped; the wait
+//! for delivery is what keeps each one on screen for at least the pace (a spectator stalled past `DEMO_WAIT` releases the
+//! next call, and the frame is still delivered, in order, once it reads again). A call that left the picture as it
+//! was re-sends the previous frame tagged with the new call (`same: true`, no render). A frame that cannot be made
+//! (HDR output, memory over half the budget, a render error) is reported as `{"type":"frame_skipped","demo":true,...}`
+//! with its reason, so the count still matches. Demo mode does nothing (and paces nothing) while no spectator is
+//! connected, and is off with `KIMO_SPECTATOR_FRAMES=0`. State telemetry is the same in both modes (spectator.rs).
 use kimo_core::commands::Session;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,6 +59,51 @@ pub fn quiet_for(interval: Option<Duration>) -> Duration {
     }
 }
 
+/// Spectator demo mode: default pace between two calls' frames, and the range a pace is clamped to.
+pub const DEMO_PACE_DEFAULT_MS: u64 = 75;
+pub const DEMO_PACE_MIN_MS: u64 = 50;
+pub const DEMO_PACE_MAX_MS: u64 = 100;
+/// Longest the dispatch thread waits for one call's demo frame to reach the spectator before it moves on.
+pub const DEMO_WAIT: Duration = Duration::from_secs(10);
+
+/// Parse a demo-mode setting (`KIMO_SPECTATOR_DEMO`, or the `--demo-pace-ms` value): off (unset, empty, `0`, `off`,
+/// `false`), on at the default pace (`1`, `on`, `true`, `demo`), or a pace in ms, clamped to 50..=100. The second value
+/// is a note for stderr when the setting was clamped or not understood (then demo mode stays off).
+pub fn parse_demo(v: &str) -> (Option<u64>, Option<String>) {
+    let s = v.trim();
+    if s.is_empty() || ["0", "off", "false", "no"].iter().any(|k| s.eq_ignore_ascii_case(k)) { return (None, None); }
+    if ["1", "on", "true", "yes", "demo"].iter().any(|k| s.eq_ignore_ascii_case(k)) { return (Some(DEMO_PACE_DEFAULT_MS), None); }
+    match s.trim_end_matches("ms").trim().parse::<u64>() {
+        Ok(ms) => {
+            let c = ms.clamp(DEMO_PACE_MIN_MS, DEMO_PACE_MAX_MS);
+            (Some(c), (c != ms).then(|| format!("demo pace {ms} ms is outside {DEMO_PACE_MIN_MS}..={DEMO_PACE_MAX_MS}; using {c} ms")))
+        }
+        Err(_) => (None, Some(format!("demo setting {s:?} not understood (use on, off or a pace in ms); demo mode off"))),
+    }
+}
+
+static DEMO: OnceLock<Option<Duration>> = OnceLock::new();
+
+/// Fix the demo mode for this process: the command-line value when one was given, else `KIMO_SPECTATOR_DEMO`.
+/// Called once at startup (main.rs); without it the first use reads the environment.
+pub fn configure_demo(cli: Option<&str>) {
+    let _ = DEMO.set(demo_from(cli, true));
+}
+
+fn demo_from(cli: Option<&str>, speak: bool) -> Option<Duration> {
+    let raw = match cli { Some(v) => v.to_string(), None => std::env::var("KIMO_SPECTATOR_DEMO").unwrap_or_default() };
+    let (ms, note) = parse_demo(&raw);
+    if speak { if let Some(n) = note { eprintln!("kimo: {n}"); } }
+    if ms.is_some() && !wanted() {
+        if speak { eprintln!("kimo: spectator demo mode needs live frames; KIMO_SPECTATOR_FRAMES=0 turns it off"); }
+        return None;
+    }
+    ms.map(Duration::from_millis)
+}
+
+/// The demo pace, when spectator demo mode is on.
+pub fn demo() -> Option<Duration> { *DEMO.get_or_init(|| demo_from(None, false)) }
+
 /// Where the playhead should go after a call.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Hint { None, At(f64), Clip(f64, f64) }
@@ -53,9 +112,18 @@ pub enum Hint { None, At(f64), Clip(f64, f64) }
 struct Pending { gen: u64, call_id: String, rev: u64, last: Instant, quiet: Duration }
 /// `since`: when the oldest change not yet on screen was requested (drives `MAX_WAIT` and the overdue rule).
 /// `prev_end`: when the previous wanted mutating call finished (drives the cadence in `quiet_for`).
-struct State { gen: u64, pending: Option<Pending>, since: Option<Instant>, playhead: f64, duration: f64, last_call: String, last_rev: u64, prev_end: Option<Instant> }
+/// `demo`: the frame of the call that just finished, in spectator demo mode (rendered before anything pending).
+struct State { gen: u64, pending: Option<Pending>, since: Option<Instant>, playhead: f64, duration: f64, last_call: String, last_rev: u64, prev_end: Option<Instant>, demo: Option<DemoJob> }
 
-static ST: Mutex<State> = Mutex::new(State { gen: 0, pending: None, since: None, playhead: 0.0, duration: 0.0, last_call: String::new(), last_rev: 0, prev_end: None });
+static ST: Mutex<State> = Mutex::new(State { gen: 0, pending: None, since: None, playhead: 0.0, duration: 0.0, last_call: String::new(), last_rev: 0, prev_end: None, demo: None });
+
+/// One call's demo frame: `seq` counts the demo frames of this process (1, 2, ...), one per tools/call.
+struct DemoJob { seq: u64, call_id: String, rpc_id: Value, tool: String, gen: u64, rev: u64 }
+/// Demo delivery bookkeeping, shared by the dispatch thread (`demo_wait`) and the writer (`demo_delivered`).
+/// `armed`: the call that just finished queued a frame the next request has to wait for.
+struct DemoAck { queued: u64, delivered: u64, at: Option<Instant>, armed: bool }
+static DACK: Mutex<DemoAck> = Mutex::new(DemoAck { queued: 0, delivered: 0, at: None, armed: false });
+static DCV: Condvar = Condvar::new();
 static CV: Condvar = Condvar::new();
 static BUSY: AtomicBool = AtomicBool::new(false);
 static SS: OnceLock<Arc<Mutex<Session>>> = OnceLock::new();
@@ -98,7 +166,7 @@ pub fn call_started() {
 /// Cost on the dispatch thread: one uncontended lock and a notify. Never renders, never blocks on the renderer.
 pub fn call_finished(ss: &Arc<Mutex<Session>>, call_id: &str, rev: u64, mutated: bool, hint: Hint, duration: f64, connected: bool) {
     BUSY.store(false, Ordering::SeqCst);
-    let want = mutated && connected && wanted();
+    let want = mutated && connected && wanted() && demo().is_none(); // demo mode makes its own frame per call
     let mut g = ST.lock().unwrap_or_else(|e| e.into_inner());
     g.duration = duration;
     g.playhead = place(g.playhead, hint, duration);
@@ -111,7 +179,7 @@ pub fn call_finished(ss: &Arc<Mutex<Session>>, call_id: &str, rev: u64, mutated:
         g.pending = Some(Pending { gen: g.gen, call_id: call_id.to_string(), rev, last: now, quiet });
     }
     drop(g);
-    if mutated { SS.get_or_init(|| ss.clone()); }
+    if mutated || demo().is_some() { SS.get_or_init(|| ss.clone()); }
     if want { ensure_thread(); }
     if THREAD.get().is_some() { CV.notify_one(); } // the renderer waits for running calls to end
 }
@@ -123,10 +191,53 @@ pub fn shown_by_agent() {
     if g.pending.as_ref().map_or(false, |q| q.gen == g.gen) { g.pending = None; g.since = None; }
 }
 
+/// Spectator demo mode: the call `call_id` finished (telemetry on). Queues its own frame for the renderer; the
+/// dispatch thread then waits for it in `demo_wait`. Off, or nobody listening: nothing.
+pub fn demo_frame(call_id: &str, rpc_id: &Value, tool: &str) {
+    if demo().is_none() || SS.get().is_none() || !crate::spectator::connected_settled(Duration::from_secs(1)) { return; }
+    let seq = { let mut a = DACK.lock().unwrap_or_else(|e| e.into_inner()); a.queued += 1; a.armed = true; a.queued };
+    {
+        let mut g = ST.lock().unwrap_or_else(|e| e.into_inner());
+        let (gen, rev) = (g.gen, g.last_rev);
+        g.demo = Some(DemoJob { seq, call_id: call_id.to_string(), rpc_id: rpc_id.clone(), tool: tool.to_string(), gen, rev });
+    }
+    ensure_thread();
+    CV.notify_one();
+}
+
+/// Spectator demo mode, on the dispatch thread after a call's response went out: wait until that call's frame has
+/// reached the spectator (at most `DEMO_WAIT`), then until the pace has passed since. Returns at once when the call
+/// queued no frame (demo off, nobody listening).
+pub fn demo_wait() {
+    let Some(pace) = demo() else { return };
+    let mut a = DACK.lock().unwrap_or_else(|e| e.into_inner());
+    if !a.armed { return; }
+    a.armed = false;
+    let (target, t0) = (a.queued, Instant::now());
+    while a.delivered < target {
+        let left = DEMO_WAIT.saturating_sub(t0.elapsed());
+        if left.is_zero() { break; }
+        a = DCV.wait_timeout(a, left).unwrap_or_else(|e| e.into_inner()).0;
+    }
+    let at = if a.delivered >= target { a.at } else { None };
+    drop(a);
+    if let Some(at) = at { let left = pace.saturating_sub(at.elapsed()); if !left.is_zero() { std::thread::sleep(left); } }
+}
+
+/// The writer handled demo frame `seq` (sent it, or dropped it with nobody listening).
+pub fn demo_delivered(seq: u64) {
+    let mut a = DACK.lock().unwrap_or_else(|e| e.into_inner());
+    if seq > a.delivered { a.delivered = seq; a.at = Some(Instant::now()); }
+    drop(a);
+    DCV.notify_all();
+}
+
 /// The sink (re)connected (the spectator window opened mid-session): send the current state once, if a call has
-/// changed the project. Called from the writer thread.
-pub fn reconnected() {
-    if !wanted() { return; }
+/// changed the project. Called from the writer thread; `first`: the writer's first connection of the process. In
+/// demo mode that first one is the session starting, whose calls bring their own frames (a spectator opened later,
+/// or reopened, still gets the current frame at once).
+pub fn reconnected(first: bool) {
+    if !wanted() || (first && demo().is_some()) { return; }
     let Some(_) = SS.get() else { return };
     let mut g = ST.lock().unwrap_or_else(|e| e.into_inner());
     if g.gen == 0 || g.pending.is_some() { return; }
@@ -153,10 +264,12 @@ fn run() {
     // half the cores at most: a frame that does render alongside a call leaves the call room to run
     kimo_core::par::set_thread_cap((std::thread::available_parallelism().map_or(2, |n| n.get()) / 2).max(1));
     let mut cache = kimo_core::render::Cache::new();
+    let mut last_demo: Option<Value> = None;
     loop {
         let (job, t, overdue) = {
             let mut g = ST.lock().unwrap_or_else(|e| e.into_inner());
             loop {
+                if g.demo.is_some() { break; } // demo mode: this call's frame, now
                 let now = Instant::now();
                 let wait = match &g.pending {
                     None => None,
@@ -175,6 +288,12 @@ fn run() {
                     None => CV.wait(g).unwrap_or_else(|e| e.into_inner()),
                     Some(d) => CV.wait_timeout(g, d).unwrap_or_else(|e| e.into_inner()).0,
                 };
+            }
+            if let Some(d) = g.demo.take() {
+                let t = g.playhead;
+                drop(g);
+                demo_render(ss, d, t, &mut cache, &mut last_demo);
+                continue;
             }
             let job = g.pending.take().unwrap();
             // cancellable unless overdue: calls arriving every ~100 ms must not starve the viewer forever
@@ -210,6 +329,45 @@ fn run() {
         crate::spectator::emit_frame(&ev);
         done();
     }
+}
+
+/// Spectator demo mode: render one call's frame (never cancelled: no call runs while the dispatch thread waits for it)
+/// and queue it for the writer, which reports its delivery. Same project generation and playhead as the previous demo
+/// frame: that frame again, tagged with this call (`same: true`). A frame that cannot be made: `frame_skipped`.
+fn demo_render(ss: &Arc<Mutex<Session>>, d: DemoJob, t: f64, cache: &mut kimo_core::render::Cache, last: &mut Option<Value>) {
+    let pace = demo().map_or(0, |p| p.as_millis() as u64);
+    let tag = |ev: &mut Value, d: &DemoJob| {
+        for (k, v) in [("demo", json!(true)), ("seq", json!(d.seq)), ("call_id", json!(d.call_id)), ("rpc_id", d.rpc_id.clone()), ("tool", json!(d.tool)),
+            ("rev", json!(d.rev)), ("gen", json!(d.gen)), ("pace_ms", json!(pace)), ("ts_ms", json!(crate::spectator::now_ms()))] { ev[k] = v; }
+    };
+    let send = |ev: &Value, seq: u64| { if !crate::spectator::emit_demo_frame(ev, seq) { demo_delivered(seq); } };
+    let skip = |d: &DemoJob, reason: &str| { let mut ev = json!({"type": "frame_skipped", "reason": reason}); tag(&mut ev, d); send(&ev, d.seq); };
+    if let Some(prev) = last.as_ref().filter(|p| p["gen"] == json!(d.gen) && p["time"] == json!((t * 1000.0).round() / 1000.0)) {
+        let mut ev = prev.clone();
+        tag(&mut ev, &d);
+        ev["same"] = json!(true); ev["render_ms"] = json!(0.0);
+        send(&ev, d.seq);
+        return;
+    }
+    if !crate::spectator::connected() { demo_delivered(d.seq); return; }
+    if over_half_budget() { return skip(&d, "memory budget over half used"); }
+    let Some(proj) = copy_project(ss) else { return skip(&d, "session busy") };
+    let t0 = Instant::now();
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frame(&proj, t, cache)));
+    let ms = |d: Duration| (d.as_secs_f64() * 10000.0).round() / 10.0;
+    let (key, bytes, w, h, tm) = match out {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return skip(&d, &e),
+        Err(_) => { *cache = kimo_core::render::Cache::new(); return skip(&d, "render failed") }
+    };
+    let mut ev = json!({"type": "frame_rendered", "auto": true,
+        "time": (t * 1000.0).round() / 1000.0, "tc": format!("{t:.2}s"), "frame": (t * proj.fps).round() as i64,
+        "w": w, "h": h, "src_w": proj.width, "src_h": proj.height, "render_ms": ms(t0.elapsed()),
+        "stages_ms": {"prepare": tm.prepare, "render": tm.render, "output": tm.output, "scale": tm.scale, "encode": tm.encode}});
+    ev[key] = Value::String(crate::inline::b64(&bytes));
+    tag(&mut ev, &d);
+    send(&ev, d.seq);
+    *last = Some(ev);
 }
 
 /// A frame went out (or could not be made): the wait clock restarts for whatever was requested meanwhile.
@@ -304,6 +462,19 @@ mod tests {
         assert!(quiet_for(Some(ms(55))) > ms(55), "the next call of the same rhythm arrives before the frame starts");
         assert_eq!(quiet_for(Some(ms(199))), ms(398));
         for i in 0..400 { assert!(quiet_for(Some(ms(i))) <= MAX_WAIT && quiet_for(Some(ms(i))) >= QUIET); }
+    }
+    #[test]
+    fn demo_setting_parses_and_clamps_to_the_pace_range() {
+        for off in ["", " ", "0", "off", "OFF", "false", "no"] { assert_eq!(parse_demo(off), (None, None), "{off:?} is headless"); }
+        for on in ["1", "on", "true", "yes", "demo"] { assert_eq!(parse_demo(on).0, Some(DEMO_PACE_DEFAULT_MS), "{on:?}"); }
+        assert_eq!(parse_demo("60"), (Some(60), None));
+        assert_eq!(parse_demo("90ms"), (Some(90), None));
+        assert_eq!(parse_demo("50").0, Some(50));
+        assert_eq!(parse_demo("100").0, Some(100));
+        let (v, note) = parse_demo("20"); assert_eq!(v, Some(DEMO_PACE_MIN_MS)); assert!(note.unwrap().contains("using 50 ms"));
+        let (v, note) = parse_demo("500"); assert_eq!(v, Some(DEMO_PACE_MAX_MS)); assert!(note.is_some());
+        let (v, note) = parse_demo("fast"); assert_eq!(v, None); assert!(note.unwrap().contains("demo mode off"));
+        assert!((DEMO_PACE_MIN_MS..=DEMO_PACE_MAX_MS).contains(&DEMO_PACE_DEFAULT_MS));
     }
     #[test]
     fn downscale_keeps_aspect_and_averages() {

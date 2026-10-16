@@ -3,6 +3,9 @@
 //! Every tool call runs on a worker thread under the sandbox layer (kimo_core::guard): argument sanitizer, project limits with
 //! rollback, memory budget, panic catching, and a wall-clock time limit with cooperative cancel (hard exit as the last resort).
 //! Every tools/call is also reported to the spectator GUI when KIMO_SPECTATOR is set (spectator.rs): out of band, never on stdout.
+//! Command line: `--spectator-demo` (spectator demo mode at the default pace) or `--demo-pace-ms <50..=100>` turn on
+//! spectator demo mode, which gives every call its own preview frame and paces the calls (preview.rs); they override
+//! `KIMO_SPECTATOR_DEMO`. Default: headless (off).
 use kimo_core::commands::{dispatch, Session};
 mod inline;
 mod png;
@@ -37,8 +40,22 @@ fn run_guarded(ss: &Arc<Mutex<Session>>, name: &str, args: &Value, out: &mut imp
     }
 }
 
+/// The demo-mode setting given on the command line, if any: `--demo-pace-ms N`, `--demo-pace-ms=N` or `--spectator-demo`.
+fn demo_arg(args: &[String]) -> Option<String> {
+    let mut out = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--spectator-demo" { out = Some("on".to_string()); }
+        else if a == "--demo-pace-ms" { out = Some(it.next().cloned().unwrap_or_default()); }
+        else if let Some(v) = a.strip_prefix("--demo-pace-ms=") { out = Some(v.to_string()); }
+    }
+    out
+}
+
 fn main() {
     kimo_core::guard::init();
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    preview::configure_demo(demo_arg(&argv).as_deref()); // spectator demo mode: off unless asked for
     spectator::init(); // opt-in telemetry for the spectator GUI (KIMO_SPECTATOR); off = no thread, no work
     std::panic::set_hook(Box::new(|i| { if std::thread::current().name() == Some("kimo-preview") { return; } eprintln!("kimo: {i}"); })); // a cancelled live preview is not news
     let ss = Arc::new(Mutex::new(Session::new()));
@@ -90,6 +107,21 @@ fn main() {
             writeln!(out, "{msg}").ok(); out.flush().ok();
             if notify_changed { writeln!(out, "{}", json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"})).ok(); out.flush().ok(); }
         }
+        if method == "tools/call" { spectator::pace(); } // spectator demo mode only: this call's frame on screen before the next call
     }
     spectator::flush(std::time::Duration::from_millis(500));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::demo_arg;
+    fn v(a: &[&str]) -> Vec<String> { a.iter().map(|s| s.to_string()).collect() }
+    #[test]
+    fn demo_flags() {
+        assert_eq!(demo_arg(&v(&[])), None, "headless by default");
+        assert_eq!(demo_arg(&v(&["--spectator-demo"])).as_deref(), Some("on"));
+        assert_eq!(demo_arg(&v(&["--demo-pace-ms", "60"])).as_deref(), Some("60"));
+        assert_eq!(demo_arg(&v(&["--demo-pace-ms=90"])).as_deref(), Some("90"));
+        assert_eq!(demo_arg(&v(&["--other", "x"])), None);
+    }
 }

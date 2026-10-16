@@ -260,6 +260,24 @@ rather than losing anything, and nothing ever waits while no app is listening. C
 latest-only lane (the newest two), so they can never crowd out, drop or delay call events. Only the headless canvas
 frames below coalesce.
 
+### Two preview modes
+
+- **Headless (default).** As described above: canvas frames coalesce by call cadence, so a burst of 59 calls 50 ms
+  apart shows about 6 frames, and the tool calls never wait for the viewer. Use this for agents and batch runs.
+- **Spectator demo mode (opt in).** For watching or recording a session: every tool call gets its own canvas frame,
+  rendered from the project exactly as that call left it and tagged with it (`"demo":true`, `seq`, `call_id`,
+  `rpc_id`, `tool`). After each call's response the engine holds the next request until that frame has reached the
+  app and a pace (50 to 100 ms, default 75) has passed, so each call's change stays on screen. A call that leaves the
+  picture unchanged (a read, a failed call) re-sends the current frame with `"same":true`. Demo frames travel on the
+  lossless call-event lane, never the latest-only one, so none is dropped. A frame that cannot be
+  made is sent as `{"type":"frame_skipped","demo":true,"reason":...}`, so frames and calls always match one to one.
+  Turn it on with `KIMO_SPECTATOR_DEMO=on` (or a pace in ms, e.g. `KIMO_SPECTATOR_DEMO=60`), or on the command line
+  with `kimo-mcp --spectator-demo` or `kimo-mcp --demo-pace-ms 60` (the command line wins). It needs
+  `KIMO_SPECTATOR` set too, and it does nothing (no pacing, no renderer) while no app is connected. Example:
+  `claude mcp add --transport stdio --env KIMO_SPECTATOR=on --env KIMO_SPECTATOR_DEMO=75 kimo -- /home/you/.local/bin/kimo-mcp`.
+  Pacing was chosen over rendering every frame without waiting because unwaited frames would be rendered after the
+  agent had already moved on, so the canvas would trail the timeline and inspector and show the wrong state for a call.
+
 ## How an AI sees the tools
 
 Call a group with `{"action": "<tool name>", "args": {...}}`, for example `{"name": "vfx3d", "action": "add_scene3d", "args": {...}}`. Calling a tool by its own name also works.

@@ -6,7 +6,7 @@
 //! Guarantees: nothing is ever written to stdout (the MCP channel); tool arguments and results are only read,
 //! never changed. Two lanes feed one background writer, the only place that touches the sink:
 //!   * state telemetry (every tools/call's start and its one complete|error, project_changed, the agent's own
-//!     frame_rendered, export progress) is lossless and ordered: never coalesced, never
+//!     frame_rendered, export progress, and spectator demo frames) is lossless and ordered: never coalesced, never
 //!     dropped while a spectator is connected. Its memory bound is `STATE_BOUND` queued bytes; past it, emitting waits
 //!     for the writer (bounded backpressure: the call that emits holds until the spectator has read enough) instead of
 //!     dropping. Nothing waits while no spectator is connected, so a dead or absent GUI never slows a call;
@@ -57,9 +57,14 @@ const ARR_CAP: usize = 8;
 const DEPTH_CAP: usize = 4;
 const DIFF_CAP: usize = 24;
 
+/// A state-lane line: plain state telemetry, or a spectator demo frame whose delivery the writer reports back by its
+/// sequence number (preview.rs).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Kind { State, Demo(u64) }
+
 /// The two lanes. `seq` orders lines across both (the order they were emitted); `writing`: a line is in the writer's
 /// hands. `state_bytes` counts queued state lines only (`STATE_BOUND`).
-struct Lanes { state: VecDeque<(u64, String)>, state_bytes: usize, frames: VecDeque<(u64, String)>, seq: u64, writing: bool }
+struct Lanes { state: VecDeque<(u64, String, Kind)>, state_bytes: usize, frames: VecDeque<(u64, String)>, seq: u64, writing: bool }
 static LANES: Mutex<Lanes> = Mutex::new(Lanes { state: VecDeque::new(), state_bytes: 0, frames: VecDeque::new(), seq: 0, writing: false });
 /// Signals both ways: new lines for the writer, freed room and an idle writer for whoever waits on it.
 static LANES_CV: Condvar = Condvar::new();
@@ -73,6 +78,8 @@ static REV: AtomicU64 = AtomicU64::new(0);
 /// True while the writer holds a live connection to the sink (a file sink counts once opened). Read by the live
 /// preview (preview.rs), which renders nothing while no spectator is listening.
 static CONNECTED: AtomicBool = AtomicBool::new(false);
+/// The writer has tried to reach the sink at least once (so `CONNECTED` means something).
+static ATTEMPTED: AtomicBool = AtomicBool::new(false);
 static ACTIVE: Mutex<Option<Active>> = Mutex::new(None);
 
 struct Active { call_id: String, rpc_id: Value, tool: String, target: Value, t0: Instant, snap: Snap, last_progress: Option<(Instant, f64)>, last_frame: Option<(Instant, u64)>, frames_t0: Option<(Instant, u64)>, args: Value }
@@ -125,6 +132,15 @@ pub fn enabled() -> bool { SINK.get() == Some(&true) }
 #[inline]
 pub fn connected() -> bool { CONNECTED.load(Ordering::Relaxed) }
 
+/// `connected`, once the writer has made its first attempt to reach the sink (it does at startup, on the session
+/// event): waits for that attempt for at most `within`. Spectator demo mode only, so that the first calls of a
+/// session are not taken for calls with nobody listening.
+pub(crate) fn connected_settled(within: Duration) -> bool {
+    let t0 = Instant::now();
+    while enabled() && !ATTEMPTED.load(Ordering::SeqCst) && t0.elapsed() < within { std::thread::sleep(Duration::from_millis(1)); }
+    connected()
+}
+
 /// A live preview canvas frame from the preview thread: its own latest-only lane (`FRAME_DEPTH`, oldest dropped first),
 /// so frames never displace, drop or hold up state telemetry, and never wait themselves.
 pub(crate) fn emit_frame(v: &Value) {
@@ -137,10 +153,14 @@ pub(crate) fn emit_frame(v: &Value) {
     LANES_CV.notify_all();
 }
 
+/// A spectator demo frame (preview.rs): on the lossless state lane, in order; the writer reports its delivery by `seq`
+/// (`preview::demo_delivered`). False: telemetry is off, and nobody will report it.
+pub(crate) fn emit_demo_frame(v: &Value, seq: u64) -> bool { enqueue(v.to_string(), Kind::Demo(seq)) }
+
 pub(crate) fn now_ms() -> u64 { ts_ms() }
 
 /// State telemetry: queued in order, never coalesced, never dropped, never displaced by frames.
-fn emit(v: &Value) { enqueue(v.to_string()); }
+fn emit(v: &Value) { enqueue(v.to_string(), Kind::State); }
 
 /// The frame lane's rule: append, then drop the oldest past `depth`.
 pub(crate) fn push_latest<T>(q: &mut VecDeque<T>, item: T, depth: usize) {
@@ -165,8 +185,8 @@ pub(crate) fn frame_first(state_head: Option<u64>, frame_head: Option<u64>) -> O
     }
 }
 
-fn enqueue(line: String) {
-    if !enabled() { return; }
+fn enqueue(line: String, kind: Kind) -> bool {
+    if !enabled() { return false; }
     let n = line.len();
     let mut q = LANES.lock().unwrap_or_else(|e| e.into_inner());
     while must_wait(q.state_bytes, n, connected()) {
@@ -175,9 +195,10 @@ fn enqueue(line: String) {
     q.seq += 1;
     let s = q.seq;
     q.state_bytes += n;
-    q.state.push_back((s, line));
+    q.state.push_back((s, line, kind));
     drop(q);
     LANES_CV.notify_all();
+    true
 }
 
 /// Drain before the process exits: returns once both lanes are empty and the writer is idle. Bounded by `within`,
@@ -279,13 +300,13 @@ fn writer(dest: Dest) {
     let mut retry_at = Instant::now();
     loop {
         // the next line in emission order across both lanes; the writer is marked busy until it is handled
-        let mut l = {
+        let (mut l, kind) = {
             let mut q = LANES.lock().unwrap_or_else(|e| e.into_inner());
             q.writing = false;
             loop {
                 match frame_first(q.state.front().map(|x| x.0), q.frames.front().map(|x| x.0)) {
-                    Some(true) => { let (_, l) = q.frames.pop_front().unwrap(); q.writing = true; break l; }
-                    Some(false) => { let (_, l) = q.state.pop_front().unwrap(); q.state_bytes -= l.len(); q.writing = true; break l; }
+                    Some(true) => { let (_, l) = q.frames.pop_front().unwrap(); q.writing = true; break (l, None); }
+                    Some(false) => { let (_, l, k) = q.state.pop_front().unwrap(); q.state_bytes -= l.len(); q.writing = true; break (l, Some(k)); }
                     None => { LANES_CV.notify_all(); q = LANES_CV.wait(q).unwrap_or_else(|e| e.into_inner()); }
                 }
             }
@@ -297,17 +318,20 @@ fn writer(dest: Dest) {
             retry_at = Instant::now();
         }
         if conn.is_none() && Instant::now() >= retry_at {
+            let first = !ATTEMPTED.load(Ordering::SeqCst);
             conn = open(&dest);
             if conn.is_some() {
                 backoff.reset();
                 CONNECTED.store(true, Ordering::Relaxed);
-                crate::preview::reconnected(); // a spectator that just (re)opened gets the current frame
+                crate::preview::reconnected(first); // a spectator that just (re)opened gets the current frame
             } else { retry_at = Instant::now() + backoff.fail(); }
+            if first { ATTEMPTED.store(true, Ordering::SeqCst); }
         }
         if let Some(c) = conn.as_mut() {
             l.push('\n');
             if c.write_line(l.as_bytes()).is_err() { conn = None; CONNECTED.store(false, Ordering::Relaxed); retry_at = Instant::now() + backoff.fail(); }
         }
+        if let Some(Kind::Demo(seq)) = kind { crate::preview::demo_delivered(seq); }
     }
 }
 
@@ -558,6 +582,7 @@ pub fn call_end(result: &Value, ss: &Arc<Mutex<Session>>) {
         let mut ev = event(&a, "error", p); ev["duration_ms"] = json!(dur_ms);
         emit(&ev);
         crate::preview::call_finished(ss, &a.call_id, REV.load(Ordering::Relaxed), false, crate::preview::Hint::None, a.snap.duration, connected());
+        crate::preview::demo_frame(&a.call_id, &a.rpc_id, &a.tool);
         return;
     }
     let after = snapshot(ss, a.target["clip_id"].as_str());
@@ -578,7 +603,12 @@ pub fn call_end(result: &Value, ss: &Arc<Mutex<Session>>) {
     // live preview: any call that changed the project (or is declared mutating) queues one frame at the playhead
     let live = mutated || declared_mutating(&a.tool);
     crate::preview::call_finished(ss, &a.call_id, REV.load(Ordering::Relaxed), live, hint, after.duration, connected());
+    crate::preview::demo_frame(&a.call_id, &a.rpc_id, &a.tool);
 }
+
+/// Spectator demo mode only (preview.rs): after the response to a tools/call went out, hold the next request until this
+/// call's own frame reached the spectator and the pace has passed. Headless (demo off) or nobody listening: returns at once.
+pub fn pace() { if enabled() { crate::preview::demo_wait(); } }
 
 /// Size on disk of a finished export's output file, for the GUI's Renders history ("done · 18.4 MB"). Telemetry
 /// only: the tool result on stdout is not touched. None for a path pattern (PNG sequences) or a missing file.
