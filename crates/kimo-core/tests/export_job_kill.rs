@@ -64,6 +64,7 @@ fn uninterrupted(tag: &str) -> Vec<String> { let d = tmp(tag); let mut ss = scen
     let d = tmp("cancel"); let out = d.join("out.mp4"); let ch = d.join("out.mp4.chunks"); let mut ss = scene();
     let a = json!({"path": out.to_str().unwrap(), "chunk_s": 2}); let r = c(&mut ss, "export_job_start", a); let id = r["job_id"].as_str().unwrap().to_string();
     wait_for(&ch.join("chunk_00000.mp4")); let st = c(&mut ss, "cancel_job", json!({"job_id": id})); assert!(matches!(st["state"].as_str().unwrap(), "cancelled" | "done"), "{st}");
+    assert!(!ch.join("job.lock").exists(), "a job that reports {} has released job.lock, so resume_job can take it at once", st["state"]);
     let s = c(&mut ss, "resume_job", json!({"path": out.to_str().unwrap(), "wait": true})); let s = if s.get("status").is_some() { s["status"].clone() } else { s };
     assert_eq!(s["state"], "done", "{s}"); assert_eq!(s["result"]["verified"], true); assert!(s["result"]["reverified"]["ok"].as_u64().unwrap() >= 1, "{s}"); assert!(!ch.join("job.lock").exists()); std::fs::remove_dir_all(&d).ok();
 }

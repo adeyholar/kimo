@@ -108,13 +108,25 @@ fn quarantine(dir: &std::path::Path, old: &Option<Value>) -> Vec<Value> {
 
 
 fn ffprobe(args: &[&str], p: &std::path::Path) -> Result<(String, String), String> { let o = std::process::Command::new("ffprobe").args(["-v", "error"]).args(args).arg(p).output().map_err(|e| format!("ffprobe: {e}"))?; Ok((String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).trim().to_string())) }
+/// Parse the first row of `ffprobe -show_entries frame=key_frame,pict_type -of csv=p=0` by column: (key_frame, pict_type), in the order requested.
+/// ffprobe 5.x appends one empty trailing field for the frame's (empty) side-data section, so `1,I,` and `1,I` are the two documented forms;
+/// that single empty trailing field is the only extra accepted. Anything else (a missing column, a non-empty or second extra field, a key_frame that is
+/// not 0/1, an empty pict_type) is refused, so the caller still verifies both the key-frame flag and the picture type.
+pub fn parse_first_frame(row: &str) -> Result<(bool, String), String> {
+    let cols: Vec<&str> = row.split(',').collect();
+    let (kf, pt) = match cols.as_slice() { [kf, pt] | [kf, pt, ""] => (*kf, *pt), _ => return Err(format!("unexpected ffprobe frame row '{row}': expected 'key_frame,pict_type' with at most one empty trailing field")) };
+    let key = match kf { "1" => true, "0" => false, _ => return Err(format!("unexpected ffprobe key_frame '{kf}' in frame row '{row}'")) };
+    if pt.is_empty() { return Err(format!("ffprobe frame row '{row}' has no pict_type")); }
+    Ok((key, pt.to_string()))
+}
 /// Join contract: every chunk must start on a key frame (I) and share codec parameters; a chunk that does not cannot be stream-copied at a seam.
 pub fn chunk_contract(parts: &[String]) -> Result<(), String> {
     let mut first: Option<String> = None;
     for (i, f) in parts.iter().enumerate() {
         let pth = std::path::Path::new(f);
         let (fr, _) = ffprobe(&["-select_streams", "v:0", "-read_intervals", "%+#1", "-show_entries", "frame=key_frame,pict_type", "-of", "csv=p=0"], pth)?;
-        let l = fr.lines().next().unwrap_or("").trim().to_string(); if l != "1,I" { return Err(format!("join_contract: chunk {i} ({f}) does not start with a key frame (first frame is '{l}'); it cannot be stream-copied into the join")); }
+        let l = fr.lines().next().unwrap_or("").trim().to_string();
+        match parse_first_frame(&l) { Ok((true, pt)) if pt == "I" => {}, Ok(_) => return Err(format!("join_contract: chunk {i} ({f}) does not start with a key frame (first frame is '{l}'); it cannot be stream-copied into the join")), Err(e) => return Err(format!("join_contract: chunk {i} ({f}): {e}")) }
         let (par, _) = ffprobe(&["-select_streams", "v:0", "-show_entries", "stream=codec_name,profile,width,height,pix_fmt,r_frame_rate", "-of", "csv=p=0"], pth)?; let par = par.trim().to_string();
         match &first { None => first = Some(par), Some(f0) if *f0 != par => return Err(format!("join_contract: chunk {i} has codec parameters '{par}' but chunk 0 has '{f0}'")), _ => {} }
     }
@@ -171,7 +183,7 @@ pub fn classify(e: &str) -> String {
 }
 fn tail(e: &str) -> String { let t: Vec<&str> = e.lines().rev().take(6).collect(); let mut v: Vec<&str> = t; v.reverse(); let j = v.join(" | "); if j.len() > 600 { j[j.len() - 600..].to_string() } else { j } }
 
-fn run(j: Arc<Job>, p: crate::model::Project, dir: std::path::PathBuf, out: String, cf: u64, crf: u32, force: bool, _lock: LockGuard) {
+fn run(j: Arc<Job>, p: crate::model::Project, dir: std::path::PathBuf, out: String, cf: u64, crf: u32, force: bool, lock: LockGuard) {
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Value, String> {
         let fps = if p.fps > 0.0 { p.fps } else { 30.0 }; let total = (em::project_end(&p) * fps).ceil() as u64; if total == 0 { return Err("nothing to export: the timeline is empty".into()); }
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
@@ -189,6 +201,11 @@ fn run(j: Arc<Job>, p: crate::model::Project, dir: std::path::PathBuf, out: Stri
                 Some(why) => {
                     let t0 = std::time::Instant::now(); let part = dir.join(format!("chunk_{idx:05}.partial.mp4")); let _ = std::fs::remove_file(&file);
                     let r = crate::render::export_range_opts(&p, part.to_str().unwrap_or(""), crf, range[0] as f64 / fps, range[1] as f64 / fps, true, false);
+                    // Commit section: once the encode returned, the chunk is made final (rename) and recorded in index.json without a
+                    // cancellation point in between (hashing the chunk calls guard::check). A cancel landing here would otherwise leave a
+                    // finished chunk_N.mp4 that the index does not vouch for, which the next run quarantines and re-renders. The job's own
+                    // token is restored when this block ends, and the loop checks it before the next chunk.
+                    let _commit = crate::guard::install_token(&crate::guard::new_token());
                     match r { Ok(_) => { sync_file(&part)?; std::fs::rename(&part, &file).map_err(|e| e.to_string())?; sync_dir(&dir); }
                         Err(e) => { let pf = dir.join(format!("{}.partial", chunk_name(idx))); let _ = std::fs::rename(&part, &pf); let _ = write_atomic(&dir.join(format!("{}.partial.marker", chunk_name(idx))), &json!({"range": range, "key": c["key"], "error": e})); return Err(e); } }
                     rendered.push(json!({"index": idx, "reason": why})); set(&j, |s| s.rendered_secs.push(t0.elapsed().as_secs_f64()));
@@ -204,6 +221,9 @@ fn run(j: Arc<Job>, p: crate::model::Project, dir: std::path::PathBuf, out: Stri
     }));
     let cancelled = j.cancel.load(std::sync::atomic::Ordering::Relaxed);
     if !matches!(res, Ok(Ok(_))) { if let Ok(rd) = std::fs::read_dir(&dir) { for e in rd.flatten() { let n = e.file_name().to_string_lossy().into_owned(); if let Some(stem) = n.strip_suffix(".partial.mp4") { let pf = dir.join(format!("{stem}.mp4.partial")); let _ = std::fs::rename(e.path(), &pf); let _ = write_atomic(&dir.join(format!("{stem}.mp4.partial.marker")), &json!({"error": "interrupted before the chunk finished", "cancelled": cancelled})); } } } }
+    // Release job.lock BEFORE publishing the terminal state: cancel_job and job_status report cancelled/done/failed only once the
+    // directory is free, so a resume_job issued right after them never meets this job's own (live-pid) lock.
+    drop(lock);
     set(&j, |s| { s.current_range = None; match res { Ok(Ok(v)) => { s.state = "done"; s.result = Some(v); }
         Ok(Err(e)) => { if cancelled || e == "cancelled" { s.state = "cancelled"; } else { s.state = "failed"; s.error = Some(classify(&e)); } }
         Err(_) => { if cancelled { s.state = "cancelled"; } else { s.state = "failed"; s.error = Some("export job panicked".into()); } } } });
@@ -250,3 +270,19 @@ pub fn commands() -> Vec<Command> { vec![
         schema: obj(vec![("path", s("output .mp4 path")), ("dir", s("chunk directory, default <path>.chunks")), ("crf", n("quality 0..51, default 18")), ("chunk_s", n("default: the original job's"))], &["path"]),
         run: |ss, a| start(ss, a, true) },
 ] }
+
+#[cfg(test)]
+mod first_frame_row_tests {
+    use super::parse_first_frame;
+    #[test]
+    fn both_documented_ffprobe_forms_parse_to_the_same_columns() {
+        assert_eq!(parse_first_frame("1,I").unwrap(), (true, "I".to_string()));
+        assert_eq!(parse_first_frame("1,I,").unwrap(), (true, "I".to_string()));
+        assert_eq!(parse_first_frame("0,P").unwrap(), (false, "P".to_string()));
+        assert_eq!(parse_first_frame("0,B,").unwrap(), (false, "B".to_string()));
+    }
+    #[test]
+    fn anything_beyond_one_empty_trailing_field_is_refused() {
+        for bad in ["", "1", "1,", ",I", "1,I,x", "1,I,,", "1,I,0", "I,1", "2,I", "true,I", " 1,I"] { assert!(parse_first_frame(bad).is_err(), "'{bad}' must be refused"); }
+    }
+}
