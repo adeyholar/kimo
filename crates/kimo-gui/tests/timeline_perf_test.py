@@ -57,6 +57,7 @@ SEAMS = """() => { const out = { pairs: 0, overlap: 0, minGap: null, past: 0, el
       if (l.scrollWidth > l.clientWidth && getComputedStyle(l).textOverflow === 'ellipsis') out.ellipsis++; } }
   return out; }"""
 PROBE = """(() => { const rAF = window.requestAnimationFrame.bind(window); window.__app = [];
+  window.__wheel = []; addEventListener('wheel', e => window.__wheel.push(e.timeStamp), { capture: true, passive: true });
   window.__fr = 0; window.requestAnimationFrame = cb => rAF(t => { window.__fr++; const a = performance.now(); cb(t); const b = performance.now(); window.__app.push([t, b - a, b]); });
   window.__obs = null; window.__watch = () => { const S = window.__obs = []; window.__stop = false; const loop = t => {
     const tl = document.querySelector('[data-panel=tl]');
@@ -181,7 +182,7 @@ async def main():
         print(f"clip seams zoomed to {z[0]}..{z[-1]}: {sm['pairs']} back-to-back pairs on screen, smallest gap {sm['minGap'] if sm['minGap'] is None else round(sm['minGap'], 2)} px ({sm['overlap']} pairs overlap after the moves, not counted); "
               f"{sm['labels']} clip names, {sm['past']} running past their clip, {sm['ellipsis']} cut with an ellipsis [{'ok' if seams_ok else 'FAIL'}]")
         ok &= seams_ok
-        await pg.evaluate('() => { window.__app = []; __watch(); }')
+        await pg.evaluate('() => { window.__app = []; window.__wheel = []; __watch(); }')
         STEP = 130
         for direction in (1, -1):                                          # start -> end of the timeline -> start
             for _ in range(int(31000 / STEP)):
@@ -189,7 +190,12 @@ async def main():
             ends_seen.append((await pg.evaluate(RUL))[-1])
         await pg.evaluate('() => { window.__stop = true; }'); await pg.wait_for_timeout(100)
         obs = await pg.evaluate('window.__obs'); app = await pg.evaluate('window.__app')
+        # wheel input -> the app frame that drew it: from the event's timestamp to the end of the first app frame
+        # that started after it (DOM updated; the paint follows in the same frame)
+        lat = await pg.evaluate("""() => { const A = window.__app.map(([t, d, b]) => [b - d, b]); let j = 0; const out = [];
+          for (const ts of window.__wheel) { while (j < A.length && A[j][0] < ts) j++; if (j < A.length) out.push(A[j][1] - ts); } return out; }""")
         pint = [y[0] - x[0] for x, y in zip(obs, obs[1:])]; pwork = [w for _, w, _ in app]
+        print(f"(b) wheel input -> frame drawn ({len(lat)} wheel events while panning): {tri(lat)}")
         print(f"(b) pan, ruler zoomed to {z[0]}..{z[-1]} visible, panned start -> {ends_seen[0]} (end) -> {ends_seen[1]}; {len(app)} app frames over {(obs[-1][0] - obs[0][0]) / 1000:.1f} s of continuous wheel panning: frame interval {tri(pint)} [{mark(pct(pint, 95) <= 16.7 + .5)}], "
               f"frames over 16.7 ms {sum(1 for x in pint if x > 17.2)} of {len(pint)}; app work per frame {tri(pwork)}")
         doms = [o[1] for o in obs]; tc = [o[2] + max(o[3], 0) for o in obs]; samples = [['pan'] + o for o in obs]

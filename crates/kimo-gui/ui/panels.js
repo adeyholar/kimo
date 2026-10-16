@@ -382,7 +382,7 @@ export function panRows(tracks, o, h, pan) {
 // the tracks whose markup changed, so an edit on one track never re-parses the other five. RUNS caches the merged
 // overview runs (a 1k-clip track is a few hundred seams in one gradient) by geometry.
 export let TL_PARTS = null;
-const RUNS = new Map();
+let RUNS = new Map(), RUNS_NEXT = new Map();   /* the runs the last timeline drew, and the ones this one draws: only the current set is kept */
 function timeline({ spec, data, w, h, pan }) {
   const o = spec.opts || {};
   const x0 = o.x0 ?? 48, x1 = w - (o.xr ?? 12);
@@ -424,14 +424,13 @@ function timeline({ spec, data, w, h, pan }) {
       let h1 = 0x811c9dc5 | 0, h2 = 7; const mix = v => { const q = Math.round(v * 1000); h1 = Math.imul(h1 ^ q, 16777619); h2 = (Math.imul(h2, 31) + q) | 0; };
       mix(run[0]); mix(run[1]); for (const x of run[2]) mix(x);
       const key = `${h1}:${h2}:${run[2].length}${run[3] || ''}`;   /* a run unchanged since the last frame reuses its markup */
-      let s = RUNS.get(key);
+      let s = RUNS.get(key) ?? RUNS_NEXT.get(key);
       if (s == null) {
         const w0 = Math.max(1, run[1] - run[0]), cuts = run[2].filter(x => x > run[0] + .5 && x < run[1] - .5).map(x => px(x - run[0]));
         const bg = cuts.length ? `;background:linear-gradient(90deg,${cuts.map((x, i) => `var(--clip) ${i ? px(cuts[i - 1] + 1) : 0}px ${x}px,transparent ${x}px ${px(x + 1)}px`).join(',')},var(--clip) ${px(cuts[cuts.length - 1] + 1)}px)` : '';
         s = `<div class="clip crun${run[3] || ''}" style="left:${px(run[0])}px;width:${px(w0)}px${bg}"></div>`;
-        if (RUNS.size >= 256 || (RUNS.chars = (RUNS.chars || 0) + s.length) > 1.5e6) { RUNS.clear(); RUNS.chars = s.length; }   /* bounded: a few hundred runs, ~1.5M chars */
-        RUNS.set(key, s);
       }
+      RUNS_NEXT.set(key, s);
       tr += s; run = null; };
     const CL = t.clips || [];
     for (let ci = 0; ci < CL.length; ci++) {
@@ -454,14 +453,15 @@ function timeline({ spec, data, w, h, pan }) {
   let post = '';
   if (data.playhead != null && inView(X(data.playhead))) post += `<div class="playhead" style="left:${px(X(data.playhead))}px;top:${o.phTop ?? 4}px;bottom:${o.phBot ?? 8}px"></div>`;
   if (data.razor && flashing(data.razor.t) && inView(X(data.razor.at))) post += `<div class="razor" style="left:${px(X(data.razor.at))}px;top:${o.trackY ?? 30}px;bottom:4px"></div>`;
-  // where the view sits: zoomed in, a 2 px bar under the tracks with the visible span as its thumb; whole rows
+  // where the view sits: zoomed in, a 2 px bar on the ruler's bottom edge with the visible span as its thumb; whole rows
   // above or below the panel, a 2 px bar at the right edge with the visible rows as its thumb (no control, nothing to grab)
   if (pan && pan.z > 1) { const full = r0.t1 - r0.t0, W = x1 - x0, bw = Math.max(6, W / pan.z), a = Math.min(W - bw, (r.t0 - r0.t0) / full * W);
-    post += `<div class="tlbar" style="left:${x0}px;width:${px(W)}px"><i style="left:${px(a)}px;width:${px(bw)}px"></i></div>`; }
+    post += `<div class="tlbar" style="left:${x0}px;width:${px(W)}px;top:${(o.rulerY ?? 6) + 23}px"><i style="left:${px(a)}px;width:${px(bw)}px"></i></div>`; }
   if (k0 + below > 0) { const ty = o.trackY ?? 30, H = h - ty - 8, n = TR.length, vis = n - k0 - below;
     post += `<div class="tlbar v" style="top:${ty}px;height:${px(H)}px"><i style="top:${px(k0 / n * H)}px;height:${px(vis / n * H)}px"></i></div>`; }
   html += post + '</div>';
   TL_PARTS = { html, pre, tracks, post };
+  if (RUNS_NEXT.size) { RUNS = RUNS_NEXT; RUNS_NEXT = new Map(); }
   return html;
 }
 
