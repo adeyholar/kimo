@@ -13,8 +13,9 @@ measures, in the page (headless Chromium, 1376x768):
   (d) GUI processing per edit under load: one split_clip or move_clip (start + complete) per frame on the 1k
       timeline; the app's frame callback that drains it (reducer + render + DOM write). This is GUI-side time,
       not engine latency. Target < 10 ms.
-  (e) DOM while panning: whole-page element count and timeline .clip / .crun elements on every observed frame;
-      must stay bounded by the visible window (a few elements per pixel column), never one per clip.
+  (e) DOM while panning: whole-page element count and timeline .clip / .crun elements sampled on every vsync of the
+      full-timeline pan and of the fast scrub (min / p50 / max, every sample with --dom-log); the page must stay at
+      <= 400 elements on every sample and the timeline bounded by the visible window, never one element per clip.
   Also: the vertical wheel brings track V6 (below the panel) into view.
 Exit 0 when (e) is bounded, V6 is reachable, no page errors, edit frame work p95 <= 16.7 ms and the heap does not run
 away; target misses for (a)/(b)/(d) are printed as MISS beside the number.
@@ -24,7 +25,8 @@ away; target misses for (a)/(b)/(d) are printed as MISS beside the number.
 import argparse, asyncio, functools, http.server, json, random, socketserver, sys, threading
 from pathlib import Path
 CRATE = Path(__file__).resolve().parents[1]
-ap = argparse.ArgumentParser(); ap.add_argument('--clips', type=int, default=1000); ap.add_argument('--edits', type=int, default=240); ap.add_argument('--shot'); A = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument('--clips', type=int, default=1000); ap.add_argument('--edits', type=int, default=240); ap.add_argument('--shot'); ap.add_argument('--dom-log'); A = ap.parse_args()
+DOM_MAX = 400
 PROBE = """(() => { const rAF = window.requestAnimationFrame.bind(window); window.__app = [];
   window.requestAnimationFrame = cb => rAF(t => { const a = performance.now(); cb(t); const b = performance.now(); window.__app.push([t, b - a, b]); });
   window.__obs = null; window.__watch = () => { const S = window.__obs = []; window.__stop = false; const loop = t => {
@@ -108,28 +110,37 @@ async def main():
         await pg.keyboard.down('Control')
         for _ in range(16): await pg.mouse.wheel(0, -50); await pg.wait_for_timeout(20)
         await pg.keyboard.up('Control'); await pg.wait_for_timeout(300)
-        z = await pg.evaluate('() => { const r = document.querySelectorAll("[data-panel=tl] .ruler span"); return [...r].map(e => e.textContent); }')
+        RUL = '() => [...document.querySelectorAll("[data-panel=tl] .ruler span")].map(e => e.textContent)'
+        await pg.mouse.wheel(-100000, 0); await pg.wait_for_timeout(200)    # to the start of the timeline
+        z = await pg.evaluate(RUL); ends_seen = []
         await pg.evaluate('() => { window.__app = []; __watch(); }')
         STEP = 130
-        for direction in (1, -1):
+        for direction in (1, -1):                                          # start -> end of the timeline -> start
             for _ in range(int(31000 / STEP)):
                 await pg.mouse.wheel(direction * STEP, 0); await pg.wait_for_timeout(8)
+            ends_seen.append((await pg.evaluate(RUL))[-1])
         await pg.evaluate('() => { window.__stop = true; }'); await pg.wait_for_timeout(100)
         obs = await pg.evaluate('window.__obs'); app = await pg.evaluate('window.__app')
         pint = [y[0] - x[0] for x, y in zip(obs, obs[1:])]; pwork = [w for _, w, _ in app]
-        print(f"(b) pan, ruler zoomed to {z[:2]}..{z[-1:]}, {len(app)} app frames over {(obs[-1][0] - obs[0][0]) / 1000:.1f} s of continuous wheel panning: frame interval {tri(pint)} [{mark(pct(pint, 95) <= 16.7 + .5)}], "
+        print(f"(b) pan, ruler zoomed to {z[0]}..{z[-1]} visible, panned start -> {ends_seen[0]} (end) -> {ends_seen[1]}; {len(app)} app frames over {(obs[-1][0] - obs[0][0]) / 1000:.1f} s of continuous wheel panning: frame interval {tri(pint)} [{mark(pct(pint, 95) <= 16.7 + .5)}], "
               f"frames over 16.7 ms {sum(1 for x in pint if x > 17.2)} of {len(pint)}; app work per frame {tri(pwork)}")
-        doms = [o[1] for o in obs]; tc = [o[2] + max(o[3], 0) for o in obs]
-        bounded = max(tc or [0]) <= 6 * max(1, s2['w']) // 2
-        print(f"(e) DOM while panning: whole page {min(doms)}..{max(doms)} elements; timeline {min(o[2] for o in obs)}..{max(o[2] for o in obs)} .clip + {min(o[3] for o in obs)}..{max(o[3] for o in obs)} .crun for {s2['inState']} clips in state [{mark(bounded)}]")
+        doms = [o[1] for o in obs]; tc = [o[2] + max(o[3], 0) for o in obs]; samples = [['pan'] + o for o in obs]
+        bounded = max(tc or [0]) <= 6 * max(1, s2['w']) // 2 and max(doms) <= DOM_MAX
+        print(f"(e) DOM while panning, {len(obs)} samples (one per vsync): whole page min {min(doms)} / p50 {pct(doms, 50)} / max {max(doms)} elements [{mark(max(doms) <= DOM_MAX)} <= {DOM_MAX}]; "
+              f"timeline {min(o[2] for o in obs)}..{max(o[2] for o in obs)} .clip + {min(o[3] for o in obs)}..{max(o[3] for o in obs)} .crun for {s2['inState']} clips in state [{mark(bounded)}]")
         ok &= bounded
 
         # (c) fast scrub: big wheel deltas back and forth, then the heap
-        await pg.evaluate('() => { window.__app = []; }')
+        await pg.evaluate('() => { window.__app = []; __watch(); }')
         for _ in range(6):
             for direction in (1, -1):
                 for _ in range(40): await pg.mouse.wheel(direction * 900, 0); await pg.wait_for_timeout(4)
-        await pg.wait_for_timeout(200); raw = await pg.evaluate('performance.memory.usedJSHeapSize'); fwork = [w for _, w, _ in await pg.evaluate('window.__app')]
+        await pg.evaluate('() => { window.__stop = true; }'); await pg.wait_for_timeout(200)
+        raw = await pg.evaluate('performance.memory.usedJSHeapSize'); fwork = [w for _, w, _ in await pg.evaluate('window.__app')]
+        obs2 = await pg.evaluate('window.__obs'); d2 = [o[1] for o in obs2]; samples += [['scrub'] + o for o in obs2]
+        print(f"(e) DOM during the fast scrub, {len(obs2)} samples: whole page min {min(d2)} / p50 {pct(d2, 50)} / max {max(d2)} elements [{mark(max(d2) <= DOM_MAX)} <= {DOM_MAX}]")
+        ok &= max(d2) <= DOM_MAX
+        if A.dom_log: json.dump({'cols': ['phase', 'raf_t_ms', 'page_elements', 'tl_clip', 'tl_crun'], 'samples': samples}, open(A.dom_log, 'w'))
         h3 = await heap()
         runaway = h3 > h1 + 2 * 1048576
         print(f"(c) JS heap after GC: before loading {mb(h0)}, after loading 1k clips {mb(h1)}, after {A.edits} edits {mb(h2)}, after fast scrub {mb(h3)} (raw before GC {mb(raw)}) [{mark(not runaway)}]; fast-scrub app work {tri(fwork)}")
@@ -146,6 +157,6 @@ async def main():
         print('page errors', errs[:2]); await b.close()
     srv.shutdown()
     ok &= pct(allw, 95) <= 16.7 and not errs
-    print('RESULT:', 'bounded DOM, V6 reachable, heap flat, edits within frame budget' if ok else 'FAIL'); return 0 if ok else 1
+    print('RESULT:', f'page DOM <= {DOM_MAX} on every pan/scrub sample, V6 reachable, heap flat, edits within frame budget' if ok else 'FAIL'); return 0 if ok else 1
 if __name__ == '__main__':
     sys.exit(asyncio.run(main()))
