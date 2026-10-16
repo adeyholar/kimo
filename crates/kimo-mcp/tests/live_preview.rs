@@ -166,7 +166,10 @@ fn burst_renders_once_after_the_burst() {
     let n = 12;
     for k in 0..n { m.send("tools/call", json!({"name":"set_property","arguments":{"clip_id":"clip2","property":"x","value":10 * (k + 1)}})); }
     for _ in 0..n { let r = m.recv(); assert_eq!(r["result"]["isError"], false); }
-    let ids: Vec<String> = events(&p).iter().filter(|e| e["tool_name"] == "set_property" && e["phase"] == "complete").filter_map(|e| e["call_id"].as_str().map(String::from)).collect();
+    // the sink is written by a background thread, so the last responses can arrive before their events: wait for them
+    // (like last_call_id) instead of reading the file once
+    let completes = || -> Vec<String> { events(&p).iter().filter(|e| e["tool_name"] == "set_property" && e["phase"] == "complete").filter_map(|e| e["call_id"].as_str().map(String::from)).collect() };
+    let ids: Vec<String> = wait_for(10.0, || { let ids = completes(); (ids.len() >= n as usize).then_some(ids) }).unwrap_or_else(completes);
     assert_eq!(ids.len(), n as usize);
     let last = ids.last().unwrap().clone();
     let f = frame_for(&p, &last);
