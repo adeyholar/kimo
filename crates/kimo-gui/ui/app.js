@@ -136,6 +136,9 @@ export function apply(ev) {
 let layoutDirty = true;
 const main = document.getElementById('main');
 const nodes = {};
+// panel elements by slot: every timeline-kind panel shares one slot (the timeline stays one element across screens)
+const pool = {};
+const slotOf = (name, kind) => kind === 'timeline' ? 'timeline' : name;
 
 function tracks(edges, flexLo, flexHi) {
   const out = [];
@@ -165,55 +168,132 @@ function buildLayout() {
   }
   const X = [...xs].sort((a, b) => a - b), Y = [...ys].sort((a, b) => a - b);
   const fl = rects[M.flex || 'viewer'] || [0, 0, DESIGN_W, H];
+  // spring-eased splits: a panel that exists on both screens of a mode hop starts at its old box and springs
+  // to its new one (transform only, so nothing else reflows); a resize or first build snaps. The old boxes are read
+  // BEFORE the new grid tracks are set (read after, they were the old grid lines indexed into the new tracks)
+  const hop = builtMode != null && builtMode !== state.mode && !hidden, old = {};
+  if (hop) for (const [k, el] of Object.entries(nodes)) old[slotOf(k, el._kind)] = [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight];
   main.style.gridTemplateColumns = tracks(X, fl[0], fl[2]);
   main.style.gridTemplateRows = tracks(Y, fl[1], fl[3]);
-  // spring-eased splits: a panel that exists on both screens of a mode hop starts at its old box and springs
-  // to its new one (transform only, so nothing else reflows); a resize or first build snaps
-  const hop = builtMode != null && builtMode !== state.mode && !hidden, old = {};
-  if (hop) for (const [k, el] of Object.entries(nodes)) old[k] = [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight];
   springs.length = 0;
-  main.innerHTML = '';
+  // One workspace: a panel the new screen shares with the old one (the rail, the viewer, the timeline, the
+  // inspector) is the SAME element, re-placed on the grid, never re-created; others are pooled off-document and
+  // come back as the same node. Only contents change; a panel whose contents change kind fades in (200 ms, once).
+  const keep = new Set(), entering = [], leaving = [];
   for (const k of Object.keys(nodes)) delete nodes[k];
+  let before = null;
   for (const [name, spec] of Object.entries(M.panels)) {
     const r = rects[name]; if (!r) continue;
-    const el = document.createElement('section');
+    const slot = slotOf(name, spec.kind);
+    let el = pool[slot]; const fresh = !el;
+    if (fresh) el = pool[slot] = document.createElement('section');
+    const was = el._kind;
+    if (el._leave) { el._leave.cancel(); el._leave = null; }
+    if (el._enter) { el._enter.cancel(); el._enter = null; }
+    el.removeAttribute('style'); delete el.dataset.anim; delete el.dataset.leaving;
     el.className = 'panel ' + (spec.cls || '') + ' k-' + spec.kind;
     el.dataset.panel = name;
     el.style.gridColumn = `${X.indexOf(r[0]) + 1} / ${X.indexOf(r[2]) + 1}`;
     el.style.gridRow = `${Y.indexOf(r[1]) + 1} / ${Y.indexOf(r[3]) + 1}`;
     if (spec.z) el.style.zIndex = spec.z;
-    main.appendChild(el);
-    nodes[name] = el;
+    el._sz = null; el._p = null; if (was !== spec.kind) el._h = null;
+    el._kind = spec.kind;
+    // document order = the screen's panel order; an element already in place is not moved
+    const at = before ? before.nextSibling : main.firstChild;
+    if (at !== el) main.insertBefore(el, at);
+    before = el; keep.add(el); nodes[name] = el;
+    if (hop && (fresh || was !== spec.kind || !old[slot]) && el.animate) entering.push(el);
   }
+  /* a panel the new screen does not have stays where it was, under the new ones, while they fade in over it (a true
+     crossfade: no frame shows the canvas where either screen has a panel), then leaves the document. It gives up its
+     name at once, so nothing that asks for a panel by name can find it. One compositor-driven opacity animation; no
+     timer, no rAF. */
+  for (const c of [...main.children]) {
+    if (keep.has(c)) continue;
+    const ob = hop && c.dataset.panel && old[slotOf(c.dataset.panel, c._kind)];
+    if (!ob || !c.animate || c._leave) { if (c._leave) { c._leave.cancel(); c._leave = null; } c.remove(); continue; }
+    c.dataset.leaving = c.dataset.panel; delete c.dataset.panel; delete c.dataset.anim;
+    c.style.cssText = `position:absolute;left:${ob[0]}px;top:${ob[1]}px;width:${ob[2]}px;height:${ob[3]}px;z-index:0;pointer-events:none`;
+    main.insertBefore(c, main.firstChild);
+    const a = c._leave = c.animate([{ opacity: 1 }, { opacity: 1, offset: .55 }, { opacity: 0 }], { duration: 200, easing: 'linear' });
+    a.pause(); leaving.push(a);
+    a.onfinish = () => { if (c._leave === a) { c._leave = null; c.remove(); } };
+  }
+  if (hop) handover(entering, leaving);
   if (hop) for (const [name, el] of Object.entries(nodes)) {
-    const f = old[name]; if (!f) continue;
+    const f = old[slotOf(name, MODES[state.mode].panels[name].kind)]; if (!f) continue;
+    if (state.mode === 'export' && name === 'viewer') continue;   /* hops into export: the viewer takes its new box at once (no spring) */
     const t = [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight];
     if (!t[2] || !t[3] || f.every((v, i) => Math.abs(v - t[i]) < .5)) continue;
-    springs.push({ el, d: [f[0] - t[0], f[1] - t[1], f[2] / t[2], f[3] / t[3]], D: Math.max(Math.abs(f[0] - t[0]), Math.abs(f[1] - t[1]), Math.abs(f[2] - t[2]), Math.abs(f[3] - t[3])) });
-    el.dataset.anim = '1'; el.style.transformOrigin = '0 0';
+    springs.push({ el, W: t[2], H: t[3], d: [f[0] - t[0], f[1] - t[1], f[2] / t[2], f[3] / t[3]], D: Math.max(Math.abs(f[0] - t[0]), Math.abs(f[1] - t[1]), Math.abs(f[2] - t[2]), Math.abs(f[3] - t[3])) });
+    el.style.transformOrigin = '0 0';
   }
-  if (springs.length) { springT0 = performance.now(); stepSprings(0); }
+  /* the springs are armed, not started: this frame commits the new screen's first layout with every moving panel
+     still posed in its old box, and the motion clock starts on the next frame:
+     the build never eats a spring frame */
+  if (springs.length) { springT0 = -1; springArm = metrics.raf; poseSprings(1); }
   builtMode = state.mode;
   layoutDirty = false;
 }
-// One spring per hop (all moving panels share it), critically damped (ratio 1.0, w = 60 rad/s, i.e. stiffness
-// 3600): x(t) = (1 + wt) e^-wt runs 1 -> 0 with no overshoot by construction. A panel lands when its residual is
-// under 0.5 px (~125 ms for a 100 px move, ~170 ms for 1000 px) and never later than 185 ms. Evaluated in closed form
-// from the hop's start, so a slow frame cannot make it ring. Driven by the render loop's own rAF only while a
+/* RETAIN-UNTIL-READY. A panel new to this screen is built, populated and laid out in this same frame, held invisible
+   over the outgoing screen (which stays fully painted under it); the crossfade (190 ms in, 200 ms out) starts only
+   once every picture the incoming panels show has decoded, so no frame shows a panel half-built or a picture still
+   blank. The outgoing panels leave the document when their fade ends. A newer hop cancels a pending one. Promise-
+   driven: no timer and no rAF of its own. */
+let hopGen = 0;
+function handover(entering, leaving) {
+  const gen = ++hopGen;
+  if (!entering.length && !leaving.length) return;
+  const pics = [];
+  for (const el of entering) for (const im of el.getElementsByTagName('img')) if (!im.complete || !im.naturalWidth) pics.push(im.decode ? im.decode().catch(() => {}) : null);
+  /* an incoming panel with a picture still decoding is held fully transparent (the outgoing screen shows through);
+     once ready it comes in from 60 % (never through blank) to full in 190 ms while the outgoing fades under it */
+  if (pics.length) for (const el of entering) el.style.opacity = '0';
+  const go = () => {
+    if (gen !== hopGen) return;
+    for (const el of entering) {
+      if (el._enter || !el.isConnected) continue;
+      el.style.opacity = '';
+      const a = el._enter = el.animate([{ opacity: .6 }, { opacity: 1 }], { duration: 190, easing: 'cubic-bezier(.3,.6,.3,1)' });
+      a.onfinish = () => { if (el._enter === a) el._enter = null; };
+    }
+    for (const a of leaving) if (a.playState === 'paused') a.play();
+  };
+  if (pics.length) Promise.all(pics).then(go); else go();
+}
+// One spring per hop (all moving panels share it), critically damped (ratio 1.0, w = 72 rad/s, i.e. stiffness
+// 5184): x(t) = (1 + wt) e^-wt runs 1 -> 0 with no overshoot by construction. A panel lands when its residual is
+// under 0.5 px (~105 ms for a 100 px move, ~142 ms for 1000 px) and never later than 150 ms after the motion starts
+// (two frames after the build: the incoming screen is laid out and painted before anything moves). Evaluated in closed form from that start, so a slow frame cannot make it ring. Driven by the render loop's own rAF only while a
 // spring is moving; hidden -> snapped.
-const springs = []; let builtMode = null, springT0 = 0;
+const springs = []; let builtMode = null, springT0 = 0, springArm = 0;
 const pans = {}, panDirty = new Set();   /* timeline pan / zoom per mode:panel (see onWheel) */
-const SW = 60, SMAX = .185;
+const SW = 72, SMAX = .15;   /* w 72 rad/s: a 1000 px move is under 0.5 px at 142 ms; the clock starts once the built screen has painted */
+function poseSprings(x) {
+  for (const s of springs) {
+    if (!s.el) continue;
+    const [dx, dy, sx, sy] = s.d;
+    /* the panel slides from its old place (translate) and its edge sweeps from the old size to the new (clip): the
+       contents are laid out once at their new size and are never stretched. Whole px at 1x and 2x: text never sits
+       on a fractional offset */
+    s.el.style.transform = `translate(${Math.round(dx * x)}px, ${Math.round(dy * x)}px)`;
+    s.el.style.clipPath = `inset(0 ${Math.max(0, Math.round(s.W * (1 - sx) * x))}px ${Math.max(0, Math.round(s.H * (1 - sy) * x))}px 0 round var(--radius))`;
+  }
+}
 function stepSprings(now) {
   if (!springs.length) return false;
-  const t = now ? Math.max(0, (now - springT0) / 1000) : 0, x = (1 + SW * t) * Math.exp(-SW * t);
+  if (springT0 === -1) {
+    if (now && !hidden && metrics.raf <= springArm + 1) return true;      // the build frame and the frame that paints it: held at the old pose
+    if (now && !hidden) { springT0 = now; for (const s of springs) if (s.el) s.el.dataset.anim = '1'; }
+  }
+  const t = now && springT0 > 0 ? Math.max(0, (now - springT0) / 1000) : 0, x = (1 + SW * t) * Math.exp(-SW * t);
   let live = false;
   for (const s of springs) {
     if (!s.el) continue;
-    if (hidden || t >= SMAX || x * s.D < .5) { s.el.style.transform = ''; delete s.el.dataset.anim; s.el = null; continue; }
-    live = true; const [dx, dy, sx, sy] = s.d;
-    s.el.style.transform = `translate(${dx * x}px, ${dy * x}px) scale(${1 + (sx - 1) * x}, ${1 + (sy - 1) * x})`;
+    if (hidden || !now || t >= SMAX || x * s.D < .5) { s.el.style.transform = ''; s.el.style.clipPath = ''; delete s.el.dataset.anim; s.el = null; continue; }
+    live = true;
   }
+  if (live) poseSprings(x);
   if (!live) springs.length = 0;
   return live;
 }
@@ -394,9 +474,29 @@ function paint(el, html) {
   }
   if (el._h != null && html.length < 4096 && !html.includes('flash') && retext(el, el._h, html)) { el._h = html; metrics.textPatches++; return false; }
   const of = el.querySelector(':scope > .frame'), oi = of && of.querySelector(':scope > img:not(.before)');
+  const olds = el.getElementsByTagName('img').length ? [...el.getElementsByTagName('img')] : null;
   el.innerHTML = html; el._h = html; metrics.panelWrites++;
   if (of) keepFrame(el, of, oi);
+  if (olds) adoptImgs(el, olds);
   return true;
+}
+/* A rewritten panel keeps its pictures: an <img> the new markup still shows (same src, same attributes) is the old,
+   already-decoded element put back, so a mode switch or a re-render never blanks a
+   picture while a fresh copy decodes (the viewer's frame box and image are kept by keepFrame below). Attributes are copied
+   only onto an element with the same attribute list, so the panel's markup reads exactly as written. */
+function adoptImgs(el, olds) {
+  const fresh = el.getElementsByTagName('img'); if (!fresh.length) return;
+  const sig = i => i.getAttributeNames().join(' ');
+  const bySrc = new Map(); for (const o of olds) { const s = o.getAttribute('src'); if (s != null && !bySrc.has(s)) bySrc.set(s, o); }
+  const used = new Set(), mine = new Set(olds);
+  for (const n of [...fresh]) {
+    if (mine.has(n)) continue;   /* already the kept element (the viewer's frame image) */
+    const s = sig(n), o = bySrc.get(n.getAttribute('src'));
+    if (!o || used.has(o) || sig(o) !== s) continue;
+    used.add(o);
+    for (const k of n.getAttributeNames()) { const v = n.getAttribute(k); if (o.getAttribute(k) !== v) o.setAttribute(k, v); }
+    n.replaceWith(o);
+  }
 }
 /* Same tags and attributes, only the words differ (a viewer HUD caption naming the new call): the text nodes are
    updated in place and every element stays. Markup carrying a flash is always rebuilt, so its flash replays. */

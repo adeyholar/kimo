@@ -43,7 +43,7 @@ PROBE = """(() => { const rAF = window.requestAnimationFrame.bind(window), cAF =
       if (!a) e.querySelectorAll('*').forEach((c, i) => { inner[p + ' ' + i + ' ' + c.tagName + '.' + (c.className.baseVal ?? c.className)] = box(c); }); });
     const hd = document.getElementById('topbar'); if (hd) { const tx = '|' + hd.textContent; inner['#topbar' + tx] = box(hd); hd.querySelectorAll('*').forEach((c, i) => { inner['#topbar ' + i + ' ' + c.tagName + (c.id ? '#' + c.id : '') + tx] = box(c); }); }
     document.querySelectorAll('.playhead').forEach((c, i) => { if (!c.closest('[data-anim]')) inner['playhead ' + i + ' ' + c.closest('[data-panel]')?.dataset.panel] = box(c); });
-    const gen = [...document.querySelectorAll('[data-panel]')].map(gid).join(','); S.push([t, o, inner, gen]); if (++k < n) rAF(loop); }; rAF(loop); }; })()"""
+    const gen = (window.__kimo ? window.__kimo.state.mode + '|' : '') + [...document.querySelectorAll('[data-panel]')].map(gid).join(','); S.push([t, o, inner, gen]); if (++k < n) rAF(loop); }; rAF(loop); }; })()"""
 class Q(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a): pass
 def pct(xs, p): xs = sorted(xs); return xs[min(len(xs) - 1, int(round(p / 100 * (len(xs) - 1))))] if xs else 0
@@ -74,7 +74,7 @@ async def main():
             # 0 px outside the springs: panel boxes, everything inside a still panel, the header, the playheads
             jit = 0.0; jw = ''; moved = set(); nodes = 0
             for (t0, A, IA, g0), (t1, B, IB, g1) in zip(obs, obs[1:]):
-                if g0 != g1: continue                  # the hop frame itself: the new screen is built (new panel elements)
+                if g0 != g1: continue                  # the hop frame itself: the new screen is built (the mode changes; panels the two screens share keep their element)
                 for k, v in B.items():
                     if v[4] or A[k][4]: moved.add(k); continue
                     d = max(abs(x - y) for x, y in zip(v[:4], A[k][:4]))
