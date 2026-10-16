@@ -801,7 +801,8 @@ export const PRE = {
     for (const row of box.children) {
       const c = calls.find(x => String(x.id) === row.dataset.call), a = row.querySelector('.args'), tn = a && a.firstChild; if (!c || !tn) continue;
       let t = null, tight = false;
-      if (a.scrollWidth > a.clientWidth + .5) {
+      /* a row with a from→to change always goes through here, fits or not: the rail shows every change in one form */
+      if (a.scrollWidth > a.clientWidth + .5 || / → /.test(tn.nodeValue)) {
         const full = tn.nodeValue, parts = topArgs(full), avail = a.getBoundingClientRect().width, ell = ellW(a);
         const pw = []; let at = 0; for (const q of parts) { pw.push(wOf(tn, at, at + q.length)); at += q.length + 2; }
         const sep = parts.length > 1 ? wOf(tn, parts[0].length, parts[0].length + 2) : 0;
@@ -826,6 +827,9 @@ export const PRE = {
           tf[i] = [`${k} ${a2}→${b}`, wOf(tn, o, o + k.length) + wOf(tn, o + k.length + 1, o + k.length + 2) + wOf(tn, ka, ka + a2.length) + wOf(tn, ar, ar + 1) + wOf(tn, kb, kb + b.length)];
           cw[i] = [`${a2}→${b}`, wOf(tn, ka, ka + a2.length) + wOf(tn, ar, ar + 1) + wOf(tn, kb, kb + b.length)];   /* values only: both stay visible (Naman 7:37) */
         });
+        /* one form for every change on the rail (root, 8:4x): the tight "scale 104→112%", whether or not the full one fits */
+        parts.forEach((q, i) => { if (tf[i]) keep[i] = 3; });
+        const k0 = keep.slice(), anyT = k0.includes(3);
         for (let i = parts.length - 1; i >= 1; i--) if (!delta[i]) { keep[i] = 0; cands.push(keep.slice()); }
         if (delta.some(Boolean)) {
           if (!delta[0]) { const kp = keep.slice(); kp[0] = 0; cands.push(kp); }
@@ -835,8 +839,8 @@ export const PRE = {
         const show = kp => { const out = []; let wd = 0; parts.forEach((q, i) => { if (kp[i] === 1) { out.push(q); wd += pw[i]; } else if (kp[i] === 2) { out.push(cw[i][0]); wd += cw[i][1]; } else if (kp[i] === 3) { out.push(tf[i][0]); wd += tf[i][1]; } else if (out[out.length - 1] !== '…') { out.push('…'); wd += ell; } }); return [out.join(', '), wd + sep * (out.length - 1)]; };
         let best = null, bestT = false;
         const tryFit = (txt, wd) => { if (wd <= avail + .05) best = [txt]; else if (spare > 0 && wd <= avail + spare + .05) { best = [txt]; bestT = true; } };
-        const allIn = show(parts.map(() => 1));
-        if (allIn[1] > avail + .05) tryFit(null, allIn[1]);   /* the whole call, in borrowed room */
+        const allIn = show(k0);
+        if (anyT || allIn[1] > avail + .05) tryFit(anyT ? allIn[0] : null, allIn[1]);   /* the whole call (changes tight), maybe in borrowed room */
         for (const kp of cands) { if (best) break; const [txt, wd] = show(kp); tryFit(txt, wd); }
         /* last resort, when not even one whole arg fits: the first arg's leading whole words, "lint_frame(1s: low-res …)",
            never a change (its values stay whole or not at all) and never a cut inside a word */

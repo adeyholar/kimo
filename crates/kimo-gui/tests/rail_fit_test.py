@@ -70,6 +70,9 @@ CHECK = """() => { const out = [];
         args.textContent = was; if (!hadT) row.classList.remove('tight');
         if (fitsTight) miss.push('values-only change though the tight form fits: ' + JSON.stringify(alt.join(', '))); else note = 'values-only change, tight form cannot fit: ' + JSON.stringify(alt.join(', '));
       }
+      /* one form for every from→to change on the rail: tight ("scale 104→112%") or values only, never the spaced
+         "scale: 104% → 112%" beside a tight one */
+      if (/ → /.test(at)) miss.push('change not in the one rail form (tight): ' + JSON.stringify(at));
       /* every ellipsis stands after whitespace or the open paren: a cut never lands inside a word */
       if (/[^\s(]…/.test(at)) miss.push('cut not on whitespace: ' + JSON.stringify(at));
       if (!ok) miss.push('mid-word cut: ' + JSON.stringify(at) + ' is not whole args of ' + JSON.stringify(full.join(', ')));
