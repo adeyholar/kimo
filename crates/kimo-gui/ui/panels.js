@@ -46,31 +46,44 @@ export function tickRunning(state) {
     if (c && c.status === 'running') { el.textContent = fmtDur(performance.now() - c.t); const p = el.closest('[data-panel]'); if (p) p._h = null; }   /* ticked in place: the panel's markup cache no longer matches its DOM */
   }
 }
-function agent({ spec, state, data, w, h }) {
-  const o = spec.opts || {};
-  const rowH = o.rowH || 37, top = o.top ?? 42, gap = o.gap || 0;
-  const reserve = (o.reserve || 0);
+// one rail row. meas: the row as the fit measures it (full args, no fit state) — PRE.agent lays these out hidden
+function railRow(c, i, calls, o, state, w, y, rowH, meas) {
+  const cur = i === calls.length - 1;
+  const ck = c.status === 'running' ? (o.runMark ?? '') : c.status === 'error' ? '✕' : c.status === 'lost' ? '?' : '✓';   // lost: its result fell in a feed drop
+  const showCk = !(cur && o.noCheckCur);
+  const ckEl = `<span class="ck">${showCk ? ck : ''}</span>`;
+  const dur = c.status === 'running' ? fmtDur(state.session.still && c.elapsed_ms != null ? c.elapsed_ms : performance.now() - c.t) : fmtDur(c.dur_ms);
+  const recent = o.boldLast && i >= calls.length - o.boldLast;
+  const full = railArgs(c), fk = railKey(c, railGeo(cur, recent, state.mode), w, full), fit = !meas && c._fit && c._fit.k === fk ? c._fit : null, args = fit && fit.t != null ? fit.t : full, bare = !!full && args === '';   /* PRE.agent's whole-arg fit, once per row state */
+  const faded = !cur && o.fade != null && i < calls.length - 1 - o.fade;
+  const ch = cur && o.curH ? o.curH : rowH;
+  return `<div class="call ${cur ? 'cur' : 'old'}${fit && fit.tight ? ' tight' : ''}${faded ? ' faded' : ''}${recent ? ' recent' : ''}${c.status === 'error' ? ' err' : ''}${!meas && state.pick != null && state.pick === c.id ? ' picked' : ''}"${c.id != null ? ` data-call="${E(c.id)}"` : ''}${meas ? ` data-fk="${E(fk)}"` : ''} style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}"><div class="ln">` +
+    (o.checkRight ? '' : ckEl) +
+    `<span class="sig${bare ? ' bare' : args ? '' : ' noargs'}"${(args || bare) && !meas ? ` title="${E(c.name + '(' + full + ')')}"` : ''}><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
+    (o.checkRight && showCk ? ckEl : '') +
+    `<span class="dur" ${c.status === 'running' ? `data-run="${E(c.id)}"` : ''}>${dur}</span></div></div>`;
+}
+/* the fit depends on the row's geometry, not on whether it is current: a current row differs only in colour, unless
+   the mode hides its empty check column (--cur-ck: none, the captions screen) or the row is bold (boldLast) */
+const CUR_CK = new Map();
+const curCkHidden = mode => { let v = CUR_CK.get(mode); if (v == null) { v = getComputedStyle(document.documentElement).getPropertyValue('--cur-ck').trim() === 'none'; CUR_CK.set(mode, v); } return v; };
+const railGeo = (cur, recent, mode) => (cur && curCkHidden(mode) ? 'w' : '') + (recent ? 'b' : '');
+const railKey = (c, geo, w, full) => `${full}|${geo}|${c.status === 'running' ? 'r' : 's'}|${w}`;
+/* fmtArgs once per args object (a call's args are replaced, never edited in place) */
+const railArgs = c => (c._fa && c._fa[0] === c.args && c._fa[1] === c.name ? c._fa[2] : (c._fa = [c.args, c.name, fmtArgs(c.args, c.name)])[2]);
+function railCalls(spec, state, h) {
+  const o = spec.opts || {}, rowH = o.rowH || 37, top = o.top ?? 42, gap = o.gap || 0, reserve = o.reserve || 0;
   const slots = Math.max(1, Math.floor((h - top - reserve + gap) / (rowH + gap)));
-  const calls = state.calls.slice(-slots);
+  return { o, rowH, top, gap, calls: state.calls.slice(-slots) };
+}
+function agent({ spec, state, data, w, h }) {
+  const { o, rowH, top, gap, calls } = railCalls(spec, state, h);
   const meta = o.count ? `${state.callCount} calls` : '';
   let html = head(spec, { ...data, meta: data.meta ?? meta });
   html += `<div class="calls ${o.chips ? 'chips' : ''}">`;
   calls.forEach((c, i) => {
-    const cur = i === calls.length - 1;
-    const y = top + i * (rowH + gap);
-    const ck = c.status === 'running' ? (o.runMark ?? '') : c.status === 'error' ? '✕' : c.status === 'lost' ? '?' : '✓';   // lost: its result fell in a feed drop
-    const showCk = !(cur && o.noCheckCur);
-    const ckEl = `<span class="ck">${showCk ? ck : ''}</span>`;
-    const dur = c.status === 'running' ? fmtDur(state.session.still && c.elapsed_ms != null ? c.elapsed_ms : performance.now() - c.t) : fmtDur(c.dur_ms);
-    const args = fmtArgs(c.args, c.name);
-    const faded = !cur && o.fade != null && i < calls.length - 1 - o.fade;
-    const ch = cur && o.curH ? o.curH : rowH;
-    const recent = o.boldLast && i >= calls.length - o.boldLast;
-    html += `<div class="call ${cur ? 'cur' : 'old'}${faded ? ' faded' : ''}${recent ? ' recent' : ''}${c.status === 'error' ? ' err' : ''}${state.pick != null && state.pick === c.id ? ' picked' : ''}"${c.id != null ? ` data-call="${E(c.id)}"` : ''} style="top:${y}px;height:${ch}px${ch !== rowH ? `;align-items:flex-start;padding-top:${o.curPadT ?? 9}px` : ''}">` +
-      (o.checkRight ? '' : ckEl) +
-      `<span class="sig${args ? '' : ' noargs'}"${args ? ` title="${E(c.name + '(' + args + ')')}"` : ''}><span class="fn">${E(c.name)}</span><span class="pp">(</span><span class="args">${E(args)}</span><span class="pp">)</span></span>` +
-      (o.checkRight && showCk ? ckEl : '') +
-      `<span class="dur" ${c.status === 'running' ? `data-run="${E(c.id)}"` : ''}>${dur}</span></div>`;
+    const cur = i === calls.length - 1, y = top + i * (rowH + gap);
+    html += railRow(c, i, calls, o, state, w, y, rowH, false);
     if (cur && c.progress && o.progress) {
       const p = c.progress;
       html += `<div class="callbar" style="top:${y + rowH + 6}px;left:${o.barL ?? 15}px;right:${o.barR ?? 60}px"><i style="width:${(100 * p.done / p.total).toFixed(1)}%"></i></div>` +
@@ -738,6 +751,110 @@ export function pickedRows(c) {
   if (R.length) { rows.push({ sec: 'Result' }); for (const [k, v] of R.slice(0, 8)) rows.push({ k, v: short(v) }); }
   return rows;
 }
+// the top-level args of a rail string: split on ", " outside brackets and quotes, so "[0.3, 1.5]" or a quoted
+// "a, b" stays one arg and is dropped whole
+function topArgs(t) {
+  const out = []; let d = 0, q = '', from = 0;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) { if (ch === q && t[i - 1] !== '\\') q = ''; continue; }
+    if (ch === '"' || ch === "'") q = ch; else if ('[{('.includes(ch)) d++; else if (']})'.includes(ch)) d = Math.max(0, d - 1);
+    else if (ch === ',' && t[i + 1] === ' ' && d === 0) { out.push(t.slice(from, i)); from = i + 2; i++; }
+  }
+  out.push(t.slice(from)); return out;
+}
+// the width of "…" in an element's font (with its letter-spacing), measured once per font and kept
+const ELL = new Map();
+function ellW(el) {
+  const cs = getComputedStyle(el), key = cs.font + '|' + cs.letterSpacing;
+  let w = ELL.get(key);
+  if (w == null) {
+    const m = document.createElement('span'); m.style.cssText = 'position:absolute;visibility:hidden;white-space:pre'; m.textContent = '…';
+    el.appendChild(m); w = m.getBoundingClientRect().width; m.remove(); ELL.set(key, w);
+  }
+  return w;
+}
+// rail rows: a call whose args do not fit drops whole args, "export(1920x1080, h264, …)", instead of cutting one
+// mid-word ("crf…"); a from→to change is the point of its row, so it is the last arg to go ("set_property(clip4,
+// …, scale: 104% → 112%)"). The full call stays in the hover title. Measured BEFORE the panel is written, on hidden
+// copies of only the rows whose fit is unknown (new row, row no longer current, call settled), while the page's
+// layout is still clean: one small layout, no forced layout of the freshly written panel. Remembered on the call.
+let SANDBOX = null;
+export const PRE = {
+  agent(el, { spec, state, w, h }) {
+    const { o, rowH, top, gap, calls } = railCalls(spec, state, h);
+    let rows = '';
+    calls.forEach((c, i) => { const full = railArgs(c), recent = o.boldLast && i >= calls.length - o.boldLast; if (full && !(c._fit && c._fit.k === railKey(c, railGeo(i === calls.length - 1, recent, state.mode), w, full))) rows += railRow(c, i, calls, o, state, w, top + i * (rowH + gap), rowH, true); });
+    if (!rows) return;
+    /* a hidden box inside this panel, sized like it: its layout is its own (contain:strict), so laying out these rows
+       touches nothing else, and the panel (rewritten next anyway) is the only part of the page it changes */
+    const box = SANDBOX || (SANDBOX = document.createElement('div'));
+    box.className = `calls ${o.chips ? 'chips' : ''}`;
+    box.style.cssText = `position:absolute;left:0;top:0;width:${el.clientWidth}px;height:${el.clientHeight}px;visibility:hidden;pointer-events:none;contain:strict`;
+    box.innerHTML = rows; el.appendChild(box);
+    const rg = document.createRange(), wOf = (tn, i, j) => { rg.setStart(tn, i); rg.setEnd(tn, j); return rg.getBoundingClientRect().width; };
+    for (const row of box.children) {
+      const c = calls.find(x => String(x.id) === row.dataset.call), a = row.querySelector('.args'), tn = a && a.firstChild; if (!c || !tn) continue;
+      let t = null, tight = false;
+      if (a.scrollWidth > a.clientWidth + .5) {
+        const full = tn.nodeValue, parts = topArgs(full), avail = a.getBoundingClientRect().width, ell = ellW(a);
+        const pw = []; let at = 0; for (const q of parts) { pw.push(wOf(tn, at, at + q.length)); at += q.length + 2; }
+        const sep = parts.length > 1 ? wOf(tn, parts[0].length, parts[0].length + 2) : 0;
+        const d = row.querySelector('.dur'), dt = d && d.firstChild && d.firstChild.nodeType === 3 ? d.firstChild : null;
+        /* a settled row may borrow the room the duration column holds for wider values (its min-width beyond its text) */
+        const spare = c.status !== 'running' && dt ? Math.max(0, d.getBoundingClientRect().width - wOf(dt, 0, dt.nodeValue.length)) : 0;
+        /* candidates, most shown first: drop other args from the end (keeping the target and every from→to change),
+           then the target (a change is the point of its row), then — only when the changes themselves cannot fit —
+           the changes from the end, target kept, then the target */
+        const delta = parts.map(q => /→/.test(q)), cands = [], keep = parts.map(() => 1);
+        /* a change too long for the row tightens first: one unit, no spaces round the arrow, "scale 104→112%" for
+           "scale: 104% → 112%"; only when even that cannot fit does it drop its name, "104→112%" — the old and the new
+           value always both show (the name stays in the title). Both are measured from pieces of the same text node. */
+        const tf = parts.map(() => null), cw = parts.map(() => null);
+        parts.forEach((q, i) => {
+          if (!delta[i]) return;
+          const m = /^([^:]+): (.+?) → (.+)$/.exec(q); if (!m) return;
+          let o = 0; for (let j = 0; j < i; j++) o += parts[j].length + 2;
+          const [, k, a, b] = m, ka = o + k.length + 2, ar = ka + a.length + 1, kb = ar + 2;   /* offsets: from value, arrow, to value */
+          const ua = /[^\d.]*$/.exec(a)[0], ub = /[^\d.]*$/.exec(b)[0], one = ua && ua === ub && /\d$/.test(a.slice(0, a.length - ua.length));
+          const a2 = one ? a.slice(0, a.length - ua.length) : a;
+          tf[i] = [`${k} ${a2}→${b}`, wOf(tn, o, o + k.length) + wOf(tn, o + k.length + 1, o + k.length + 2) + wOf(tn, ka, ka + a2.length) + wOf(tn, ar, ar + 1) + wOf(tn, kb, kb + b.length)];
+          cw[i] = [`${a2}→${b}`, wOf(tn, ka, ka + a2.length) + wOf(tn, ar, ar + 1) + wOf(tn, kb, kb + b.length)];   /* values only: both stay visible (Naman 7:37) */
+        });
+        for (let i = parts.length - 1; i >= 1; i--) if (!delta[i]) { keep[i] = 0; cands.push(keep.slice()); }
+        if (delta.some(Boolean)) {
+          if (!delta[0]) { const kp = keep.slice(); kp[0] = 0; cands.push(kp); }
+          for (const f of [3, 2]) if (cw.some(Boolean)) { const kp = keep.map((v, i) => v && cw[i] ? f : v); cands.push(kp.slice()); if (!delta[0]) { kp[0] = 0; cands.push(kp); } }
+          const kp = keep.slice(); for (let i = parts.length - 1; i >= 0; i--) if (delta[i]) { kp[i] = 0; if (kp.some(Boolean)) cands.push(kp.slice()); }
+        }
+        const show = kp => { const out = []; let wd = 0; parts.forEach((q, i) => { if (kp[i] === 1) { out.push(q); wd += pw[i]; } else if (kp[i] === 2) { out.push(cw[i][0]); wd += cw[i][1]; } else if (kp[i] === 3) { out.push(tf[i][0]); wd += tf[i][1]; } else if (out[out.length - 1] !== '…') { out.push('…'); wd += ell; } }); return [out.join(', '), wd + sep * (out.length - 1)]; };
+        let best = null, bestT = false;
+        const tryFit = (txt, wd) => { if (wd <= avail + .05) best = [txt]; else if (spare > 0 && wd <= avail + spare + .05) { best = [txt]; bestT = true; } };
+        const allIn = show(parts.map(() => 1));
+        if (allIn[1] > avail + .05) tryFit(null, allIn[1]);   /* the whole call, in borrowed room */
+        for (const kp of cands) { if (best) break; const [txt, wd] = show(kp); tryFit(txt, wd); }
+        /* last resort, when not even one whole arg fits: the first arg's leading whole words, "lint_frame(1s: low-res …)",
+           never a change (its values stay whole or not at all) and never a cut inside a word */
+        if (!best && !delta[0]) {
+          const q = parts[0]; let sp = q.lastIndexOf(' ');
+          while (sp > 0 && !best) { const head = q.slice(0, sp); if (/\S/.test(head)) tryFit(`${head} …`, wOf(tn, 0, sp) + wOf(tn, sp, sp + 1) + ell); sp = q.lastIndexOf(' ', sp - 1); }
+        }
+        if (!best) tryFit('…', ell);
+        /* narrower still (laid out, not summed: the name itself is at the edge here): "(…)", then the name alone with no
+           parens ("preview_material  300ms"); the call stays whole in the title */
+        if (!best) {
+          const sg = row.querySelector('.sig'), fits = () => sg.scrollWidth <= sg.clientWidth + .5 && a.scrollWidth <= a.clientWidth + .5;
+          if (spare > 0) row.classList.add('tight');
+          a.textContent = '…'; if (fits()) { best = ['…']; bestT = spare > 0; }
+          else { sg.classList.add('bare'); best = ['']; bestT = spare > 0; }   /* even if the name alone still overflows: the least cut */
+        }
+        t = best ? best[0] : '…'; tight = bestT;
+      }
+      c._fit = { k: row.dataset.fk, t, tight };
+    }
+    box.remove();
+  },
+};
 export const POST = {
   cie(el, { spec, w, h }) {
     const cv = el.querySelector('canvas.ciecv'); if (!cv) return;

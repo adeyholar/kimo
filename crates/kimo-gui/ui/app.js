@@ -3,7 +3,7 @@
 // object; a single rAF-batched render paints the current mode.
 import { connect } from './bridge.js';
 import { MODES, inferMode } from './modes.js';
-import { KINDS, POST, tickRunning, pickedRows, TL_PARTS } from './panels.js';
+import { KINDS, PRE, POST, tickRunning, pickedRows, TL_PARTS } from './panels.js';
 import { route, freezeNow } from './router.js';
 
 const DESIGN_W = 1376, DESIGN_H = 768;
@@ -394,6 +394,7 @@ function render() {
     let data = V[name] || {};
     if (name === pickPanel && pickCall) data = { sub: `${pickCall.name}${pickCall.status === 'running' ? '' : ''}`, blocks: pickedRows(pickCall) };   // a clicked rail row, in the existing inspector
     const args = { spec, data, view: V, state, w, h, mode: state.mode, pan: pans[state.mode + ':' + name] };
+    if (PRE[spec.kind]) PRE[spec.kind](el, args);   /* measures on the clean layout, before this panel is written */
     if (!paint(el, fn(args))) continue;
     if (name === pickPanel && pickCall) fitPicked(el);
     if (POST[spec.kind]) POST[spec.kind](el, args);
@@ -434,6 +435,7 @@ main.addEventListener('wheel', onWheel, { passive: false });
 function renderPanel(name) {
   const spec = (MODES[state.mode] || {}).panels[name], el = nodes[name]; if (!spec || !el) return;
   const [w, h] = box(el), V = view(state.mode), args = { spec, data: V[name] || {}, view: V, state, w, h, mode: state.mode, pan: pans[state.mode + ':' + name] };
+  if (PRE[spec.kind]) PRE[spec.kind](el, args);
   if (!paint(el, KINDS[spec.kind](args))) return;
   if (POST[spec.kind]) POST[spec.kind](el, args);
 }

@@ -37,6 +37,16 @@ window.T = sel => [...document.querySelectorAll(sel)].map(e => e.textContent.rep
 window.has = (sel, ...parts) => T(sel).some(s => parts.every(p => s.includes(p)));
 window.hud = s => { const h = document.querySelector('[data-panel=viewer] .hud'); return !!h && h.textContent.includes(s); };
 window.rail = (fn, s) => [...document.querySelectorAll('[data-panel=agent] .call')].some(r => r.textContent.includes(fn) && r.textContent.includes(s));
+/* the QA rows (lint_frame, diff_frames, cache_*): the result is the row's point, but a long one cannot fit the rail.
+   The rail drops whole args and, when not even one fits, keeps that arg's leading whole words ("1s: low-res …").
+   So: the VISIBLE row text (innerText, not hidden textContent) has the tool name and a non-empty word-boundary
+   prefix of the result, and the row's title holds the full result. Stricter than the textContent check it replaces,
+   which passed on text clipped out of sight. The HUD toast, checked by hud(), shows the full result. */
+window.railQA = (fn, s) => [...document.querySelectorAll('[data-panel=agent] .call')].some(r => {
+  const vis = r.innerText.replace(/\n/g, '') /* flex items come back one per line */, t = (r.querySelector('.sig[title]') || r).getAttribute('title') || '', w = s.split(' ');
+  const esc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return vis.includes(fn + '(') && t.includes(s) && new RegExp('(^|[\\s(:,])' + esc(w[0]) + '(?=[\\s,…)]|$)').test(vis);
+});
 window.row = (k, v, from) => [...document.querySelectorAll('[data-panel=pipe] .row')].some(r => r.querySelector('.k').textContent === k && r.querySelector('.v').textContent.endsWith(v) && (from == null || ((r.querySelector('.from') || {}).textContent === from)));
 """
 # per call: the predicate that must be false before the call completes and true after (in the panel the tool owns)
@@ -63,13 +73,13 @@ CHECK = {
   'template_delete':     "T('[data-panel=diff] div').some(s => s === '-template lower_third')",
   'save_project':        "has('[data-panel=hist] .hrow', 'proj.kimo', 'saved', '●') && hud('save_project · proj.kimo + history: 16 undo steps, 1 checkpoint') && has('[data-panel=media] .pfoot', 'save_project: proj.kimo, history')",
   'load_project':        "T('[data-panel=hist] .hrow').length === 1 && has('[data-panel=hist] .hrow', 'proj.kimo', 'loaded') && hud('load_project · proj.kimo: 16 undo steps, 1 checkpoint') && has('[data-panel=media] div', 'Montserrat', 'font missing ×3') && has('[data-panel=media] .pfoot', 'load_project: 5 files, 3 missing')",
-  'cache_set_budget':    "hud('frame cache 512 MB, 0 B used') && rail('cache_set_budget', 'budget: 512 MB')",
-  'cache_clear':         "hud('frame cache cleared · 0 frames, 0 B freed') && rail('cache_clear', 'freed: 0 B, 0 frames')",
-  'diff_frames':         "hud('diff_frames · now 0.5s vs graded 0.5s: 77% changed, major (PSNR 10.5 dB)') && rail('diff_frames', 'changed: 77%, major')",
-  'lint_frame':          "hud('lint_frame 1s · low-res upscale ×1') && rail('lint_frame', 'low-res upscale ×1')",
+  'cache_set_budget':    "hud('frame cache 512 MB, 0 B used') && railQA('cache_set_budget', 'budget: 512 MB')",
+  'cache_clear':         "hud('frame cache cleared · 0 frames, 0 B freed') && railQA('cache_clear', 'freed: 0 B, 0 frames')",
+  'diff_frames':         "hud('diff_frames · now 0.5s vs graded 0.5s: 77% changed, major (PSNR 10.5 dB)') && railQA('diff_frames', 'changed: 77%, major')",
+  'lint_frame':          "hud('lint_frame 1s · low-res upscale ×1') && railQA('lint_frame', 'low-res upscale ×1')",
   # synthetic (see docstring)
   'set_ocio_view_delivery#2': "row('view', 'ACES 1.0 SDR') && !row('view', '✗ ACES 1.0 SDR') && !!document.querySelector('[data-panel=pipe] .row.emb') && row('output', 'Rec.709 sRGB') && !T('[data-panel=pipe] .row').some(s => s.includes('✗'))",
-  'lint_frame#2':        "hud('lint_frame 2s · out of bounds ×1') && rail('lint_frame', 'out of bounds ×1')",
+  'lint_frame#2':        "hud('lint_frame 2s · out of bounds ×1') && railQA('lint_frame', 'out of bounds ×1')",
 }
 SYNTH = [
   {'tool_name': 'set_ocio_view_delivery', 'call_id': 'syn-1', 'phase': 'start', 'target': {}, 'payload': {'args': {'selection': {'config_path': '/cfg/studio.ocio', 'source': 'ACEScg', 'display': 'sRGB', 'view': 'ACES 1.0 SDR', 'input_gamut': 3, 'output_gamut': 0, 'output_transfer': 1}}}},

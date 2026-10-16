@@ -37,7 +37,7 @@ EVENTS = [
   ('transform', 'set_transform', {'param': 'Scale'}, {'from': '104%', 'to': '110%'},
                "[...document.querySelectorAll('[data-panel=insp] .row')].some(r => r.textContent.includes('110%') && r.textContent.includes('104%'))"),
   ('transform', 'set_property',  {'clip_id': 'clip4', 'param': 'scale'}, {'from': 1.04, 'to': 1.12},
-               "[...document.querySelectorAll('[data-panel=agent] .call')].some(r => r.textContent.includes('scale: 104% → 112%'))"),
+               "[...document.querySelectorAll('[data-panel=agent] .call')].some(r => r.textContent.includes('scale: 104% → 112%') || r.textContent.includes('scale 104→112%'))"),
   ('color',     'grade',         {'clip_id': 'clip_04', 'param': 'Temperature'}, {'from': '6050K', 'to': '6200K'},
                "[...document.querySelectorAll('[data-panel=insp] .row')].some(r => r.textContent.includes('6200K'))"),
   ('audio',     'mute_track',    {'track_id': 'A2'}, {'on': True},
