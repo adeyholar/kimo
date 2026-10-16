@@ -91,6 +91,10 @@ pub fn triangulate(views: &[(&Pose, (f64, f64))]) -> Option<V3> {
     let ai = inv3(&a)?; Some(mv(&ai, &b))
 }
 /// Pixel -> ideal (undistorted) normalised coordinates, inverting the radial model by fixed-point iteration.
+/// `#[inline(never)]`: small enough for rustc's automatic cross-crate inlining, and once inlined into a caller's per-pixel loop
+/// (tests/undistort_roundtrip.rs) LLVM 1.99.0 at opt-level 2/3 does not finish optimising that loop (compile hung >15 min). Kept
+/// out of line, the same caller compiles in well under a second; the call is not inlined into any loop by design.
+#[inline(never)]
 pub fn norm_obs(o: (f64, f64), k: &Intr) -> (f64, f64) { let xd = ((o.0 - k.cx) / k.f, (o.1 - k.cy) / k.f); let mut xn = xd; for _ in 0..12 { let r2 = xn.0 * xn.0 + xn.1 * xn.1; let sc = 1.0 + k.k1 * r2 + k.k2 * r2 * r2; xn = (xd.0 / sc, xd.1 / sc); } xn }
 /// Pixel position with lens distortion removed (as if shot with an ideal pinhole of the same focal and principal point).
 pub fn undistort_px(o: (f64, f64), k: &Intr) -> (f64, f64) { let n = norm_obs(o, k); (n.0 * k.f + k.cx, n.1 * k.f + k.cy) }
