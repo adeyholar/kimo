@@ -11,8 +11,10 @@
 // no tool call is ever invisible. Pure data: nothing here touches the DOM.
 
 import { READONLY, inferMode } from './modes.js';
+import { COV_C, pipelineOps, projectOps, qaOps } from './project_ops.js';
 
 export const FAMILIES = [
+  ['pipeline', COV_C.pipeline], ['project', COV_C.project], ['qa', COV_C.qa],   /* project_ops.js: colour pipeline rows, m02 history / diff / batch / media, QA + cache in the HUD toast + rail row */
   ['ingest', /^(import|ingest|add_media|relink|load_media|add_clip|add_track|insert)/],
   ['edit', /^(cut|split|blade|razor|trim|extend|ripple|slip|slide|move_clip|delete_clip|lift|roll)|^(duplicate_clip|swap_clips|loop_clip|freeze_frame|delete_track|set_speed|rate_stretch|set_speed_ramp|group_clips|ungroup_clip|distribute_clips|set_blend|set_echo|set_flow_blur|add_camera_shake|remove_audio_effect|set_track|project_set)$/],
   ['effects', /^(add_effect|apply_effect|set_effect|add_transition|remove_effect|add_speed|set_posterize|add_adjustment)/],
@@ -831,6 +833,9 @@ export function route(ev, state, MODES) {
   if (fam === '3d') sceneOps(state, MODES, ev);
   if (fam === 'graphics') graphicsOps(state, MODES, ev);
   if (fam === 'roto') maskOps(state, MODES, ev);
+  if (fam === 'pipeline') pipelineOps(state, MODES, ev);
+  if (fam === 'project') projectOps(state, MODES, ev);
+  if (fam === 'qa') qaOps(state, MODES, ev);
   if (ev.phase === 'start' && (fam === 'color' || fam === 'effects')) (state._gradeArgs || (state._gradeArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
   if ((fam === 'color' || fam === 'effects') && gradeOps(state, MODES, ev)) ev._kvDone = true;
   if (ev.phase === 'start' && /^(open_project|load_project|new_project|save_project|project_set)$/.test(String(ev.tool_name))) {   // the topbar's project name, from the call's own args
@@ -859,14 +864,14 @@ export function route(ev, state, MODES) {
     const dur = numOf(P.dur_ms) ?? numOf(ev.duration_ms) ?? (t0 != null && ev.ts_ms != null && ev.ts_ms >= t0 ? ev.ts_ms - t0 : null); ev._dur = dur;
     // the landed value replaces the rail's start-time args: "scale: 104% → 112%"
     const landed = !err && param && val != null && fmtVal(val, param) !== '' ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
-    out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(P.result !== undefined ? { result: P.result } : {}), ...(landed ? { args: railArgs(state, landed) } : {}) });
+    out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(P.result !== undefined ? { result: P.result } : {}), ...(landed ? { args: railArgs(state, landed) } : ev._railArgs ? { args: ev._railArgs } : {}) });
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
       if (/false_?colou?r/.test(String(ev.tool_name).toLowerCase())) { v.viewer = v.viewer || {}; v.viewer.falsecolor = { split: P.split ?? .5 }; }
       const hit = timelineOps(state, MODES, ev, fam) | (fam === 'audio' ? audioOps(state, MODES, ev) : false) | (fam === 'export' ? exportOps(state, MODES, ev) : false);
       const df = callDiff(state, ev); if (df) { const te = out.find(x => x.type === 'tool_end'); if (te) te.diff = df; }   // the picked call's Inspector Diff
       const diff = ev._kvDone || inspectorDiff(state, MODES, ev, fam);   // sceneOps already wrote the inspector
-      if (!hit && !diff) hud(state, ev, fam, ev.tool_name + ' ✓'); else hud(state, ev, fam, ev.tool_name + ' ✓');
+      if (!hit && !diff) hud(state, ev, fam, ev.tool_name + ' ✓'); else hud(state, ev, fam, ev._hudText || ev.tool_name + ' ✓');
     } else { if (fam === 'export') exportOps(state, MODES, ev); hud(state, ev, fam, ev.tool_name + ' failed'); }
   }
   return out;
@@ -1200,3 +1205,6 @@ function sceneOps(state, MODES, ev) {
   }
   return hit;
 }
+
+/* helpers project_ops.js reads (it imports them back: ES modules allow the cycle, nothing runs at load) */
+export { now as _now, RAW_ID, findClip, findTrack, timelineView, numOf };

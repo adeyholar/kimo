@@ -258,6 +258,7 @@ body.calls-sans{--call-font:var(--sans)}
 .clip.flash{animation:kflash .7s ease-out 1}
 .trk.flash .lab{animation:kflashrow .7s ease-out 1}
 .kv .row.flash{animation:kflashrow .7s ease-out 1}
+.hrow.flash,.pfoot.flash{animation:kflashrow .7s ease-out 1;border-radius:4px}
 .trk.muted .clip{opacity:.45}
 .trk .ms{position:absolute;top:50%;transform:translateY(-50%);display:flex;gap:3px;z-index:2}
 .trk .ms b{font:600 11px/16px var(--mono);width:16px;text-align:center;border-radius:3px;background:#2a2926;color:var(--text)}

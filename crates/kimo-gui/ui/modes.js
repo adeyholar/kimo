@@ -110,6 +110,9 @@ export const MODES = {
 // Engines that do not announce a mode still drive the view: the tool name
 // picks the workspace. First match wins.
 const RULES = [
+  [/^(set_color_pipeline|set_clip_input_color|set_hdr_mastering|set_ocio_view_delivery)$/, 'color'],   // the Color pipeline list (m05)
+  [/^set_meta$/, 'edit'],                                                                              // names a clip / track on the timeline
+  [/^(load_project|save_project|checkpoint_delete|restore|template_define|template_delete)$/, 'batch'],   // m02 History / Diff / Media
   [/^export|^set_export|render_queue|^(join_export|preview_range|collect_project|contact_sheet|cancel_job|resume_job)$/, 'export'],
   [/caption|transcri|title|text_/, 'captions'],
   [/batch|history|checkpoint|recipe|template_apply|project_diff|relink|undo|redo|collect_project/, 'batch'],

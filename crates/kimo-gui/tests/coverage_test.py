@@ -51,6 +51,9 @@ async def main(strict):
              'transform': 'viewer gizmo: box + 8 handles + anchor, previous pose, move arrow, readout; keyframe diamonds on the clip; motion path, bezier ease, null, parent link',
              '3d': 'camera orbit ring + frustum + pan keys + axis triad, scene objects in the tree, track quad / ROI / mesh grid / point ring / matte seed on the viewer, light glyph + Lights row, mesh op on the Stack, physics bodies, solve RMS',
              'graphics': 'viewer: detection box + label, HUD brackets, box expand, counter, prompt box, shape, path, confetti; Shape layers list + Layer style rows',
+             'pipeline': 'Color pipeline rows (m05): input / working / view / output from -> to, clip input override row, HDR MaxCLL / MaxFALL / Peak',
+             'project': 'm02 History rows (checkpoint, restore, undo / redo, save, load), Diff lines (project_diff, templates), Batch table (batch, recipe, template_apply), Media list + footer (load / save); set_meta renames the clip / track + Inspector Name / Role / Tags',
+             'qa': 'HUD status toast + the call\'s own rail row carry the result: diff_frames A vs B changed %, lint_frame findings, frame cache budget / freed (no mode hop, canvas untouched)',
              'inspect': 'read-only: quiet HUD read state + result pill + peek ring on the target (no mutation, no mode hop)'}
     by = {}
     for n, fam, mode in res: by.setdefault(fam, []).append((n, mode))

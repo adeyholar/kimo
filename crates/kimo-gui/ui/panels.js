@@ -584,9 +584,9 @@ function history({ spec, data, w, h }) {
   html += `<div style="position:absolute;left:${(o.tw ?? 70) / 2 + 15}px;top:${y0 + (o.th ?? 44) / 2}px;height:${step * ((data.items || []).length - 1)}px;width:var(--hist-line-w,1px);background:var(--hist-line,var(--line))"></div>`;
   (data.items || []).forEach((it, i) => {
     const y = y0 + i * step;
-    html += `<div style="position:absolute;left:15px;right:15px;top:${y}px;height:${o.th ?? 44}px;display:flex;align-items:center;gap:12px">` +
+    html += `<div class="hrow${F(it)}" style="position:absolute;left:15px;right:15px;top:${y}px;height:${o.th ?? 44}px;display:flex;align-items:center;gap:12px${it.dim ? ';opacity:.45' : ''}">` +
       `<div class="thumb ${it.sel ? 'sel' : ''}" style="flex:none;width:${o.tw ?? 70}px;height:100%">${it.src ? `<img src="${E(it.src)}">` : ''}</div>` +
-      `<div style="font-family:var(--mono);font-size:var(--hist-fs,12px);line-height:var(--hist-lh,17px)"><div class="cream">${E(it.id)}</div><div class="${o.nameCream ? 'cream' : 'dim'}">${E(it.name)}</div></div>` +
+      `<div style="font-family:var(--mono);font-size:var(--hist-fs,12px);line-height:var(--hist-lh,17px);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><div class="cream" style="overflow:hidden;text-overflow:ellipsis">${E(it.id)}</div><div class="${o.nameCream ? 'cream' : 'dim'}" style="overflow:hidden;text-overflow:ellipsis">${E(it.name)}</div></div>` +
       `<span style="margin-left:auto;font-family:var(--mono);font-size:var(--hist-ago-fs,11.5px);color:var(--ago-c,var(--dim))">${E(it.ago)}${it.live ? ' <span class="em">●</span>' : ''}</span></div>`;
   });
   return html;
@@ -620,7 +620,7 @@ function media({ spec, data, w, h }) {
       `<div class="thumb" style="flex:none;width:${o.tw ?? 38}px;height:${o.thh ?? 24}px">${it.src ? `<img src="${E(it.src)}">` : (it.wave ? `<svg viewBox="0 0 38 24" style="width:38px;height:24px"><path d="${wave(38, 24, 9, .9)}" fill="#8a867d"/></svg>` : '')}</div>` +
       `<span class="cream">${E(it.name)}</span><span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:${o.noteFs ? o.noteFs + 'px' : 'inherit'};${o.noteC ? 'color:' + o.noteC : ''}" class="${it.em ? 'em' : (o.noteC ? '' : 'dim')}">${it.link ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6.5 9.5l3-3M7 4.5l1-1a3 3 0 0 1 4.2 4.2l-1 1M9 11.5l-1 1a3 3 0 0 1-4.2-4.2l1-1"/></svg>' : ''}${E(it.note || '')}</span></div>`;
   });
-  if (data.foot) html += `<div class="pfoot">${E(data.foot)}</div>`;
+  if (data.foot) html += `<div class="pfoot${flashing(data._footFlash) ? ' flash' : ''}">${E(data.foot)}</div>`;
   return html;
 }
 
