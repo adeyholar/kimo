@@ -4,6 +4,52 @@ use kimo_core::{
     pixel_expr::{apply, compile},
 };
 use serde_json::json;
+// Process-global state (guard::BUDGET, the KIMO_EXPR_MAX_OPS env var, the par
+// thread override) is shared by every test in this binary. Tests that write it
+// hold GLOBALS exclusively and restore the prior value on drop (panic included);
+// every other test holds it shared, so no render or limit read sees a swap.
+static GLOBALS: std::sync::RwLock<()> = std::sync::RwLock::new(());
+fn shared() -> std::sync::RwLockReadGuard<'static, ()> {
+    GLOBALS.read().unwrap_or_else(|e| e.into_inner())
+}
+fn exclusive() -> std::sync::RwLockWriteGuard<'static, ()> {
+    GLOBALS.write().unwrap_or_else(|e| e.into_inner())
+}
+struct RestoreBudget(usize);
+impl RestoreBudget {
+    fn swap(v: usize) -> Self {
+        RestoreBudget(kimo_core::guard::BUDGET.swap(v, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+impl Drop for RestoreBudget {
+    fn drop(&mut self) {
+        kimo_core::guard::BUDGET.store(self.0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+struct RestoreEnv(&'static str, Option<std::ffi::OsString>);
+impl RestoreEnv {
+    fn set(k: &'static str, v: &str) -> Self {
+        let prior = std::env::var_os(k);
+        std::env::set_var(k, v);
+        RestoreEnv(k, prior)
+    }
+}
+impl Drop for RestoreEnv {
+    fn drop(&mut self) {
+        match self.1.take() {
+            Some(v) => std::env::set_var(self.0, v),
+            None => std::env::remove_var(self.0),
+        }
+    }
+}
+// par has no getter for its override; every writer here holds GLOBALS
+// exclusively and leaves it at its default 0, so 0 is the prior value.
+struct RestoreThreads;
+impl Drop for RestoreThreads {
+    fn drop(&mut self) {
+        kimo_core::par::set_threads(0);
+    }
+}
 fn frame() -> Frame {
     Frame {
         w: 32,
@@ -15,6 +61,8 @@ fn frame() -> Frame {
 }
 #[test]
 fn identity_invert_gradient_noise_and_threads() {
+    let _globals = exclusive();
+    let _threads = RestoreThreads;
     let f = frame();
     let r = apply(&compile("src", 512).unwrap(), &f, None, [0.; 8], 0.).unwrap();
     assert_eq!(r.d, f.d);
@@ -42,6 +90,7 @@ fn identity_invert_gradient_noise_and_threads() {
 }
 #[test]
 fn shift_matches_rgb_split() {
+    let _globals = shared();
     let f = frame();
     let expression =
         "vec4(red(sample(clamp(x+2,0,w-1)/(w-1),v)),g,blue(sample(clamp(x-2,0,w-1)/(w-1),v)),a)";
@@ -56,6 +105,7 @@ fn shift_matches_rgb_split() {
 }
 #[test]
 fn limits_roundtrip_named_errors_env_and_memory() {
+    let _globals = exclusive();
     let mut s = Session::new();
     let before = serde_json::to_value(&s.project).unwrap();
     let start = s.undo.len();
@@ -77,13 +127,13 @@ fn limits_roundtrip_named_errors_env_and_memory() {
     );
     dispatch(&mut s, "set_limits", &json!({"expr_max_ops":null})).unwrap();
     assert_eq!(s.resource_limits.expr_max_ops, Some(512));
-    std::env::set_var("KIMO_EXPR_MAX_OPS", "19");
+    let _env = RestoreEnv::set("KIMO_EXPR_MAX_OPS", "19");
     let s = Session::new();
     assert_eq!(s.resource_limits.expr_max_ops, Some(19));
-    std::env::remove_var("KIMO_EXPR_MAX_OPS");
 }
 #[test]
 fn caps_nonfinite_compile_position_and_fuzz() {
+    let _globals = shared();
     assert!(compile("sinn(r)", 512)
         .unwrap_err()
         .contains("did you mean 'sin'"));
@@ -112,7 +162,8 @@ fn caps_nonfinite_compile_position_and_fuzz() {
 }
 #[test]
 fn stored_memory_effective_process_cap_and_named_error() {
-    let prior = kimo_core::guard::BUDGET.swap(1024, std::sync::atomic::Ordering::Relaxed);
+    let _globals = exclusive();
+    let _budget = RestoreBudget::swap(1024);
     let mut s = Session::new();
     let r = dispatch(&mut s, "set_limits", &json!({"memory_bytes":2048})).unwrap();
     assert_eq!(r["memory_bytes"]["requested"], 2048);
@@ -124,10 +175,10 @@ fn stored_memory_effective_process_cap_and_named_error() {
             && e.contains("KIMO_MEMORY_BUDGET_BYTES")
             && e.contains("process budget")
     );
-    kimo_core::guard::BUDGET.store(prior, std::sync::atomic::Ordering::Relaxed);
 }
 #[test]
 fn displace_convolution_grade_primitives() {
+    let _globals = shared();
     let mut f = frame();
     let original = f.d.clone();
     let mut strings = std::collections::BTreeMap::new();
@@ -150,6 +201,7 @@ fn displace_convolution_grade_primitives() {
 }
 #[test]
 fn nonfinite_division_and_param_errors() {
+    let _globals = shared();
     for s in ["1/0", "0/0", "sqrt(-1)", "pow(1e30,10)"] {
         assert!(
             apply(&compile(s, 512).unwrap(), &frame(), None, [0.; 8], 0.).is_err(),
@@ -169,6 +221,7 @@ fn nonfinite_division_and_param_errors() {
 }
 #[test]
 fn process_env_override_child() {
+    let _globals = shared();
     if std::env::var("KIMO_LIMIT_CHILD").is_ok() {
         kimo_core::guard::init();
         assert_eq!(
@@ -191,6 +244,7 @@ fn process_env_override_child() {
 }
 #[test]
 fn renderer_expr_limits_and_named_structured_errors() {
+    let _globals = shared();
     let mut s = Session::new();
     dispatch(&mut s, "project_set", &json!({"width":32,"height":16})).unwrap();
     let t = dispatch(&mut s, "add_track", &json!({})).unwrap()["track_id"].clone();
@@ -212,6 +266,7 @@ fn renderer_expr_limits_and_named_structured_errors() {
 }
 #[test]
 fn expression_goldens() {
+    let _globals = shared();
     let f = frame();
     for (name, expr) in [
         ("gradient", "vec4(u,v,0,1)"),
@@ -232,6 +287,8 @@ fn expression_goldens() {
 }
 #[test]
 fn cost_20ops_1080p_report() {
+    let _globals = exclusive();
+    let _threads = RestoreThreads;
     let f = Frame {
         w: 1920,
         h: 1080,
@@ -260,6 +317,7 @@ fn cost_20ops_1080p_report() {
 
 #[test]
 fn slices_expression_reproduces_reference() {
+    let _globals = shared();
     let f = frame();
     let expr = "sample(clamp(x+floor(y/4),0,w-1)/(w-1),v)";
     let o = apply(&compile(expr, 512).unwrap(), &f, None, [0.; 8], 0.).unwrap();
@@ -276,6 +334,7 @@ fn slices_expression_reproduces_reference() {
 }
 #[test]
 fn timeout_and_pixel_cap_edges() {
+    let _globals = shared();
     let f = Frame {
         w: 1920,
         h: 1080,
@@ -293,6 +352,7 @@ fn timeout_and_pixel_cap_edges() {
 }
 #[test]
 fn default_primitives_identity_and_describe() {
+    let _globals = shared();
     for kind in ["pixel_expr", "displace", "convolution", "grade"] {
         let mut f = frame();
         let expected = f.d.clone();
@@ -313,6 +373,7 @@ fn default_primitives_identity_and_describe() {
 }
 #[test]
 fn convolution_cap_and_failure_leave_pixels_unchanged() {
+    let _globals = shared();
     let mut f = frame();
     let before = f.d.clone();
     let mut strings = std::collections::BTreeMap::new();
@@ -330,6 +391,8 @@ fn convolution_cap_and_failure_leave_pixels_unchanged() {
 }
 #[test]
 fn odd_and_single_pixel_edges_thread_identical() {
+    let _globals = exclusive();
+    let _threads = RestoreThreads;
     for (w, h) in [(1, 1), (1, 19), (17, 1), (17, 19), (33, 31)] {
         let src = Frame {
             w,
