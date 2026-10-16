@@ -157,8 +157,8 @@ body{color:var(--cream);font-family:var(--sans);font-size:var(--fs);
 /* ---------- timelines / key editors ---------- */
 .tl{position:absolute;inset:0}
 .ruler{position:absolute;left:0;right:0;height:22px;font-family:var(--ruler-font,var(--mono));font-size:var(--ruler-fs,13px);color:var(--dim)}
-.ruler span{position:absolute;top:4px;transform:translateX(-50%)}
-.ruler i{position:absolute;bottom:0;width:1px;height:6px;background:#4a4844}
+.ruler span{position:absolute;top:var(--ruler-ty,4px);transform:translateX(-50%)}
+.ruler i{position:absolute;bottom:0;width:1px;height:var(--ruler-tick,3px);background:#4a4844}   /* a tick sits under its label, never through the digits */
 .ruler i.mn{height:3px;background:#33312e}
 .trk{position:absolute;left:0;right:0}
 .trk .lab{position:absolute;left:var(--lab-x,10px);top:0;bottom:0;display:flex;align-items:center;font-size:var(--lab-fs,16px);color:var(--lab-c,var(--dim));font-family:var(--label-font)}
