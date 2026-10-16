@@ -11,7 +11,7 @@
 // no tool call is ever invisible. Pure data: nothing here touches the DOM.
 
 import { READONLY, inferMode } from './modes.js';
-import { COV_C, pipelineOps, projectOps, qaOps, space } from './project_ops.js';
+import { COV_C, pipelineOps, projectOps, qaOps, space, C_MUT, cSnap, cRestore, cPush } from './project_ops.js';
 import { COV_A, covAOps, covASee, covAPre, covAHistory } from './cov_a.js';
 import { COVB, covbOps, covbLearn, covbHistory } from './cov_b.js';
 
@@ -828,7 +828,7 @@ function exportOps(state, MODES, ev) {
 
 // Unified event -> legacy rail events + family effects. Returns the legacy
 // events the reducer should apply (the rail), having already mutated views.
-const COV_H = { now, flashing, fmtVal, RAW_ID, findClip, findTrack, ensureTrack, fitRuler, timelineView, modeViews };
+const COV_H = { now, flashing, fmtVal, RAW_ID, findClip, findTrack, ensureTrack, fitRuler, timelineView, modeViews, cRestore };
 // what cov_b.js needs from here (passed in, not imported back: no import cycle)
 const COVB_H = { now: () => now(), fmtVal, gamut: g => space(g, 0) || null, modeViews: (s, M, e) => modeViews(s, M, e),
   clipName: (s, M, id) => { const tl = s.liveTL || panels(s, M, ['timeline'])[0]; const [t, i] = tl ? findClip(tl, { clip_id: id }) : [null]; const lb = t ? t.clips[i].label : null; return lb && !RAW_ID.test(String(lb)) ? String(lb) : null; },
@@ -845,6 +845,7 @@ export function route(ev, state, MODES) {
   if (fam === '3d') sceneOps(state, MODES, ev);
   if (fam === 'graphics') graphicsOps(state, MODES, ev);
   if (fam === 'roto') maskOps(state, MODES, ev);
+  const cBefore = ev.phase === 'complete' && ((ev.payload || {}).mutated === true && C_MUT.test(String(ev.tool_name)) || ev.tool_name === 'load_project') ? cSnap(state, MODES) : null;   /* load_project reports mutated false but is an engine undo step (history_list: next_undo load_project) */   /* lane C's undo step: its panels before the call (project_ops.js) */
   if (fam === 'pipeline') pipelineOps(state, MODES, ev);
   if (fam === 'project') projectOps(state, MODES, ev);
   if (fam === 'qa') qaOps(state, MODES, ev);
@@ -886,11 +887,12 @@ export function route(ev, state, MODES) {
       const tnA = String(ev.tool_name), isA = COV_A.test(tnA), hitA = covAHistory(state, MODES, ev, COV_H, () => isA && covAOps(state, MODES, ev, COV_H));   /* COV-A's own visual + its undo / redo snapshots (cov_a.js) */
       if (hitA && isA) ev._kvDone = true;   /* timelineOps leaves these alone */
       const restoredA = hitA && (tnA === 'undo' || tnA === 'redo');   /* the snapshot is the whole timeline: the step's engine clip list is not applied on top of it */
-      const hit = (restoredA || timelineOps(state, MODES, ev, fam)) | (fam === 'audio' ? audioOps(state, MODES, ev) : false) | (fam === 'export' ? exportOps(state, MODES, ev) : false);
+      const hit = (restoredA || ev._tlDone || timelineOps(state, MODES, ev, fam)) | (fam === 'audio' ? audioOps(state, MODES, ev) : false) | (fam === 'export' ? exportOps(state, MODES, ev) : false);
       const df = callDiff(state, ev); if (df) { const te = out.find(x => x.type === 'tool_end'); if (te) te.diff = df; }   // the picked call's Inspector Diff
       const diff = ev._kvDone || inspectorDiff(state, MODES, ev, fam);   // sceneOps already wrote the inspector
       if (!hit && !diff) hud(state, ev, fam, ev.tool_name + ' ✓'); else hud(state, ev, fam, ev._hudText || ev.tool_name + ' ✓');
-    } else { if (fam === 'export') exportOps(state, MODES, ev); hud(state, ev, fam, ev.tool_name + ' failed'); }
+      if (cBefore) cPush(state, cBefore, cSnap(state, MODES), String(ev.tool_name), P.result);
+    } else { if (fam === 'export') exportOps(state, MODES, ev); hud(state, ev, fam, ev._hudErr || ev.tool_name + ' failed'); }
   }
   return out;
 }
@@ -1225,4 +1227,4 @@ function sceneOps(state, MODES, ev) {
 }
 
 /* helpers project_ops.js reads (it imports them back: ES modules allow the cycle, nothing runs at load) */
-export { now as _now, RAW_ID, findClip, findTrack, timelineView, numOf };
+export { now as _now, RAW_ID, findClip, findTrack, timelineView, numOf, fitRuler };

@@ -283,7 +283,8 @@ export function covAHistory(state, MODES, ev, H, apply) {
     const tl = H.timelineView(state, MODES), from = n === 'undo' ? h.undo : h.redo, to = n === 'undo' ? h.redo : h.undo;
     let k = Math.max(0, Math.round(N(R[n === 'undo' ? 'undone' : 'redone']) ?? 1));
     let last = null;
-    while (k-- > 0 && from.length) { const e = from.pop(); to.push(e); if (!e) continue; last = e; restore(tl, n === 'undo' ? e.before : e.after, H.now());
+    while (k-- > 0 && from.length) { const e = from.pop(); to.push(e); if (!e) continue; last = e; if (e.c) { H.cRestore(state, MODES, n === 'undo' ? e.before : e.after); continue; }   /* a lane-C step (project_ops.js) */
+      restore(tl, n === 'undo' ? e.before : e.after, H.now());
       if (e.gp) { const g = JSON.parse(n === 'undo' ? e.gb : e.ga); for (const key of Object.keys(e.gp)) delete e.gp[key]; Object.assign(e.gp, g); } }
     const left = N(R.undo_left); if (left != null && h.undo.length > left) h.undo.splice(0, h.undo.length - left);   /* re-align with the engine */
     if (last) H.fitRuler(tl);

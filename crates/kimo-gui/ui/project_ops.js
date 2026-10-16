@@ -9,7 +9,7 @@
 //   qa: diff_frames, lint_frame and the frame cache answer in the HUD status toast and keep the result on their
 //     own rail row (Naman 7:24), no mode hop, nothing on the canvas.
 // Never a raw id: clips read as their timeline names, checkpoints and templates by the names the call gave.
-import { _now as now, RAW_ID, findClip, findTrack, timelineView, numOf } from './router.js';
+import { _now as now, RAW_ID, findClip, findTrack, timelineView, numOf, fitRuler } from './router.js';
 
 export const COV_C = {
   pipeline: /^(set_color_pipeline|set_clip_input_color|set_hdr_mastering|set_ocio_view_delivery)$/,
@@ -76,6 +76,7 @@ export function pipelineOps(state, MODES, ev) {
   if (ev.phase !== 'complete' && ev.phase !== 'error') return false;
   const A = (state._covArgs && state._covArgs[ev.call_id]) || P.args || {}; if (state._covArgs) delete state._covArgs[ev.call_id];
   const R = P.result && typeof P.result === 'object' ? P.result : {}, err = ev.phase === 'error';
+  if (err && tn !== 'set_ocio_view_delivery') return false;   /* a refused call leaves the pipeline as it was */
   const S = state._pipe || (state._pipe = { input: null, working: null, view: null, output: null });
   if (tn === 'set_color_pipeline') {
     if (err) return false;
@@ -100,7 +101,8 @@ export function pipelineOps(state, MODES, ev) {
   } else if (tn === 'set_ocio_view_delivery') {
     const sel = A.selection || {}, view = typeof sel.view === 'string' && sel.view ? sel.view : (typeof sel.display === 'string' && sel.display ? sel.display : null);
     if (!view) return false;
-    if (err) { (S._ch || (S._ch = {})).view = { from: null, dim: true }; S.view = '✗ ' + view; S._viewErr = true; }
+    if (err) { (S._ch || (S._ch = {})).view = { from: null, dim: true }; S.view = '✗ ' + view; S._viewErr = true;
+      if (/native-ocio/.test(String(P.error ?? ''))) ev._hudErr = 'set_ocio_view_delivery · engine-disabled: native OCIO is off in this build'; }   /* the engine's own reply: the view is not applied, nothing else changes */
     else {
       if (S._viewErr) { S.view = null; S._viewErr = false; } setPipe(S, 'view', view);
       const og = numOf(sel.output_gamut), out = space(og === 1 ? 1 : og === 0 ? 0 : null, sel.output_transfer); if (out) setPipe(S, 'output', out);
@@ -162,20 +164,19 @@ export function projectOps(state, MODES, ev) {
   const R = P.result && typeof P.result === 'object' ? P.result : {}, err = ev.phase === 'error';
   const n = v => Math.round(numOf(v) ?? 0), pl = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
   let hit = false;
-  if (err) {
-    if (/^(batch|recipe_apply|template_apply)$/.test(tn)) {
-      const name = tn === 'batch' ? (clean(A.label) || 'Batch') : `${tn === 'recipe_apply' ? 'Recipe' : 'Template'} ${A.name ?? ''}`.trim();
-      hit = batchTable(state, MODES, name, P.code === 'batch_failed' ? 'failed · rolled back' : 'failed', []);
-    }
-    ev._kvDone = hit; return hit;
+  if (err) {   /* a refused call changes nothing on screen (COV-C2): its rail row turns to the error state with the engine's words and the HUD says it */
+    if (tn === 'batch' && /rolled back/.test(String(P.error ?? ''))) ev._hudErr = 'batch failed · rolled back, nothing applied';
+    return false;
   }
   switch (tn) {
     case 'checkpoint': {
       const name = R.name ?? A.name; if (!name) break;
       const H = panel(state, MODES, 'batch', 'history'), was = H && (H.items || []).some(x => x._cp && x.id === name);
+      (state._cps || (state._cps = {}))[String(name)] = projSnap(state, MODES);   /* what the project looked like, for restore */
       hit = histPush(state, MODES, { id: String(name), name: was ? 'checkpoint · replaced' : 'checkpoint', _cp: true }, { replace: true }); break;
     }
     case 'checkpoint_delete': {
+      if (state._cps) delete state._cps[String(A.name)];
       const H = panel(state, MODES, 'batch', 'history'); if (!H) break;
       const it = (H.items || []).find(x => x._cp && x.id === A.name);
       if (it) { it.name = 'deleted'; it.dim = true; it.live = false; it._cp = false; it._flash = now(); hit = true; }
@@ -187,7 +188,9 @@ export function projectOps(state, MODES, ev) {
       const name = R.restored ?? A.name; if (!name) break;
       const H = panel(state, MODES, 'batch', 'history'), cp = H && (H.items || []).find(x => x._cp && x.id === name);
       hit = histPush(state, MODES, { id: 'restore', name: String(name), src: cp && cp.src }, { sel: cp });
-      if (cp) { cp._flash = now(); } ev._hudText = `restore · back to ${name}`; break;
+      if (cp) { cp._flash = now(); } ev._hudText = `restore · back to ${name}`;
+      const S = state._cps && state._cps[String(name)]; if (S) { projApply(state, MODES, S); ev._tlDone = true; }   /* the timeline and the pipeline go back to the checkpoint */
+      break;
     }
     case 'undo': case 'redo': {
       const k = n(R[tn === 'undo' ? 'undone' : 'redone'] ?? A.steps ?? 1);
@@ -198,12 +201,14 @@ export function projectOps(state, MODES, ev) {
       const f = base(R.path ?? A.path) || 'project';
       const hist = R.history != null || A.with_history;
       hit = histPush(state, MODES, { id: f, name: 'saved' });
+      (state._saved || (state._saved = {}))[String(R.path ?? A.path)] = projSnap(state, MODES);   /* a later load_project of this file shows it again */
       ev._hudText = `save_project · ${f}${hist ? ` + history: ${pl(n(R.undo_steps), 'undo step')}, ${pl(n(R.checkpoints), 'checkpoint')}` : ''}`;
       mediaFoot(state, MODES, `save_project: ${f}${hist && R.history_bytes != null ? `, history ${bytes(R.history_bytes)}` : ''}`); break;
     }
     case 'load_project': {
       const f = base(A.path) || 'project';
       hit = histPush(state, MODES, { id: f, name: 'loaded' }, { reset: true });
+      const S = state._saved && state._saved[String(A.path)]; if (S) { projApply(state, MODES, S); ev._tlDone = true; }   /* a file this window saw saved: its timeline and pipeline */
       ev._hudText = `load_project · ${f}${R.undo_steps != null ? `: ${pl(n(R.undo_steps), 'undo step')}, ${pl(n(R.checkpoints), 'checkpoint')}` : ''}`;
       const D = R.dependencies && typeof R.dependencies === 'object' ? R.dependencies : null;
       if (D) {
@@ -247,20 +252,26 @@ export function projectOps(state, MODES, ev) {
         const who = clipName(state, MODES, a.clip_id) || clean(a.name) || clean(a.track_id) || `op ${(x.index ?? 0) + 1}`;
         return [who, String(x.tool ?? op.tool ?? ''), R.dry_run ? 'dry run' : warn.has(x.index) ? 'warned' : 'done'];
       });
-      hit = batchTable(state, MODES, clean(A.label) ? 'Batch ' + A.label : 'Batch', `${n(R.applied ?? rows.length)} / ${ops.length || rows.length}`, rows); break;
+      hit = batchTable(state, MODES, clean(A.label) ? 'Batch ' + A.label : 'Batch', `${n(R.applied ?? rows.length)} / ${ops.length || rows.length}`, rows);
+      if (!R.dry_run) { batchTimeline(state, MODES, ops, res); ev._tlDone = true; } break;
     }
     case 'recipe_apply': {
       const name = (R.recipe && R.recipe.name) || A.name || 'recipe';
       const roles = R.roles && typeof R.roles === 'object' ? Object.keys(R.roles) : [];
       const rows = roles.map(k => [k.split('/').pop(), String(name), R.dry_run ? 'dry run' : 'added']);
-      hit = batchTable(state, MODES, 'Recipe ' + name, `${pl(n(R.applied), 'op')}`, rows.length ? rows : [[String(name), 'recipe', R.dry_run ? 'dry run' : 'done']]); break;
+      hit = batchTable(state, MODES, 'Recipe ' + name, `${pl(n(R.applied), 'op')}`, rows.length ? rows : [[String(name), 'recipe', R.dry_run ? 'dry run' : 'done']]);
+      if (!R.dry_run) { const pr = A.params && typeof A.params === 'object' ? A.params : {}, txt = [pr.title, pr.text, pr.name].find(v => typeof v === 'string' && clean(v));
+        layerClips(state, MODES, P, R.created && Array.isArray(R.created.clip_ids) ? R.created.clip_ids : [], `${name}${txt ? ' · ' + txt : ''}`); ev._tlDone = true; }
+      break;
     }
     case 'template_apply': {
       const name = R.template ?? A.name ?? 'template';
       const created = Array.isArray(R.created) ? R.created : (R.created && Array.isArray(R.created.clip_ids) ? R.created.clip_ids : []);
       const label = clean(P.label) || (R.args && typeof R.args === 'object' ? Object.values(R.args).find(v => typeof v === 'string' && clean(v)) : null);
       const rows = created.map((c, i) => [clipName(state, MODES, c) || (i === 0 && label) || `clip ${i + 1}`, String(name), R.dry_run ? 'dry run' : 'added']);
-      hit = batchTable(state, MODES, 'Template ' + name, pl(n(R.applied_ops ?? R.count), 'op'), rows.length ? rows : [[label || String(name), String(name), R.dry_run ? 'dry run' : 'done']]); break;
+      hit = batchTable(state, MODES, 'Template ' + name, pl(n(R.applied_ops ?? R.count), 'op'), rows.length ? rows : [[label || String(name), String(name), R.dry_run ? 'dry run' : 'done']]);
+      if (!R.dry_run) { layerClips(state, MODES, P, created, label || String(name)); ev._tlDone = true; }
+      break;
     }
     case 'set_meta': hit = metaOps(state, MODES, A, R); break;
   }
@@ -344,4 +355,76 @@ export function qaOps(state, MODES, ev) {
   } else return false;
   ev._railArgs = rail; ev._hudText = toast; ev._kvDone = true;
   return true;
+}
+
+
+// ---------- COV-C2: undo / redo, restore and load for this lane's own state ----------
+// The engine's undo / redo / restore / load_project events carry no state, so the window keeps what it drew:
+// a mutating lane-C call stores the lane's panels before and after it on the shared undo stack (cov_a.js
+// covAHistory, aligned with the engine by undo_left), a checkpoint / save_project keeps the project's timeline
+// and pipeline under its name / path, and undo, redo, restore and load_project put those back.
+export const C_MUT = /^(set_color_pipeline|set_clip_input_color|set_hdr_mastering|set_meta|restore|batch|recipe_apply|template_apply|template_define|template_delete|load_project)$/;
+const noFlash = (k, v) => (k === '_flash' || k === '_footFlash' ? undefined : v);
+const clone = x => (x == null ? null : JSON.parse(JSON.stringify(x, noFlash)));
+function tlSnap(state, MODES) { const tl = timelineView(state, MODES) || {}; return clone({ tracks: tl.tracks || [], markers: (tl.markers || []).filter(m => !m.gone), mc: tl._mc || {} }); }
+function projSnap(state, MODES) { return { pipe: clone(state._pipe || null), tl: tlSnap(state, MODES) }; }
+const VIEWS = [['color', 'kv'], ['edit', 'kv'], ['batch', 'diffbatch'], ['batch', 'media']];
+export function cSnap(state, MODES) { return { ...projSnap(state, MODES), v: VIEWS.map(([m, k]) => clone(panel(state, MODES, m, k))) }; }
+function tlApply(state, MODES, s, t) {
+  const tl = timelineView(state, MODES); if (!tl || !s) return;
+  const key = tr => JSON.stringify((tr.clips || []).map(c => [c.id, c.s, c.e, c.label, c.fx, (c.keys || []).length]));
+  const before = new Map((tl.tracks || []).map(tr => [tr.id, key(tr) + '|' + tr.label]));
+  tl.tracks = clone(s.tracks);
+  for (const tr of tl.tracks) if (before.get(tr.id) !== key(tr) + '|' + tr.label) { tr._flash = t; for (const c of tr.clips || []) c._flash = t; }
+  const gone = (tl.markers || []).filter(m => !m.gone && !s.markers.some(x => x.id === m.id)).map(m => ({ ...m, gone: t }));
+  tl.markers = [...clone(s.markers), ...gone]; tl._mc = clone(s.mc);
+  fitRuler(tl);
+}
+function pipeApply(state, MODES, pipe) {
+  if (!pipe) { if (state._pipe) { state._pipe = null; const kv = panel(state, MODES, 'color', 'kv'); if (kv) kv.blocks = []; } return; }   /* back to a project with no pipeline set: the list empties */
+  const cur = state._pipe || {}, nx = clone(pipe) || { input: null, working: null, view: null, output: null };
+  const ch = {};   /* every row whose value moves flashes, from -> to where it fits */
+  for (const k of ['input', 'working', 'view', 'output']) if ((cur[k] ?? null) !== (nx[k] ?? null)) ch[k] = { from: cur[k] ?? null };
+  for (const [k, v] of Object.entries(nx.clips || {})) if ((cur.clips || {})[k] !== v) ch['clip:' + k] = { from: (cur.clips || {})[k] ?? null };
+  for (const [k, v] of Object.entries(nx.hdr || {})) if ((cur.hdr || {})[k] !== v) ch['hdr:' + k] = { from: (cur.hdr || {})[k] ?? null };
+  nx._ch = ch; state._pipe = nx;
+  if (pipe || state._pipe) pipeRows(state, MODES);
+}
+function projApply(state, MODES, S) { const t = now(); tlApply(state, MODES, S.tl, t); if (S.pipe || state._pipe) pipeApply(state, MODES, S.pipe); }
+export function cRestore(state, MODES, S) {   /* undo / redo of a lane-C step: its panels exactly as they were */
+  const t = now();
+  tlApply(state, MODES, S.tl, t);
+  state._pipe = clone(S.pipe);
+  VIEWS.forEach(([m, k], i) => {
+    const o = panel(state, MODES, m, k); if (!o) return;
+    const was = JSON.stringify(o, noFlash), nx = S.v[i] || {};
+    for (const key of Object.keys(o)) delete o[key];
+    Object.assign(o, clone(nx));
+    if (was !== JSON.stringify(o, noFlash)) { if (k === 'media') o._footFlash = t; else if (k === 'kv') for (const b of o.blocks || []) { if (!b.sec) b._flash = t; } else o._flash = t; }
+  });
+}
+export function cPush(state, before, after, tool, R) {   /* the step covAHistory just pushed for this call gets the lane's snapshots */
+  const h = state._covHist || (state._covHist = { undo: [], redo: [] });
+  if (tool === 'load_project') {   /* the engine's stack is now the file's history plus the load itself: steps this window never saw stay blank */
+    const k = Math.max(0, Math.round(numOf(R && R.undo_steps) ?? 0));
+    h.undo = [...Array(Math.min(k, 47)).fill(null), { tool, c: true, before, after }]; h.redo = []; return;
+  }
+  if (!h.undo.length || h.undo[h.undo.length - 1] !== null) return;
+  h.undo[h.undo.length - 1] = { tool, c: true, before, after };
+}
+function batchTimeline(state, MODES, ops, res) {   /* trims / moves the batch applied, from the engine's own per-op results */
+  const tl = timelineView(state, MODES); if (!tl) return; const t = now();
+  for (const r of res) {
+    const op = ops[r.index] || {}, a = op.args || {}, b = r.result_brief && typeof r.result_brief === 'object' ? r.result_brief : {};
+    const [tr, i] = findClip(tl, { clip_id: a.clip_id }); if (!tr) continue; const c = tr.clips[i];
+    if (op.tool === 'trim_clip' && numOf(b.duration) != null) { c.e = c.s + numOf(b.duration); c._flash = t; }
+    else if (op.tool === 'move_clip' && numOf(a.start ?? a.to) != null) { const d = c.e - c.s; c.s = numOf(a.start ?? a.to); c.e = c.s + d; c._flash = t; tr.clips.sort((x, y) => x.s - y.s); }
+  }
+  fitRuler(tl);
+}
+function layerClips(state, MODES, P, ids, label) {   /* template / recipe output: layered OVER the track's clips (the engine stacks them; nothing underneath is cut) */
+  const tl = timelineView(state, MODES), tr = tl && findTrack(tl, P.track); if (!tr) return;
+  const s = numOf(P.s), e = numOf(P.e); if (s == null || e == null || !ids.length) return;
+  tr.clips = [...(tr.clips || []), { id: String(ids[0]), ids: ids.map(String), s, e, label, layer: true, ...(ids.length > 1 ? { fx: [ids.length + ' layers'] } : {}), _flash: now() }].sort((a, b) => a.s - b.s);
+  tr._flash = now(); fitRuler(tl);
 }
