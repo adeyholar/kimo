@@ -12,9 +12,11 @@
 
 import { READONLY, inferMode } from './modes.js';
 import { COV_C, pipelineOps, projectOps, qaOps } from './project_ops.js';
+import { COV_A, covAOps, covASee, covAPre } from './cov_a.js';
 
 export const FAMILIES = [
   ['pipeline', COV_C.pipeline], ['project', COV_C.project], ['qa', COV_C.qa],   /* project_ops.js: colour pipeline rows, m02 history / diff / batch / media, QA + cache in the HUD toast + rail row */
+  ['edit', COV_A],   /* markers, cut / beat detection, beat binding, silence cuts, time mode, sync, multicam, burn-in, raw transition, event matching: cov_a.js */
   ['ingest', /^(import|ingest|add_media|relink|load_media|add_clip|add_track|insert)/],
   ['edit', /^(cut|split|blade|razor|trim|extend|ripple|slip|slide|move_clip|delete_clip|lift|roll)|^(duplicate_clip|swap_clips|loop_clip|freeze_frame|delete_track|set_speed|rate_stretch|set_speed_ramp|group_clips|ungroup_clip|distribute_clips|set_blend|set_echo|set_flow_blur|add_camera_shake|remove_audio_effect|set_track|project_set)$/],
   ['effects', /^(add_effect|apply_effect|set_effect|add_transition|remove_effect|add_speed|set_posterize|add_adjustment)/],
@@ -823,9 +825,11 @@ function exportOps(state, MODES, ev) {
 
 // Unified event -> legacy rail events + family effects. Returns the legacy
 // events the reducer should apply (the rail), having already mutated views.
+const COV_H = { now, flashing, fmtVal, RAW_ID, findClip, findTrack, ensureTrack, fitRuler, timelineView, modeViews };
 export function route(ev, state, MODES) {
   if (!ev || ev.type || !ev.tool_name) return [ev];        // legacy or non-tool event: unchanged
   ev = assetNames(ev, state);
+  if (COV_A.test(String(ev.tool_name))) ev = covAPre(state, ev, COV_H);   /* rail args read as names; raw args kept for covAOps */
   const fam = family(ev.tool_name), id = ev.call_id ?? ev.tool_name + '@' + (ev.ts ?? '');
   const out = [];
   if (fam === 'inspect') return inspectOps(state, MODES, ev, id);
@@ -868,6 +872,8 @@ export function route(ev, state, MODES) {
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
       if (/false_?colou?r/.test(String(ev.tool_name).toLowerCase())) { v.viewer = v.viewer || {}; v.viewer.falsecolor = { split: P.split ?? .5 }; }
+      if (ev.tool_name === 'add_captions') covASee(state, ev);
+      if (COV_A.test(String(ev.tool_name)) && covAOps(state, MODES, ev, COV_H)) ev._kvDone = true;   /* its own visual (cov_a.js); timelineOps leaves these alone */
       const hit = timelineOps(state, MODES, ev, fam) | (fam === 'audio' ? audioOps(state, MODES, ev) : false) | (fam === 'export' ? exportOps(state, MODES, ev) : false);
       const df = callDiff(state, ev); if (df) { const te = out.find(x => x.type === 'tool_end'); if (te) te.diff = df; }   // the picked call's Inspector Diff
       const diff = ev._kvDone || inspectorDiff(state, MODES, ev, fam);   // sceneOps already wrote the inspector

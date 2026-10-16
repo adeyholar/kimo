@@ -2,6 +2,7 @@
 // returns markup; geometry comes from the measured panel box and fixed row
 // heights, so a value changing never changes a box.
 import { flashing, METER_MS, GIZMO_MS } from './router.js';
+import { covAPost } from './cov_a.js';
 const F = o => (o && flashing(o._flash) ? ' flash' : '') + (o && flashing(o._peek) ? ' peek' : '');
 const E = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const px = n => Math.round(n * 10) / 10;
@@ -450,12 +451,13 @@ function timeline({ spec, data, w, h, pan }) {
       const c = CL[ci], a = X(c.s), b = X(c.e);
       if (b < x0 - 1 || a > x1 + 1) continue;
       const fl = F(c).trim();
-      if (b - a < MINW && !c.keys && (!fl || nf > FLASH_SOLO) && !c.pill && !c.cls && !c.bg && !c.thumb && !c.cover && !c.fx) { if (run && a <= run[1] + 1) { run[2].push(a); run[1] = Math.max(run[1], b); if (fl) run[3] = ' ' + fl; } else { flush(); run = [a, b, [], fl ? ' ' + fl : '']; } continue; }
+      if (b - a < MINW && !c.keys && (!fl || nf > FLASH_SOLO) && !c.pill && !c.cls && !c.bg && !c.thumb && !c.cover && !c.fx && !c.beats) { if (run && a <= run[1] + 1) { run[2].push(a); run[1] = Math.max(run[1], b); if (fl) run[3] = ' ' + fl; } else { flush(); run = [a, b, [], fl ? ' ' + fl : '']; } continue; }
       flush();
       const nx = CL[ci + 1], xn = nx && nx.s != null ? X(nx.s) : null, cw = xn != null && xn > a + 2 && xn < b + 1 ? px(xn) - px(a) - 1 : b - a;   /* back to back (or the next clip laid over this one's tail): this clip ends 1 px before the next */
       tr += `<div class="clip ${c.cls || ''}${F(c)}" style="left:${px(a)}px;width:${px(cw)}px${c.bg ? ';background:' + c.bg : ''}">` +
         (c.thumb ? `<span class="ct"><img src="${E(c.thumb)}" alt=""></span>` : c.sw ? '<span class="ct sw"></span>' : '') + (c.cover ? `<img src="${E(c.cover)}" alt="">` : '') + (c.label ? `<span class="cl">${E(c.label)}</span>` : '') +
         (c.pill ? `<span class="cpill">${E(c.pill)}</span>` : '') +
+        (c.beats ? c.beats.map(t => `<i class="cbeat" style="left:${px(X(t) - a)}px"></i>`).join('') : '') +
         (c.keys ? c.keys.map(k => `<i class="ckey${k.em ? ' em' : ''}" style="left:${px(X(k.t) - a)}px"></i>`).join('') : '') +
         (c.fx ? (o.fxRow ? `<span class="fxrow">${c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')}</span>` : c.fx.map(f => `<span class="fxchip">${E(f)}</span>`).join('')) : '') + '</div>';
     }
@@ -472,6 +474,7 @@ function timeline({ spec, data, w, h, pan }) {
     post += `<div class="tlbar" style="left:${x0}px;width:${px(W)}px;top:${(o.rulerY ?? 6) + 23}px"><i style="left:${px(a)}px;width:${px(bw)}px"></i></div>`; }
   if (k0 + below > 0) { const ty = o.trackY ?? 30, H = h - ty - 8, n = TR.length, vis = n - k0 - below;
     post += `<div class="tlbar v" style="top:${ty}px;height:${px(H)}px"><i style="top:${px(k0 / n * H)}px;height:${px(vis / n * H)}px"></i></div>`; }
+  post += covAPost(data, X, o, inView, flashing);   /* markers, detected cuts, silence joints */
   html += post + '</div>';
   TL_PARTS = { html, pre, tracks, post };
   if (RUNS_NEXT.size) { RUNS = RUNS_NEXT; RUNS_NEXT = new Map(); }
@@ -558,7 +561,7 @@ function curves({ spec, data, w, h }) {
   for (let i = 0; i <= hl; i++) { const y = gy0 + i * (gy1 - gy0) / hl; s += `<line x1="${o.bandX ?? x0}" x2="${w}" y1="${px(y)}" y2="${px(y)}" stroke="${gl}"/>`; }
   for (let t = r.first ?? r.t0; t <= r.t1; t += r.step) s += `<line x1="${px(X(t))}" x2="${px(X(t))}" y1="${o.vTop ?? gy0 - 6}" y2="${gy1}" stroke="${gl}"/>`;
   const bs = o.beatS ?? 4;
-  if (data.beats) for (let t = data.beats.t0; t <= r.t1; t += data.beats.step) { const x = X(t), y = o.beatY ?? 14; s += `<path d="M${px(x)} ${y - bs} L${px(x + bs)} ${y} L${px(x)} ${y + bs} L${px(x - bs)} ${y}Z" fill="#d9d4c9"/>`; }
+  if (data.beats) for (const t of data.beats.list || (function* () { for (let t = data.beats.t0; t <= r.t1; t += data.beats.step) yield t; })()) { const x = X(t), y = o.beatY ?? 14; s += `<path d="M${px(x)} ${y - bs} L${px(x + bs)} ${y} L${px(x)} ${y + bs} L${px(x - bs)} ${y}Z" fill="#d9d4c9"/>`; }
   const V = v => gy1 - v * (gy1 - gy0);
   const ks = o.keyS ?? 7;
   for (const c of data.curves || []) {
