@@ -17,8 +17,8 @@ pub fn shade_shadowed(material:&Material,point:[f64;3],normal:[f64;3],eye:[f64;3
   let nl=dot(n,l).max(0.);let brdf=sample(material,n,l,view)?;for j in 0..3{out[j]+=(brdf.diffuse[j]+brdf.specular[j])*rgb[j]*v*nl;}}
  if out.iter().any(|v|!v.is_finite()||*v>f32::MAX as f64){return Err("radiance overflow".into());}Ok(out)}
 
-/// Image-based lighting contribution (no direct lights): specular = prefiltered(R,alpha)
-/// * (F0*lut.x + lut.y); diffuse = irradiance(n)/PI * albedo * (1-metallic) * (1-F_ibl),
+/// Image-based lighting contribution (no direct lights): specular = prefiltered(R,alpha) *
+/// (F0*lut.x + lut.y); diffuse = irradiance(n)/PI * albedo * (1-metallic) * (1-F_ibl),
 /// matching the glTF energy gating used by sample(). Constant-env output agrees with a
 /// direct Monte Carlo integral of sample() to measured sampling noise (test-pinned band).
 pub fn shade_ibl(material:&Material,point:[f64;3],normal:[f64;3],eye:[f64;3],ibl:&super::ibl::IblSet)->Result<[f64;3],String>{ibl.validate()?;shade_ibl_validated(material,point,normal,eye,ibl)}

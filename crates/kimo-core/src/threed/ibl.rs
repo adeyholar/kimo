@@ -60,7 +60,7 @@ impl EnvMap{
  // Only called after full buffer validation at an immutable public operation boundary.
  pub(super) fn sample_validated(&self,dir:[f64;3])->Result<[f64;3],String>{if dir.iter().any(|v|!v.is_finite())||dir.iter().all(|v|*v==0.0){return Err("finite nonzero direction required".into());}let d=super::vertex_stream::unit(dir)?;let u=d[2].atan2(d[0])/std::f64::consts::TAU+0.5;let v=d[1].clamp(-1.,1.).acos()/std::f64::consts::PI;
   let x=u*self.width as f64-0.5;let y=(v*self.height as f64-0.5).clamp(0.,(self.height-1)as f64);let x0=x.floor();let fx=x-x0;let y0=y.floor()as usize;let fy=y-y0 as f64;let i0=(x0 as i64).rem_euclid(self.width as i64)as usize;let i1=(i0+1)%self.width;let j1=(y0+1).min(self.height-1);let mut out=[0.;3];
-  for(w_,j,i)in[((1.-fx)*(1.-fy),y0,i0),(fx*(1.-fy),y0,i1),((1.-fx)*fy,j1,i0),(fx*fy,j1,i1)]{for k in 0..3{out[k]+=w_*self.texels[j*self.width+i][k]as f64;}}Ok(out)}
+  for(w_,j,i)in[((1.-fx)*(1.-fy),y0,i0),(fx*(1.-fy),y0,i1),((1.-fx)*fy,j1,i0),(fx*fy,j1,i1)]{for(k,o)in out.iter_mut().enumerate(){*o+=w_*self.texels[j*self.width+i][k]as f64;}}Ok(out)}
 }
 fn tangent_basis(n:[f64;3])->([f64;3],[f64;3]){let cr=|a:[f64;3],b:[f64;3]|[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];let un=|a:[f64;3]|{let l=(a[0]*a[0]+a[1]*a[1]+a[2]*a[2]).sqrt();[a[0]/l,a[1]/l,a[2]/l]};let t=if n[2].abs()<0.999{un(cr([0.,0.,1.],n))}else{un(cr([1.,0.,0.],n))};(t,cr(n,t))}
 fn valid_dir_samples(name:&str,d:[f64;3],samples:usize)->Result<(),String>{if d.iter().any(|v|!v.is_finite())||d.iter().all(|v|*v==0.0)||samples==0||samples>65536{return Err(format!("finite nonzero {name} direction and 1..=65536 samples required"));}Ok(())}
@@ -90,7 +90,7 @@ impl BrdfLut{
  /// Bilinear sample at (ndotv, alpha) over texel centers, clamped to the grid.
  pub fn sample(&self,ndotv:f64,alpha:f64)->Result<[f64;2],String>{self.validate()?;self.sample_validated(ndotv,alpha)}
  pub(super) fn sample_validated(&self,ndotv:f64,alpha:f64)->Result<[f64;2],String>{if !ndotv.is_finite()||!alpha.is_finite(){return Err("finite ndotv/alpha required".into());}let n=self.size as f64;let x=(ndotv.clamp(0.,1.)*n-0.5).clamp(0.,(self.size-1)as f64);let y=(alpha.clamp(0.,1.)*n-0.5).clamp(0.,(self.size-1)as f64);let x0=x.floor()as usize;let y0=y.floor()as usize;let fx=x-x0 as f64;let fy=y-y0 as f64;let x1=(x0+1).min(self.size-1);let y1=(y0+1).min(self.size-1);
-  let t=|xx:usize,yy:usize|self.texels[yy*self.size+xx];let mut out=[0.;2];for k in 0..1+1{let a=t(x0,y0)[k]as f64;let b=t(x1,y0)[k]as f64;let c=t(x0,y1)[k]as f64;let d=t(x1,y1)[k]as f64;out[k]=(1.-fy)*((1.-fx)*a+fx*b)+fy*((1.-fx)*c+fx*d);}Ok(out)}
+  let t=|xx:usize,yy:usize|self.texels[yy*self.size+xx];let mut out=[0.;2];for(k,o)in out.iter_mut().enumerate(){let a=t(x0,y0)[k]as f64;let b=t(x1,y0)[k]as f64;let c=t(x0,y1)[k]as f64;let d=t(x1,y1)[k]as f64;*o=(1.-fy)*((1.-fx)*a+fx*b)+fy*((1.-fx)*c+fx*d);}Ok(out)}
 }
 /// Baked IBL set: cosine-convolved irradiance, per-alpha prefiltered levels, BRDF LUT.
 #[derive(Clone,Debug,Serialize,Deserialize)]pub struct IblSet{pub irradiance:EnvMap,pub prefiltered:Vec<EnvMap>,pub lut:BrdfLut}

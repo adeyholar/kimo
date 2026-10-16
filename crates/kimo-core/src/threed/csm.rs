@@ -72,10 +72,10 @@ pub fn frustum_slice_corners(cam:&Camera,aspect:f64,d0:f64,d1:f64)->Result<[[f64
  let hy=cam.sensor_height/(2.*cam.focal_length); // tan of the vertical half-angle
  let hx=aspect*hy;
  let mut out=[[0.;3];8];
- for k in 0..8{
+ for(k,corner)in out.iter_mut().enumerate(){
   let d=if k&4==0{d0}else{d1};
   let q=[if k&1==0{-hx*d}else{hx*d},if k&2==0{-hy*d}else{hy*d},d];
-  out[k]=world_from_camera(cam,q)?;
+  *corner=world_from_camera(cam,q)?;
  }
  Ok(out)
 }
@@ -117,7 +117,7 @@ pub fn slice_sphere(corners:&[[f64;3];8])->([f64;3],f64){
 pub fn fit_cascade(travel_direction:[f64;3],cam:&Camera,aspect:f64,near:f64,far:f64,scene_aabb:[[f64;3];2],map_size:usize)->Result<Cascade,String>{
  if scene_aabb.iter().flatten().any(|v|!v.is_finite()){return Err("finite scene bounds required".into());}
  if (0..3).any(|j|scene_aabb[1][j]<scene_aabb[0][j]||!(scene_aabb[1][j]-scene_aabb[0][j]).is_finite()){return Err("ordered finite-span scene bounds required".into());}
- if map_size<2||map_size>4096{return Err("cascade fit map 2..4096 per axis".into());}
+ if !(2..=4096).contains(&map_size){return Err("cascade fit map 2..4096 per axis".into());}
  // Validate the slice before deriving its radius in camera space, avoiding translation
  // and roll dependent roundoff in world-space corner subtraction.
  frustum_slice_corners(cam,aspect,near,far)?;
@@ -129,7 +129,7 @@ pub fn fit_cascade(travel_direction:[f64;3],cam:&Camera,aspect:f64,near:f64,far:
  let texel=(2.*radius)/(map_size-1) as f64;
  if !texel.is_finite()||texel<=0.{return Err("cascade texel size underflow".into());}
  let cl=mv(&view,[center[0],center[1],center[2],1.]);
- let phase=if map_size%2==0{0.}else{0.5};
+ let phase=if map_size.is_multiple_of(2){0.}else{0.5};
  let snap=|x:f64|((x/texel-phase).round()+phase)*texel;
  let snapped=[snap(cl[0]),snap(cl[1])];
  let half=map_size as f64*texel*0.5;
@@ -145,6 +145,7 @@ pub fn fit_cascade(travel_direction:[f64;3],cam:&Camera,aspect:f64,near:f64,far:
 }
 
 /// Full cascade set: practical split over [near, far], one fit per cascade.
+#[allow(clippy::too_many_arguments)] // public API mirroring fit_cascade's inputs plus split count/lambda; callers (incl. tests) pass them positionally
 pub fn cascaded_light_space(travel_direction:[f64;3],cam:&Camera,aspect:f64,near:f64,far:f64,cascades:usize,lambda:f64,scene_aabb:[[f64;3];2],map_size:usize)->Result<Vec<Cascade>,String>{
  let splits=practical_split(near,far,cascades,lambda)?;
  (0..cascades).map(|i|fit_cascade(travel_direction,cam,aspect,splits[i],splits[i+1],scene_aabb,map_size)).collect()
@@ -257,11 +258,12 @@ pub fn select_cascade(cascades:&[Cascade],blend_band:f64,d:f64)->Result<(usize,f
 /// with the next cascade across the band. Bias and normal offset come from
 /// shadow::bias PER CASCADE MAP, so they scale with that cascade's texel size
 /// (no acne near, no peter-panning far - pinned in tests). n_dot_l<=0 -> 0.
+#[allow(clippy::too_many_arguments)] // public API (tests call it positionally); internal path below takes the pixel as one tuple
 pub fn csm_visibility(csm:&CascadedShadowMaps,cam:&Camera,world:[f64;3],normal:[f64;3],n_dot_l:f64,radius_texels:f64,px:usize,py:usize)->Result<f64,String>{
- csm.validate()?;csm_visibility_validated(csm,cam,world,normal,n_dot_l,radius_texels,px,py)
+ csm.validate()?;csm_visibility_validated(csm,cam,world,normal,n_dot_l,radius_texels,(px,py))
 }
 /// Immutable CPU render path: caller validates the full set once before pixel loops.
-pub(super) fn csm_visibility_validated(csm:&CascadedShadowMaps,cam:&Camera,world:[f64;3],normal:[f64;3],n_dot_l:f64,radius_texels:f64,px:usize,py:usize)->Result<f64,String>{
+pub(super) fn csm_visibility_validated(csm:&CascadedShadowMaps,cam:&Camera,world:[f64;3],normal:[f64;3],n_dot_l:f64,radius_texels:f64,(px,py):(usize,usize))->Result<f64,String>{
  if normal.iter().any(|v|!v.is_finite())||world.iter().any(|v|!v.is_finite()){return Err("finite shadow receiver required".into());}
  super::shadow::validate_disk_radius(radius_texels)?;
  if !n_dot_l.is_finite(){return Err("finite shadow cosine required".into());}
