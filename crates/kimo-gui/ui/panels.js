@@ -387,13 +387,15 @@ function timeline({ spec, data, w, h, pan }) {
   const o = spec.opts || {};
   const x0 = o.x0 ?? 48, x1 = w - (o.xr ?? 12);
   let r = data.ruler || { t0: 0, t1: 20, step: 5 };
+  const r0 = r;
   if (pan && pan.z > 1) r = panRuler(r, pan, x1 - x0);
   const X = rulerX(r, x0, x1), inView = x => !pan || pan.z <= 1 || (x >= x0 - 1 && x <= x1 + 1);
   let html = head(spec, data);
   html += `<div class="tl">` + ruler(r, X, o.rulerY ?? 6);
   let y = o.trackY ?? 30;
   const pre = html;
-  const TR = data.tracks || [], k0 = pan ? panRows(TR, o, h, pan) : 0;
+  const TR = data.tracks || [], pv = pan || {}, k0 = panRows(TR, o, h, pv);   /* rows are measured with or without a pan */
+  let below = 0;   /* tracks wholly under the panel's bottom edge */
   const tracks = [];   /* each track's markup on its own, so a frame can rewrite just the track that changed (app.js paint) */
   for (const t of (k0 ? TR.slice(k0) : TR)) {
     let tr = '';
@@ -413,7 +415,7 @@ function timeline({ spec, data, w, h, pan }) {
     // virtualized: a track below the panel draws nothing; clips outside the ruler are skipped; clips under MINW px
     // wide (a long timeline fitted into the panel) merge into one plain run per stretch, so the panel holds at most
     // about one element per few pixel columns whatever the clip count (tests/timeline_perf_test.py: 1,000 clips)
-    if (y >= h) { tr += '</div>'; tracks.push(tr); html += tr; y += th + (o.trackGap ?? 0); continue; }
+    if (y >= h) { tr += '</div>'; tracks.push(tr); html += tr; y += th + (o.trackGap ?? 0); below++; continue; }
     const MINW = 12; let run = null;   // under 12 px a clip has no room for its label; its edges stay as 1 px seams in the run
     // a flashing (just edited) narrow clip draws on its own so the edit stays visible; when a burst flashes more than
     // FLASH_SOLO of them on one track (a 1,000-clip load), they merge like the rest and their run carries the flash
@@ -452,6 +454,12 @@ function timeline({ spec, data, w, h, pan }) {
   let post = '';
   if (data.playhead != null && inView(X(data.playhead))) post += `<div class="playhead" style="left:${px(X(data.playhead))}px;top:${o.phTop ?? 4}px;bottom:${o.phBot ?? 8}px"></div>`;
   if (data.razor && flashing(data.razor.t) && inView(X(data.razor.at))) post += `<div class="razor" style="left:${px(X(data.razor.at))}px;top:${o.trackY ?? 30}px;bottom:4px"></div>`;
+  // where the view sits: zoomed in, a 2 px bar under the tracks with the visible span as its thumb; whole rows
+  // above or below the panel, a 2 px bar at the right edge with the visible rows as its thumb (no control, nothing to grab)
+  if (pan && pan.z > 1) { const full = r0.t1 - r0.t0, W = x1 - x0, bw = Math.max(6, W / pan.z), a = Math.min(W - bw, (r.t0 - r0.t0) / full * W);
+    post += `<div class="tlbar" style="left:${x0}px;width:${px(W)}px"><i style="left:${px(a)}px;width:${px(bw)}px"></i></div>`; }
+  if (k0 + below > 0) { const ty = o.trackY ?? 30, H = h - ty - 8, n = TR.length, vis = n - k0 - below;
+    post += `<div class="tlbar v" style="top:${ty}px;height:${px(H)}px"><i style="top:${px(k0 / n * H)}px;height:${px(vis / n * H)}px"></i></div>`; }
   html += post + '</div>';
   TL_PARTS = { html, pre, tracks, post };
   return html;
