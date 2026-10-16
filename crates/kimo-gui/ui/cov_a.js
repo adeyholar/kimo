@@ -233,7 +233,7 @@ export function covAOps(state, MODES, ev, H) {
     for (const id of ids) { const [t, i] = H.findClip(tl, { clip_id: id }); if (!t) continue; const c = t.clips[i]; k++;
       c.fx = (c.fx || []).filter(x => x !== 'burn-in off'); if (!on) c.fx.push('burn-in off'); if (!c.fx.length) delete c.fx; c._flash = now; }
     tag(state, MODES, H, ev, on ? 'captions burned in' : 'captions off in preview + export');
-    rows(kv, 'burn_in', [['Burn-in', on ? 'on' : 'off', on ? 'off' : 'on'], k ? ['Cues', String(k)] : null], null, H);
+    rows(kv, 'burn_in', [['Burn-in', on ? 'on' : 'off', on ? 'off' : 'on'], ids.length ? ['Cues', String(ids.length)] : null], null, H);   /* the engine's cue count for the group, not only the cues drawn */
     return true;
   }
   if (n === 'transition_render_raw') {
@@ -254,6 +254,48 @@ export function covAOps(state, MODES, ev, H) {
     return true;
   }
   return false;
+}
+
+// Undo / redo. The engine's undo / redo results say only how many steps moved and how many are left (undo_left), so the
+// window keeps its own stack in step with the engine's: one entry per mutating call (P.mutated), a snapshot pair for the
+// COV-A calls (the timeline's tracks / clips, markers, multicam groups before and after) and a blank for the rest.
+// undo restores the "before" of each COV-A entry it steps over, redo the "after"; the stack length is re-aligned to the
+// engine's undo_left, so a window that joined mid-session never restores a state it did not see.
+// bind_beats also keeps m03's Graph panel (pulse curve, beat diamonds, lane) before / after, so undo takes the pulse off the Graph too.
+const HMAX = 48;
+function snap(tl) {
+  return { tracks: (tl.tracks || []).map(t => ({ ...t, clips: (t.clips || []).map(c => ({ ...c, ...(c.fx ? { fx: [...c.fx] } : {}), ...(c.keys ? { keys: c.keys.map(k => ({ ...k })) } : {}) })) })),
+           markers: (tl.markers || []).filter(m => !m.gone).map(m => ({ ...m })), mc: JSON.parse(JSON.stringify(tl._mc || {})) };
+}
+function restore(tl, s, now) {
+  const before = new Map((tl.tracks || []).map(t => [t.id, JSON.stringify((t.clips || []).map(c => [c.id, c.s, c.e, c.label, c.fx, (c.keys || []).length]))]));
+  tl.tracks = s.tracks.map(t => ({ ...t, clips: t.clips.map(c => ({ ...c, ...(c.fx ? { fx: [...c.fx] } : {}), ...(c.keys ? { keys: c.keys.map(k => ({ ...k })) } : {}) })) }));
+  for (const t of tl.tracks) { const k = JSON.stringify(t.clips.map(c => [c.id, c.s, c.e, c.label, c.fx, (c.keys || []).length]));
+    if (before.get(t.id) !== k) { t._flash = now; for (const c of t.clips) c._flash = now; } }
+  const gone = (tl.markers || []).filter(m => !m.gone && !s.markers.some(x => x.id === m.id)).map(m => ({ ...m, gone: now }));
+  tl.markers = [...s.markers.map(m => ({ ...m, ...((tl.markers || []).some(x => x.id === m.id && !x.gone) ? {} : { _flash: now }) })), ...gone];
+  tl._mc = JSON.parse(JSON.stringify(s.mc));
+}
+export function covAHistory(state, MODES, ev, H, apply) {
+  const P = ev.payload || {}, R = P.result && typeof P.result === 'object' ? P.result : {}, n = String(ev.tool_name);
+  const h = state._covHist || (state._covHist = { undo: [], redo: [] });
+  if (n === 'undo' || n === 'redo') {
+    const tl = H.timelineView(state, MODES), from = n === 'undo' ? h.undo : h.redo, to = n === 'undo' ? h.redo : h.undo;
+    let k = Math.max(0, Math.round(N(R[n === 'undo' ? 'undone' : 'redone']) ?? 1));
+    let last = null;
+    while (k-- > 0 && from.length) { const e = from.pop(); to.push(e); if (!e) continue; last = e; restore(tl, n === 'undo' ? e.before : e.after, H.now());
+      if (e.gp) { const g = JSON.parse(n === 'undo' ? e.gb : e.ga); for (const key of Object.keys(e.gp)) delete e.gp[key]; Object.assign(e.gp, g); } }
+    const left = N(R.undo_left); if (left != null && h.undo.length > left) h.undo.splice(0, h.undo.length - left);   /* re-align with the engine */
+    if (last) H.fitRuler(tl);
+    return !!last;
+  }
+  if (P.mutated !== true) return apply();
+  const cov = COV_A.test(n), tl = cov ? H.timelineView(state, MODES) : null, before = cov ? snap(tl) : null;
+  const gp = n === 'bind_beats' ? panelOf(state, MODES, H, ev, 'curves') : null, gb = gp ? JSON.stringify(gp) : null;
+  const hit = apply();
+  h.undo.push(cov ? { tool: n, before, after: snap(tl), ...(gp ? { gp, gb, ga: JSON.stringify(gp) } : {}) } : null); h.redo.length = 0;
+  if (h.undo.length > HMAX) h.undo.splice(0, h.undo.length - HMAX);
+  return hit;
 }
 
 function mcAngleAt(g, t) { let a = 0; for (const c of g.cuts) if (c.t <= t + 1e-9) a = c.angle; return a; }

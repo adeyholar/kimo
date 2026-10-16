@@ -12,7 +12,7 @@
 
 import { READONLY, inferMode } from './modes.js';
 import { COV_C, pipelineOps, projectOps, qaOps } from './project_ops.js';
-import { COV_A, covAOps, covASee, covAPre } from './cov_a.js';
+import { COV_A, covAOps, covASee, covAPre, covAHistory } from './cov_a.js';
 
 export const FAMILIES = [
   ['pipeline', COV_C.pipeline], ['project', COV_C.project], ['qa', COV_C.qa],   /* project_ops.js: colour pipeline rows, m02 history / diff / batch / media, QA + cache in the HUD toast + rail row */
@@ -873,8 +873,10 @@ export function route(ev, state, MODES) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
       if (/false_?colou?r/.test(String(ev.tool_name).toLowerCase())) { v.viewer = v.viewer || {}; v.viewer.falsecolor = { split: P.split ?? .5 }; }
       if (ev.tool_name === 'add_captions') covASee(state, ev);
-      if (COV_A.test(String(ev.tool_name)) && covAOps(state, MODES, ev, COV_H)) ev._kvDone = true;   /* its own visual (cov_a.js); timelineOps leaves these alone */
-      const hit = timelineOps(state, MODES, ev, fam) | (fam === 'audio' ? audioOps(state, MODES, ev) : false) | (fam === 'export' ? exportOps(state, MODES, ev) : false);
+      const tnA = String(ev.tool_name), isA = COV_A.test(tnA), hitA = covAHistory(state, MODES, ev, COV_H, () => isA && covAOps(state, MODES, ev, COV_H));   /* COV-A's own visual + its undo / redo snapshots (cov_a.js) */
+      if (hitA && isA) ev._kvDone = true;   /* timelineOps leaves these alone */
+      const restoredA = hitA && (tnA === 'undo' || tnA === 'redo');   /* the snapshot is the whole timeline: the step's engine clip list is not applied on top of it */
+      const hit = (restoredA || timelineOps(state, MODES, ev, fam)) | (fam === 'audio' ? audioOps(state, MODES, ev) : false) | (fam === 'export' ? exportOps(state, MODES, ev) : false);
       const df = callDiff(state, ev); if (df) { const te = out.find(x => x.type === 'tool_end'); if (te) te.diff = df; }   // the picked call's Inspector Diff
       const diff = ev._kvDone || inspectorDiff(state, MODES, ev, fam);   // sceneOps already wrote the inspector
       if (!hit && !diff) hud(state, ev, fam, ev.tool_name + ' ✓'); else hud(state, ev, fam, ev._hudText || ev.tool_name + ' ✓');

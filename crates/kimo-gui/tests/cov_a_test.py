@@ -91,6 +91,146 @@ CHECKS = {
                                  ("Inspector", "__q.rows().some(r => r.includes('Removed') && r.includes('1 range ·') && r.includes('0.5 s')) && __q.rows().some(r => r.includes('Track') && r.includes('V1'))")],
   },
 }
+# ---------------------------------------------------------------------------------------------------------
+# PROOF (Naman 7:37 / 7:47): one real kimo-mcp session per tool (ev_cov_a.json "proof", capture script cap7.py).
+# Each session: two tracks (cam_a.mp4 / cam_b.mp4), then a REAL failed call of the tool (the engine's own error
+# event), the successful call, undo, redo. Per tool this asserts:
+#   a) the affected entities by their engine ids (the model) and the exact values on screen, before -> after;
+#   b) the failed call shows as failed (rail row ✕ + err class, HUD "<tool> failed") and changes NOTHING: the
+#      timeline model (flash stamps included) and the Inspector rows / viewer tags are identical right after it,
+#      and the tool's panels are byte-identical once settled;
+#   c) undo restores the tool's panels byte-for-byte to the state before the call, redo byte-for-byte to the
+#      state after it (and the model with them). The four read-only tools (mutated:false in the engine) push no
+#      undo step; for them add_marker is undone / redone across their visual, which must come back byte-identical.
+# Panels are read in the tool's own screen after the 700 ms flash has run out (the screen is put back each time).
+PJS = r"""
+window.__p = {
+  model: () => { const tl = __kimo.state.liveTL || {}, g = (__kimo.state.views.graph || {}).graph || null;
+    return JSON.stringify({ tracks: tl.tracks || [], markers: tl.markers || [], mc: tl._mc || {}, cuts: tl.cuts || null, graph: g }); },
+  canon: () => { const tl = __kimo.state.liveTL || {}, g = (__kimo.state.views.graph || {}).graph || null;
+    return JSON.stringify({ tracks: tl.tracks || [], markers: (tl.markers || []).filter(m => !m.gone), mc: tl._mc || {}, graph: g && Object.keys(g).length ? g : null }, (k, v) => k === '_flash' ? undefined : v); },   /* flash stamps and faded markers dropped */
+  clip: id => { for (const t of (__kimo.state.liveTL || {}).tracks || []) for (const c of t.clips || []) if (c.id === id) return { track: t.label, s: c.s, e: c.e, label: c.label, fx: c.fx || [], keys: (c.keys || []).filter(k => k._beat).map(k => Math.round(k.t * 1000) / 1000), beats: (c.beats && (c.beats.list || c.beats).length) ?? 0 }; return null; },
+  track: id => { const t = ((__kimo.state.liveTL || {}).tracks || []).find(t => t.id === id); return t ? (t.clips || []).map(c => [c.label, Math.round(c.s * 1000) / 1000, Math.round(c.e * 1000) / 1000]) : null; },
+  marker: id => ((__kimo.state.liveTL || {}).markers || []).filter(m => m.id === id).map(m => ({ name: m.name, t: m.t, gone: !!m.gone })),
+  last: () => { const c = __kimo.state.calls[__kimo.state.calls.length - 1] || {}, r = c.id != null ? document.querySelector(`[data-call="${CSS.escape(String(c.id))}"]`) : null;
+    return { name: c.name, status: c.status, error: c.error, rowErr: !!r && r.classList.contains('err') }; },
+  hud: () => { const h = document.querySelector('[data-panel=viewer] .hud'); return h ? [h.className, h.textContent] : ['', '']; },
+  depth: () => ((__kimo.state._covHist || {}).undo || []).length,
+};
+"""
+SCREEN = {'detect_beats': [('mixing', 'tracks'), ('edit', 'tl')], 'bind_beats': [('graph', 'graph'), ('edit', 'tl')], 'burn_in': [('captions', 'tl')],
+          'transition_render_raw': [('effects', 'tl')]}
+RO = {'detect_cuts', 'detect_beats', 'match_events', 'transition_render_raw'}
+
+def J(x): return json.dumps(x)
+# exact values after the successful call; R = the call's engine result, A = its engine args, ids = the session's engine clip ids
+def SUCCESS(tool, R, A, ids, extra):
+    c0, c1 = J(ids[0]), J(ids[1])
+    rows = lambda L: f"JSON.stringify(__q.rows()) === JSON.stringify({J(L)})"
+    return {
+      'add_marker': [("marker 'drop' at 1.5 s in the model, by the engine's id", f"JSON.stringify(__p.marker({J(R.get('marker_id'))})) === JSON.stringify({J([{'name': 'drop', 't': 1.5, 'gone': False}])})"),
+                     ("one ember tick on the ruler (none before)", "__q.marks().live === 1"),
+                     ("Inspector: Marker drop, At 1.5 s", rows(['Markerdrop', 'At1.5 s']))],
+      'remove_marker': [("the engine's marker 'outro' leaves the model (fading)", f"JSON.stringify(__p.marker({J(A.get('marker_id'))})) === JSON.stringify({J([{'name': 'outro', 't': 2.5, 'gone': True}])})"),
+                        ("the tick fades: 0 live, 1 fading", "__q.marks().live === 0 && __q.marks().gone === 1"),
+                        ("Inspector: outro · 2.5 s -> removed", rows(['Markeroutro · 2.5 s→removed']))],
+      'add_multicam': [(f"both angles leave V1 / V2 ({ids[0]}, {ids[1]} gone from the model)", f"__p.clip({c0}) === null && __p.clip({c1}) === null && JSON.stringify(__p.track('track1')) === '[]' && JSON.stringify(__p.track('track2')) === '[]'"),
+                       ("the engine's group track holds one span, angle 1 over 0-4 s", f"JSON.stringify(__p.track({J(R.get('track_id'))})) === JSON.stringify({J([['cam_a.mp4 · angle 1', 0, 4]])})"),
+                       ("viewer tag", "JSON.stringify(__q.tags()) === '[\"multicam · 2 angles\"]'"),
+                       ("Inspector rows", rows(['Multicam2 angles', 'Anglescam_a.mp4, cam_b.mp4', 'Audiocam_a.mp4', 'Span0–4 s']))],
+      'switch_angle': [("group track: angle 1 over 0-2 s, then angle 2 over 2-4 s", f"JSON.stringify(__p.track({J(extra.get('mc_track'))})) === JSON.stringify({J([['cam_a.mp4 · angle 1', 0, 2], ['cam_b.mp4 · angle 2', 2, 4]])})"),
+                       ("razor at the switch, viewer tag", "__q.marks().razors === 1 && JSON.stringify(__q.tags()) === '[\"angle 2 · cam_b.mp4\"]'"),
+                       ("Inspector: angle 1 · cam_a.mp4 -> 2 · cam_b.mp4 at 2 s", rows(['Angle1 · cam_a.mp4→2 · cam_b.mp4', 'At2 s', 'Audiocam_a.mp4 (fixed)']))],
+      'sync_clips': [(f"{ids[1]} (cam_b.mp4) moves 0 -> 0.5 s, {ids[0]} stays at 0", f"__p.clip({c1}).s === 0.5 && __p.clip({c1}).e === 4.5 && __p.clip({c0}).s === 0 && __p.clip({c0}).e === 4"),
+                     ("on screen cam_b.mp4 starts 0.5 s (1/8 of the 4 s clip width) right of cam_a.mp4", "(() => { const c = __q.clips(), a = c.find(x => x.label === 'cam_a.mp4'), b = c.find(x => x.label === 'cam_b.mp4'); return Math.abs((b.left - a.left) - a.width / 8) < 1.5; })()"),
+                     ("Inspector: cam_a.mp4 0 s, cam_b.mp4 0 s -> 0.5 s", rows(['Synced2 clips', 'Bytimecode', 'cam_a.mp40 s', 'cam_b.mp40 s→0.5 s']))],
+      'detect_cuts': [("one dashed cut line through the tracks", "__q.marks().cuts === 1"),
+                      ("it sits at 2 s: half way along the 4 s clips", "(() => { const x = parseFloat(document.querySelector('.tlcut').style.left), c = __q.clips()[0]; return Math.abs(x - (c.left + (c.width + 1) / 2)) < 1.5; })()"),
+                      ("Inspector: 1 cut, cam_a.mp4, hard cut at 2 s", rows(['Cuts1 found', 'Sourcecam_a.mp4', 'Hard cut2 s']))],
+      'detect_beats': [(f"7 beat ticks on {ids[0]} (cam_a.mp4), none on {ids[1]}", f"__p.clip({c0}).beats === 7 && __p.clip({c1}).beats === 0 && __q.clips().find(c => c.label === 'cam_a.mp4').beats === 7 && __q.clips().find(c => c.label === 'cam_b.mp4').beats === 0"),
+                       ("Inspector: 7 beats, 120.1 bpm, cam_a.mp4", rows(['Beats7', 'Tempo120.1 bpm', 'Sourcecam_a.mp4']))],
+      'bind_beats': [(f"8 beat keys on {ids[0]} at 0, 0.5 ... 3.5 s (120 bpm), none on {ids[1]}", f"JSON.stringify(__p.clip({c0}).keys) === JSON.stringify({J([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5])}) && __p.clip({c1}).keys.length === 0"),
+                     ("Graph lane cam_a.mp4 · scale with 8 beat diamonds and 8 ember hit keys", "JSON.stringify(__q.graph().lanes) === '[\"cam_a.mp4 · scale\"]' && __q.graph().diamonds === 8 && __q.graph().keys === 8"),
+                     ("Inspector rows", rows(['Clipcam_a.mp4', 'Propertyscale', 'Hit+10% · pulse', 'Beats8', 'Tempo120 bpm']))],
+      'remove_silence_cuts': [("V2 loses 1-1.5 s: cam_b.mp4 0-1 s + 1-3.5 s, V1 untouched", f"JSON.stringify(__p.track('track2')) === JSON.stringify({J([['cam_b.mp4', 0, 1], ['cam_b.mp4', 1, 3.5]])}) && JSON.stringify(__p.track('track1')) === JSON.stringify({J([['cam_a.mp4', 0, 4]])})"),
+                              ("Inspector: V2, 1 range · 0.5 s, 1-1.5 s", rows(['TrackV2', 'Removed1 range · 0.5 s', 'Range1–1.5 s']))],
+      'set_time_mode': [(f"reverse badge on {ids[1]} (cam_b.mp4) only", f"JSON.stringify(__p.clip({c1}).fx) === '[\"reverse\"]' && __p.clip({c0}).fx.length === 0 && JSON.stringify(__q.clips().find(c => c.label === 'cam_b.mp4').fx) === '[\"reverse\"]'"),
+                        ("Inspector: cam_b.mp4, normal -> reverse", rows(['Clipcam_b.mp4', 'Timenormal→reverse']))],
+      'match_events': [("Inspector: 4 of 4 -> 4, 2 within ±0.1 s, mean −0.06 s, max 0.4 s", rows(['Matched4 of 4 → 4', 'Within2 · ±0.1 s', 'Mean offset−0.06 s', 'Max offset0.4 s', 'Modenearest']))],
+      'transition_render_raw': [("viewer tag crossfade · 40%", "JSON.stringify(__q.tags()) === '[\"crossfade · 40%\"]'"),
+                                ("Inspector rows", rows(['Transitioncrossfade', 'Progress40%', 'Edgeclamp', 'Frame2 x 2']))],
+      'burn_in': [(f"burn-in off chip on the group's drawn cue ({extra.get('cap_clips', ['?'])[0]})", f"JSON.stringify(__p.clip({J(extra.get('cap_clips', ['?'])[0])}).fx) === '[\"burn-in off\"]' && __q.clips().find(c => c.label === 'hello there').fx.includes('burn-in off')"),
+                  ("Inspector: on -> off, 2 cues (the engine's count)", rows(['Burn-inon→off', 'Cues2']))],
+    }[tool]
+
+async def proof(b, url, fails):
+    ok, done = 0, []
+    P = json.loads(Path(__file__).with_name('ev_cov_a.json').read_text())['proof']
+    for tool, events in P.items():
+        ctx = await b.new_context(viewport={'width': 1376, 'height': 768}); await ctx.add_init_script(JS); await ctx.add_init_script(PJS)
+        pg = await ctx.new_page(); errs = []
+        pg.on('pageerror', lambda e: errs.append(str(e)))
+        await pg.goto(url); await pg.wait_for_function('window.__kimo && __kimo.metrics.renders > 0')
+        scr = SCREEN.get(tool, [('edit', 'tl')])
+        async def panels():
+            await pg.wait_for_timeout(720)   # flash stamps run out (FLASH_MS 700)
+            out = []
+            for m, name in scr:
+                await pg.evaluate('m => __kimo.apply({ type: "mode", mode: m })', m); await pg.wait_for_timeout(260)
+                out.append(await pg.evaluate('p => { const e = document.querySelector(`[data-panel=${p}]`); return e ? e.innerHTML : "<missing>" }', name))
+            if len(scr) > 1: await pg.evaluate('m => __kimo.apply({ type: "mode", mode: m })', scr[0][0]); await pg.wait_for_timeout(260)   # back on the tool's own screen
+            await pg.evaluate('() => { __kimo.state.explicitMode = false }')
+            return out
+        st = lambda: pg.evaluate("() => ({ model: __p.model(), canon: __p.canon(), rows: JSON.stringify(__q.rows()), tags: JSON.stringify(__q.tags()), depth: __p.depth() })")
+        def check(desc, res):
+            nonlocal ok
+            if res is True: ok += 1; print(f'PASS  proof {tool}: {desc}')
+            else: fails.append(f'proof {tool}: {desc}'); print(f'FAIL  proof {tool}: {desc} -> {res}')
+        ids, extra = [], {}
+        S0 = D0 = None
+        for i, ev in enumerate(events):
+            tn, ph = ev.get('tool_name'), ev.get('phase')
+            if tn == tool and ph == 'start' and S0 is None:   # just before the failing call
+                D0 = await panels(); S0 = await st()
+            await pg.evaluate('e => __kimo.apply(e)', ev)
+            if ph != 'complete' and ph != 'error': continue
+            P_ = ev.get('payload') or {}; R = P_.get('result') if isinstance(P_.get('result'), dict) else {}
+            if tn == 'add_clip': ids.append(R.get('clip_id'))
+            if tn == 'add_multicam' and ph == 'complete' and tool != 'add_multicam': extra['mc_track'] = R.get('track_id')
+            if tn == 'add_captions': extra['cap_clips'] = R.get('clip_ids')
+            if tn == tool and ph == 'error':
+                await pg.wait_for_timeout(60)
+                L = await pg.evaluate('__p.last()'); H = await pg.evaluate('__p.hud()'); S1 = await st()
+                check(f"real failed call shows as failed: its rail row in the error state ({P_.get('code')}: {P_.get('error')})", L['name'] == tool and L['status'] == 'error' and L['rowErr'] and L['error'] == P_.get('error') or L)
+                check("HUD says it failed", ('err' in H[0] and H[1].endswith(f'{tool} failed')) or H)
+                check("no state mutation: timeline model identical (flash stamps included)", S1['model'] == S0['model'])
+                check("no fake visual change: Inspector rows and viewer tags identical", (S1['rows'], S1['tags']) == (S0['rows'], S0['tags']) or [S0['rows'], S1['rows'], S0['tags'], S1['tags']])
+                D1 = await panels(); check(f"panels byte-identical after the failure ({', '.join(f'{m}:{n}' for m, n in scr)})", D1 == D0)
+                S1 = await st()
+            elif tn == tool and ph == 'complete':
+                await pg.wait_for_timeout(60)
+                if tool in RO: check(f"read-only in the engine (mutated false), no undo step in the window", P_.get('mutated') is False and (await pg.evaluate('__p.depth()')) == S1['depth'])
+                for desc, js in SUCCESS(tool, R, (ev.get('payload') or {}).get('args') or next((e['payload'].get('args') for e in events[:i] if e.get('call_id') == ev.get('call_id') and e.get('phase') == 'start'), {}), ids, extra):
+                    try: res = await pg.evaluate(js)
+                    except Exception as e: res = f'error {e}'
+                    if res is not True: res = [res, await pg.evaluate("() => ({ rows: __q.rows(), clips: __q.clips(), marks: __q.marks(), tags: __q.tags(), graph: __q.graph() })")]
+                    check(desc, res)
+                D2 = await panels(); S2 = await st()
+                if tool not in ('match_events', 'transition_render_raw'): check("its visual is on the panels (they differ from before the call)", D2 != D1)
+            elif tn == 'add_marker' and tool in RO and ph == 'complete':
+                D2b = await panels(); S2b = await st()
+            elif tn == 'undo':
+                D3 = await panels(); S3 = await st()
+                if tool in RO: check("undo of the next edit restores the panels byte-for-byte, the tool's own visual included", D3 == D2); check("  ... and the model", S3['canon'] == S2['canon'])
+                else: check("undo restores the panels byte-for-byte to before the call", D3 == D1); check("  ... and the model", S3['canon'] == S1['canon'])
+            elif tn == 'redo':
+                D4 = await panels(); S4 = await st()
+                if tool in RO: check("redo restores the panels byte-for-byte to after the next edit", D4 == D2b); check("  ... and the model", S4['canon'] == S2b['canon'])
+                else: check("redo restores the panels byte-for-byte to after the call", D4 == D2); check("  ... and the model", S4['canon'] == S2['canon'])
+        if errs: fails.append(f'proof {tool}: page errors {errs[:3]}')
+        done.append(tool); await ctx.close()
+    return ok, done
+
 COV = set("add_marker remove_marker add_multicam switch_angle sync_clips detect_cuts detect_beats bind_beats remove_silence_cuts set_time_mode match_events transition_render_raw burn_in".split())
 
 async def main():
@@ -135,13 +275,15 @@ async def main():
                 else: ok += 1; print(f'PASS  s{si} rail: {len(rail)} COV-A calls, args read as names')
                 if errs: fails.append(f's{si}: page errors {errs[:3]}')
                 await ctx.close()
+            pok, pdone = await proof(b, url, fails); ok += pok
+            if sorted(pdone) != sorted(COV): fails.append(f'proof sessions missing for {sorted(COV - set(pdone))}')
         finally:
             await b.close(); srv.shutdown()
     unrun = [f's{si} {tn}#{k}' for si, c in CHECKS.items() for (tn, k) in c if (si, tn, k) not in ran]
     if unrun: fails.append(f'checks that never ran: {unrun}')
     missing = sorted(COV - seen)
     if missing: fails.append(f'tools never exercised: {missing}')
-    print(f'\ncov_a: {ok} checks passed, {len(seen)}/13 tools exercised, {len(fails)} failures')
+    print(f'\ncov_a: {ok} checks passed, {len(seen)}/13 tools exercised, proof sessions (real failure, exact values, undo/redo byte-for-byte) {len(pdone)}/13, {len(fails)} failures')
     for f in fails: print('  -', f)
     sys.exit(1 if fails else 0)
 
