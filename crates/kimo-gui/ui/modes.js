@@ -118,6 +118,9 @@ const RULES = [
   [/caption|transcri|title|text_/, 'captions'],
   [/batch|history|checkpoint|recipe|template_apply|project_diff|relink|undo|redo|collect_project/, 'batch'],
   [/keyframe_bezier|set_motion_path|bind_beats|set_expression|add_null|set_parent/, 'graph'],
+  [/^(apply_motion_preset|bake_property|copy_curve|move_key|remove_key|remove_motion_path|set_animator_keyframe|simplify_curve|smooth_curve|motion_diff|motion_extract)$/, 'graph'],   // graph edit
+  [/^solve_constraints$/, 'graphics'],   // layout solve: titles / logos / CTAs placed on the m09 graphics vieweror tools (cov_b.js)
+  [/^preview_subject_match$/, 'grading'],
   [/loudness|audio|duck|detect_beats|mix_audio|normalize|^(set_)?(gain|pan|eq|compress|limit)|_eq$|compressor|limiter|stem/, 'mixing'],
   [/grade|white_balance|match_shot|match_color|cdl|color_curve|acescct|lut_node|^(add|connect|disconnect)_nodes?$|^set_node_(param|mask)$/, 'grading'],   // grade graph / balance tools before scopes
   [/scope|exposure|ocio|gamut|hdr_|cie/, 'color'],

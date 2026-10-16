@@ -11,15 +11,16 @@
 // no tool call is ever invisible. Pure data: nothing here touches the DOM.
 
 import { READONLY, inferMode } from './modes.js';
-import { COV_C, pipelineOps, projectOps, qaOps } from './project_ops.js';
+import { COV_C, pipelineOps, projectOps, qaOps, space } from './project_ops.js';
 import { COV_A, covAOps, covASee, covAPre, covAHistory } from './cov_a.js';
+import { COVB, covbOps, covbLearn, covbHistory } from './cov_b.js';
 
 export const FAMILIES = [
   ['pipeline', COV_C.pipeline], ['project', COV_C.project], ['qa', COV_C.qa],   /* project_ops.js: colour pipeline rows, m02 history / diff / batch / media, QA + cache in the HUD toast + rail row */
   ['edit', COV_A],   /* markers, cut / beat detection, beat binding, silence cuts, time mode, sync, multicam, burn-in, raw transition, event matching: cov_a.js */
   ['ingest', /^(import|ingest|add_media|relink|load_media|add_clip|add_track|insert)/],
   ['edit', /^(cut|split|blade|razor|trim|extend|ripple|slip|slide|move_clip|delete_clip|lift|roll)|^(duplicate_clip|swap_clips|loop_clip|freeze_frame|delete_track|set_speed|rate_stretch|set_speed_ramp|group_clips|ungroup_clip|distribute_clips|set_blend|set_echo|set_flow_blur|add_camera_shake|remove_audio_effect|set_track|project_set)$/],
-  ['effects', /^(add_effect|apply_effect|set_effect|add_transition|remove_effect|add_speed|set_posterize|add_adjustment)/],
+  ['effects', /^(add_effect|apply_effect|set_effect|add_transition|remove_effect|add_speed|set_posterize|add_adjustment|add_managed_linear_effect$)/],
   ['transform', /^(set_property|set_clip_property|set_props?$|transform|set_transform|keyframe|set_keyframe|add_keyframe|scale|rotate|position|set_motion|add_null|set_parent|set_expression)/],
   ['color', /^(grade|color|colour|lut|apply_lut|set_lut|ocio|render_scope|analyze_exposure|wheel|curve|node_|hdr|render_ocio|render_exposure|render_gamut|set_grade_node|set_grade_graph|pick_white_balance|match_grade|match_color|set_white_balance|set_grade_output|remove_grade_node|generate_lut_node|add_acescct_primaries|create_shared_grade_graph|bind_shared_grade_graphs|remove_shared_grade_graph|set_node_param|set_node_mask|apply_asc_cdl|set_color_curve|set_grade_scopes|add_node$|connect_nodes|disconnect_nodes)/],
   ['audio', /^(set_|add_|apply_|auto_|measure_|normalize_|analyze_)?(mix|audio|gain|fader|mute|solo|pan|compress|eq|limiter|limit|loudness|duck|stem|bus|route_)|^track_beats$/],
@@ -28,6 +29,8 @@ export const FAMILIES = [
   ['graphics', /^(add_shape|add_path_shape|set_path|add_path_key|clear_path_keys|add_shape_modifier|remove_shape_modifier|add_modifier|remove_modifier|set_layer_style|remove_layer_style|add_box_expand|add_detection_box|add_hud_frame|add_counter|add_prompt_box|add_glitch_confetti)$/],
   ['roto', /^(add_mask|set_mask|set_mask_keyframe|set_mask_path_key|set_mask_prop_key|update_mask|reorder_mask|remove_mask|remove_mask_layer|roto_propagate|refine_matte|set_track_matte|remove_track_matte)$/],
   ['export', /^(export|render|queue_render|encode|deliver|join_export$|preview_range$|collect_project$|contact_sheet$|cancel_job$|resume_job$)/],
+  ['motion', /^(apply_motion_preset|bake_property|copy_curve|move_key|remove_key|remove_motion_path|set_animator_keyframe|simplify_curve|smooth_curve|motion_diff|motion_extract)$/],   // graph editor: curves, keys, motion (cov_b.js)
+  ['measure', /^(solve_constraints|compute_text_bounds|raycast_mesh_raw|compile_scene3d_descriptor|preview_subject_match)$/],   // read-only measures drawn where they apply (cov_b.js)
 ];
 export function family(name) {
   const n = String(name || '').toLowerCase();
@@ -386,7 +389,7 @@ function callDiff(state, ev) {
   }
   return out.length ? out.slice(0, 10) : null;
 }
-const CLIP_KEYS = ['clip_id', 'clip', 'clip_a', 'clip_b', 'matte_clip_id'];
+const CLIP_KEYS = ['clip_id', 'clip', 'clip_a', 'clip_b', 'matte_clip_id', 'from_clip', 'to_clip', 'target_clip_id', 'ref_clip_id'];
 function railArgs(state, a) {
   if (!a || typeof a !== 'object' || Array.isArray(a)) return a;
   let o = null;
@@ -826,10 +829,15 @@ function exportOps(state, MODES, ev) {
 // Unified event -> legacy rail events + family effects. Returns the legacy
 // events the reducer should apply (the rail), having already mutated views.
 const COV_H = { now, flashing, fmtVal, RAW_ID, findClip, findTrack, ensureTrack, fitRuler, timelineView, modeViews };
+// what cov_b.js needs from here (passed in, not imported back: no import cycle)
+const COVB_H = { now: () => now(), fmtVal, gamut: g => space(g, 0) || null, modeViews: (s, M, e) => modeViews(s, M, e),
+  clipName: (s, M, id) => { const tl = s.liveTL || panels(s, M, ['timeline'])[0]; const [t, i] = tl ? findClip(tl, { clip_id: id }) : [null]; const lb = t ? t.clips[i].label : null; return lb && !RAW_ID.test(String(lb)) ? String(lb) : null; },
+  clipObj: (s, id) => { const tl = s.liveTL; const [t, i] = tl ? findClip(tl, { clip_id: id }) : [null]; return t ? t.clips[i] : null; } };
 export function route(ev, state, MODES) {
   if (!ev || ev.type || !ev.tool_name) return [ev];        // legacy or non-tool event: unchanged
   ev = assetNames(ev, state);
   if (COV_A.test(String(ev.tool_name))) ev = covAPre(state, ev, COV_H);   /* rail args read as names; raw args kept for covAOps */
+  covbHistory(state, MODES, ev, COVB_H);   // before any op: the screen as it was before this step (cov_b.js)
   const fam = family(ev.tool_name), id = ev.call_id ?? ev.tool_name + '@' + (ev.ts ?? '');
   const out = [];
   if (fam === 'inspect') return inspectOps(state, MODES, ev, id);
@@ -842,6 +850,8 @@ export function route(ev, state, MODES) {
   if (fam === 'qa') qaOps(state, MODES, ev);
   if (ev.phase === 'start' && (fam === 'color' || fam === 'effects')) (state._gradeArgs || (state._gradeArgs = {}))[ev.call_id] = (ev.payload || {}).args || {};
   if ((fam === 'color' || fam === 'effects') && gradeOps(state, MODES, ev)) ev._kvDone = true;
+  covbLearn(state, ev);   // key lists the engine reports, for the graph tools
+  if (COVB.test(String(ev.tool_name)) && covbOps(state, MODES, ev, COVB_H)) ev._kvDone = true;
   if (ev.phase === 'start' && /^(open_project|load_project|new_project|save_project|project_set)$/.test(String(ev.tool_name))) {   // the topbar's project name, from the call's own args
     const pa = (ev.payload || {}).args || {}, nm = pa.name ?? pa.project ?? (typeof pa.path === 'string' ? pa.path.split(/[\\/]/).pop() : null);
     if (typeof nm === 'string' && nm.trim()) state.session.project = nm.trim().slice(0, 40);
@@ -867,7 +877,7 @@ export function route(ev, state, MODES) {
     const t0 = state._t0 && state._t0[id]; if (t0 != null) delete state._t0[id];
     const dur = numOf(P.dur_ms) ?? numOf(ev.duration_ms) ?? (t0 != null && ev.ts_ms != null && ev.ts_ms >= t0 ? ev.ts_ms - t0 : null); ev._dur = dur;
     // the landed value replaces the rail's start-time args: "scale: 104% → 112%"
-    const landed = !err && param && val != null && fmtVal(val, param) !== '' ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
+    const landed = !err && param && val != null && typeof val !== 'object' && fmtVal(val, param) !== '' ?   /* a key list (to: [{t, v}…]) is not a landed value */ { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
     out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(P.result !== undefined ? { result: P.result } : {}), ...(landed ? { args: railArgs(state, landed) } : ev._railArgs ? { args: ev._railArgs } : {}) });
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;

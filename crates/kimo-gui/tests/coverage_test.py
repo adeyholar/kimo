@@ -54,6 +54,8 @@ async def main(strict):
              'pipeline': 'Color pipeline rows (m05): input / working / view / output from -> to, clip input override row, HDR MaxCLL / MaxFALL / Peak',
              'project': 'm02 History rows (checkpoint, restore, undo / redo, save, load), Diff lines (project_diff, templates), Batch table (batch, recipe, template_apply), Media list + footer (load / save); set_meta renames the clip / track + Inspector Name / Role / Tags',
              'qa': 'HUD status toast + the call\'s own rail row carry the result: diff_frames A vs B changed %, lint_frame findings, frame cache budget / freed (no mode hop, canvas untouched)',
+             'motion': 'm03 Graph: the key lists before/after (moved / removed key squares, smoothed / simplified / baked / preset / pasted curves, text-animator keys, motion-extract curves, motion-diff RMS lanes + worst frame) + Inspector rows; removed motion path dashed on the viewer gizmo',
+             'measure': 'solved layout boxes / text line + ink boxes on the viewer, raycast hit on the m08 Stack, compiled draws in the m13 Scene tree, subject-match regions in m15; Inspector rows of the result',
              'inspect': 'read-only: quiet HUD read state + result pill + peek ring on the target (no mutation, no mode hop)'}
     by = {}
     for n, fam, mode in res: by.setdefault(fam, []).append((n, mode))

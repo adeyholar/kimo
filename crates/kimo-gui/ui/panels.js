@@ -229,6 +229,8 @@ function gizmo(g, w, h, S, age) {
     else { const xs = g.path.map(p => p[0]), ys = g.path.map(p => p[1]), mx = Math.min(...xs), my = Math.min(...ys), sx = Math.max(...xs) - mx || 1, sy = Math.max(...ys) - my || 1, k = Math.min(w * .6 / sx, h * .6 / sy); pts = g.path.map(([x, y]) => [w / 2 + (x - mx - sx / 2) * k, h / 2 + (y - my - sy / 2) * k]); }
     s += `<path d="${catmull(pts)}" fill="none" stroke="var(--ember)" stroke-width="1.5"${W && H ? '' : ' stroke-dasharray="6 4"'}/>` + pts.map(([x, y]) => `<path d="M${px(x)} ${px(y - 5)}l5 5-5 5-5-5z" fill="var(--cream)"/>`).join('');
   }
+  // a removed motion path (normalized frame coordinates, as the engine stores it): dashed, hollow points
+  if (g.gonePath && g.gonePath.length > 1) { const pts = g.gonePath.map(([x, y]) => [x * w, y * h]); s += `<path class="gone" d="${catmull(pts)}" fill="none" stroke="var(--cream)" stroke-opacity=".55" stroke-width="1.5" stroke-dasharray="5 5"/>` + pts.map(([x, y]) => `<path d="M${px(x)} ${px(y - 5)}l5 5-5 5-5-5z" fill="none" stroke="var(--ember)" stroke-width="1.3"/>`).join(''); }
   // readout pill at the box's top-left, kept inside the frame
   const rx = Math.max(8, Math.min(w - 240, b.cx - b.bw / 2 + 10)), ry = Math.max(8, Math.min(h - 34, b.cy - b.bh / 2 + 10));
   let html = `<svg class="ov gz" viewBox="0 0 ${w} ${h}" style="animation-delay:-${Math.round(age)}ms">${s}</svg>`;
@@ -568,9 +570,9 @@ function curves({ spec, data, w, h }) {
     const P = c.pts.map(p => [X(p[0]), V(p[1])]);
     const d = c.smooth ? catmull(P) : P.map((q, i) => (i ? 'L' : 'M') + px(q[0]) + ' ' + px(q[1])).join('');
     const col = c.em ? 'var(--ember)' : c.color || 'var(--cream)';
-    s += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${c.em ? (o.emW ?? 1.8) : (c.w ?? o.lineW ?? 1.4)}"/>`;
+    s += `<path${c.cls ? ` class="${c.cls}"` : ''} d="${d}" fill="none" stroke="${col}" stroke-width="${c.em ? (o.emW ?? 1.8) : (c.w ?? o.lineW ?? 1.4)}"${c.dash ? ` stroke-dasharray="${c.dash}"` : ''}/>`;
     for (const hd of (c.handles || [])) { const [a, b] = hd; s += `<line x1="${px(X(a[0]))}" y1="${px(V(a[1]))}" x2="${px(X(b[0]))}" y2="${px(V(b[1]))}" stroke="var(--ember)" stroke-width="1"/>` + [a, b].map(q => `<circle cx="${px(X(q[0]))}" cy="${px(V(q[1]))}" r="${o.hR ?? 3}" fill="${o.hFill ? 'var(--ember)' : 'var(--ink)'}" stroke="var(--ember)"/>`).join(''); }
-    for (const k of (c.keys || [])) s += `<rect x="${px(X(k[0]) - ks / 2)}" y="${px(V(k[1]) - ks / 2)}" width="${ks}" height="${ks}" fill="${k[2] || col}" stroke="${o.keyStroke || 'none'}"/>`;
+    for (const k of (c.keys || [])) s += `<rect x="${px(X(k[0]) - ks / 2)}" y="${px(V(k[1]) - ks / 2)}" width="${ks}" height="${ks}" fill="${k[2] || col}" stroke="${k[3] || o.keyStroke || 'none'}"${k[3] ? ' stroke-width="1.5"' : ''}/>`;   /* k[3]: a hollow key (one the call removed or moved away from) */
   }
   html += `<svg style="position:absolute;left:0;top:0;width:${w}px;height:${h}px" viewBox="0 0 ${w} ${h}">${s}</svg>`;
   html += ruler(r, X, o.rulerY ?? 34);
