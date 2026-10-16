@@ -4,13 +4,23 @@
 //!   `tcp://127.0.0.1:7421` (loopback only; `on`, `1` and `gui` mean this, the GUI shell's listener),
 //!   `file:/path/events.jsonl` (append; tests and recordings).
 //! Guarantees: nothing is ever written to stdout (the MCP channel); tool arguments and results are only read,
-//! never changed; the request loop never blocks on telemetry: events go into a bounded channel drained by one
-//! background writer, and with no listener or a full buffer they are dropped. The writer reconnects lazily with
-//! backoff when the GUI is closed and reopened mid-session; events from while it was gone are not replayed. With the variable unset every hook
-//! below is a single `OnceLock` load.
+//! never changed. Two lanes feed one background writer, the only place that touches the sink:
+//!   * state telemetry (every tools/call's start and its one complete|error, project_changed, the agent's own
+//!     frame_rendered, export progress, and spectator demo frames) is lossless and ordered: never coalesced, never
+//!     dropped while a spectator is connected. Its memory bound is `STATE_BOUND` queued bytes; past it, emitting waits
+//!     for the writer (bounded backpressure: the call that emits holds until the spectator has read enough) instead of
+//!     dropping. Nothing waits while no spectator is connected, so a dead or absent GUI never slows a call;
+//!   * live preview canvas frames (preview.rs) have their own latest-only queue of `FRAME_DEPTH`, oldest dropped first
+//!     (the newest frame supersedes them), so frames never displace, drop or hold up state events.
+//! The writer takes lines in the order they were emitted across both lanes and writes whole lines only: a spectator
+//! that is open but slow to read (a busy webview) is waited for, never cut off, so no line is ever truncated on a live
+//! connection. With no listener events are dropped; the writer reconnects lazily with backoff when the GUI is closed
+//! and reopened mid-session, and events from while it was gone are not replayed (a reopened GUI gets the current frame).
+//! With the variable unset every hook below is a single `OnceLock` load.
 //!
 //! One event per line, the spectator's unified contract (crates/kimo-gui/README.md, "Unified tool events"):
-//!   {tool_name, call_id, phase: start|progress|complete|error, target: {track_id, clip_id, param}, payload, ts, ts_ms}
+//!   {tool_name, call_id, rpc_id, phase: start|progress|complete|error, target: {track_id, clip_id, param}, payload, ts, ts_ms}
+//! (`rpc_id`: the JSON-RPC id of the tools/call request, so a client can tie its calls to their events)
 //! plus `duration_ms` on complete/error. payload by phase:
 //!   start    {args}
 //!   progress {pct 0..100, progress 0..1, stage, elapsed_ms} plus, from frame-counting tools (export),
@@ -27,34 +37,52 @@
 use kimo_core::commands::Session;
 use kimo_core::toolgroups;
 use serde_json::{json, Map, Value};
+use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The spectator shell's loopback listener (crates/kimo-gui/src/main.rs).
 pub const GUI_ADDR: &str = "127.0.0.1:7421";
-const QUEUE: usize = 4096;
+/// Queued state-telemetry bytes past which emitting waits for the writer (bounded backpressure, never a drop).
+/// Far above any burst a live spectator falls behind by: 8,000 calls against a spectator stalled for 3 s queue a few MB.
+pub const STATE_BOUND: usize = 64 << 20;
+/// Live canvas frames waiting for the writer: at most this many, the oldest dropped first.
+pub const FRAME_DEPTH: usize = 2;
+/// Longest `flush` keeps waiting past its own bound while the spectator is still connected.
+const FLUSH_CEIL: Duration = Duration::from_secs(15);
 const STR_CAP: usize = 240;
 const ARR_CAP: usize = 8;
 const DEPTH_CAP: usize = 4;
 const DIFF_CAP: usize = 24;
 
-enum Msg { Line(String), Flush(SyncSender<()>) }
+/// A state-lane line: plain state telemetry, or a spectator demo frame whose delivery the writer reports back by its
+/// sequence number (preview.rs).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Kind { State, Demo(u64) }
+
+/// The two lanes. `seq` orders lines across both (the order they were emitted); `writing`: a line is in the writer's
+/// hands. `state_bytes` counts queued state lines only (`STATE_BOUND`).
+struct Lanes { state: VecDeque<(u64, String, Kind)>, state_bytes: usize, frames: VecDeque<(u64, String)>, seq: u64, writing: bool }
+static LANES: Mutex<Lanes> = Mutex::new(Lanes { state: VecDeque::new(), state_bytes: 0, frames: VecDeque::new(), seq: 0, writing: false });
+/// Signals both ways: new lines for the writer, freed room and an idle writer for whoever waits on it.
+static LANES_CV: Condvar = Condvar::new();
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dest { Tcp(String), File(String) }
 
-struct Sink { tx: SyncSender<Msg> }
-static SINK: OnceLock<Option<Sink>> = OnceLock::new();
+/// Whether telemetry is on (a sink was named and its writer started).
+static SINK: OnceLock<bool> = OnceLock::new();
 static SEQ: AtomicU64 = AtomicU64::new(0);
 static REV: AtomicU64 = AtomicU64::new(0);
 /// True while the writer holds a live connection to the sink (a file sink counts once opened). Read by the live
 /// preview (preview.rs), which renders nothing while no spectator is listening.
 static CONNECTED: AtomicBool = AtomicBool::new(false);
+/// The writer has tried to reach the sink at least once (so `CONNECTED` means something).
+static ATTEMPTED: AtomicBool = AtomicBool::new(false);
 static ACTIVE: Mutex<Option<Active>> = Mutex::new(None);
 
-struct Active { call_id: String, tool: String, target: Value, t0: Instant, snap: Snap, last_progress: Option<(Instant, f64)>, last_frame: Option<(Instant, u64)>, frames_t0: Option<(Instant, u64)>, args: Value }
+struct Active { call_id: String, rpc_id: Value, tool: String, target: Value, t0: Instant, snap: Snap, last_progress: Option<(Instant, f64)>, last_frame: Option<(Instant, u64)>, frames_t0: Option<(Instant, u64)>, args: Value }
 
 /// Parse a `KIMO_SPECTATOR` value. None = telemetry off (unset, empty, `0`, `off`, unparsable or non-loopback).
 pub fn parse_dest(spec: &str) -> Option<Dest> {
@@ -80,18 +108,16 @@ pub fn init() {
 
 fn init_with(dest: Option<Dest>) {
     let sink = dest.and_then(|d| {
-        let (tx, rx) = sync_channel::<Msg>(QUEUE);
-        // The telemetry writer thread. Purpose: drain the bounded event queue to the sink so the request loop never blocks on I/O.
+        // The telemetry writer thread. Purpose: drain the two event lanes to the sink so the request loop never blocks on I/O.
         // Lifecycle: started at most once per process (init runs once, SINK is a OnceLock) and only when KIMO_SPECTATOR names a sink;
         // it reconnects with backoff and lives until the process exits (SINK, which owns the sender, is never dropped). Join/cancel
         // owner: detached by design, nothing joins it; `flush` gives a bounded best-effort drain before exit. Headless (KIMO_SPECTATOR
         // unset or off): never started. Started through the engine's guarded spawn path; `init` runs at startup with no cancellation
         // token installed, so the writer inherits none and no tool call's time limit can cancel it.
-        kimo_core::guard::spawn_builder_with_token(std::thread::Builder::new().name("kimo-spectator".into()), move || writer(d, rx)).ok()?;
-        Some(Sink { tx })
+        kimo_core::guard::spawn_builder_with_token(std::thread::Builder::new().name("kimo-spectator".into()), move || writer(d)).ok()
     });
     let on = sink.is_some();
-    if SINK.set(sink).is_ok() && on {
+    if SINK.set(on).is_ok() && on {
         kimo_core::telemetry::set_progress_hook(Box::new(on_progress));
         since_start();
         let p0 = kimo_core::model::Project::default(); // the project Session::new() starts with
@@ -100,37 +126,93 @@ fn init_with(dest: Option<Dest>) {
 }
 
 #[inline]
-pub fn enabled() -> bool { matches!(SINK.get(), Some(Some(_))) }
+pub fn enabled() -> bool { SINK.get() == Some(&true) }
 
 /// The sink has a live listener right now.
 #[inline]
 pub fn connected() -> bool { CONNECTED.load(Ordering::Relaxed) }
 
-/// A live preview frame from the preview thread (same bounded, drop-on-full queue as every event).
-pub(crate) fn emit_frame(v: &Value) { emit(v) }
+/// `connected`, once the writer has made its first attempt to reach the sink (it does at startup, on the session
+/// event): waits for that attempt for at most `within`. Spectator demo mode only, so that the first calls of a
+/// session are not taken for calls with nobody listening.
+pub(crate) fn connected_settled(within: Duration) -> bool {
+    let t0 = Instant::now();
+    while enabled() && !ATTEMPTED.load(Ordering::SeqCst) && t0.elapsed() < within { std::thread::sleep(Duration::from_millis(1)); }
+    connected()
+}
+
+/// A live preview canvas frame from the preview thread: its own latest-only lane (`FRAME_DEPTH`, oldest dropped first),
+/// so frames never displace, drop or hold up state telemetry, and never wait themselves.
+pub(crate) fn emit_frame(v: &Value) {
+    if !enabled() { return; }
+    let mut q = LANES.lock().unwrap_or_else(|e| e.into_inner());
+    q.seq += 1;
+    let s = q.seq;
+    push_latest(&mut q.frames, (s, v.to_string()), FRAME_DEPTH);
+    drop(q);
+    LANES_CV.notify_all();
+}
+
+/// A spectator demo frame (preview.rs): on the lossless state lane, in order; the writer reports its delivery by `seq`
+/// (`preview::demo_delivered`). False: telemetry is off, and nobody will report it.
+pub(crate) fn emit_demo_frame(v: &Value, seq: u64) -> bool { enqueue(v.to_string(), Kind::Demo(seq)) }
 
 pub(crate) fn now_ms() -> u64 { ts_ms() }
 
-fn emit(v: &Value) {
-    if let Some(Some(s)) = SINK.get() {
-        match s.tx.try_send(Msg::Line(v.to_string())) { Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {} }
+/// State telemetry: queued in order, never coalesced, never dropped, never displaced by frames.
+fn emit(v: &Value) { enqueue(v.to_string(), Kind::State); }
+
+/// The frame lane's rule: append, then drop the oldest past `depth`.
+pub(crate) fn push_latest<T>(q: &mut VecDeque<T>, item: T, depth: usize) {
+    q.push_back(item);
+    while q.len() > depth.max(1) { q.pop_front(); }
+}
+
+/// The state lane's bound: a line of `len` bytes waits while `queued` bytes are already waiting and both together
+/// pass `STATE_BOUND`, and only while a spectator is connected (with nobody listening the writer drops lines at once,
+/// so waiting would only slow the call down). One line always fits an empty lane.
+pub(crate) fn must_wait(queued: usize, len: usize, connected: bool) -> bool {
+    connected && queued > 0 && queued.saturating_add(len) > STATE_BOUND
+}
+
+/// The lane the writer serves next: whichever head was emitted first (state wins a tie). `true` = the frame lane.
+pub(crate) fn frame_first(state_head: Option<u64>, frame_head: Option<u64>) -> Option<bool> {
+    match (state_head, frame_head) {
+        (Some(a), Some(b)) => Some(b < a),
+        (Some(_), None) => Some(false),
+        (None, Some(_)) => Some(true),
+        (None, None) => None,
     }
 }
 
-/// Best-effort drain of queued events, bounded by `within` (used before the process exits).
-pub fn flush(within: Duration) {
-    let Some(Some(s)) = SINK.get() else { return };
-    let deadline = Instant::now() + within;
-    let (ack_tx, ack_rx) = sync_channel(1);
-    let mut msg = Msg::Flush(ack_tx);
-    loop {
-        match s.tx.try_send(msg) {
-            Ok(()) => break,
-            Err(TrySendError::Full(m)) => { if Instant::now() >= deadline { return; } msg = m; std::thread::sleep(Duration::from_millis(2)); }
-            Err(TrySendError::Disconnected(_)) => return,
-        }
+fn enqueue(line: String, kind: Kind) -> bool {
+    if !enabled() { return false; }
+    let n = line.len();
+    let mut q = LANES.lock().unwrap_or_else(|e| e.into_inner());
+    while must_wait(q.state_bytes, n, connected()) {
+        q = LANES_CV.wait_timeout(q, Duration::from_millis(50)).unwrap_or_else(|e| e.into_inner()).0;
     }
-    let _ = ack_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    q.seq += 1;
+    let s = q.seq;
+    q.state_bytes += n;
+    q.state.push_back((s, line, kind));
+    drop(q);
+    LANES_CV.notify_all();
+    true
+}
+
+/// Drain before the process exits: returns once both lanes are empty and the writer is idle. Bounded by `within`,
+/// extended (up to `FLUSH_CEIL`) only while the spectator is still connected, so a slow spectator still gets the end
+/// of a burst and a gone one costs at most `within`.
+pub fn flush(within: Duration) {
+    if !enabled() { return; }
+    let t0 = Instant::now();
+    let mut q = LANES.lock().unwrap_or_else(|e| e.into_inner());
+    while !(q.state.is_empty() && q.frames.is_empty() && !q.writing) {
+        let el = t0.elapsed();
+        if el >= within && (el >= FLUSH_CEIL || !connected()) { return; }
+        q = LANES_CV.wait_timeout(q, Duration::from_millis(20)).unwrap_or_else(|e| e.into_inner()).0;
+    }
 }
 
 /// A live connection to the sink.
@@ -140,26 +222,43 @@ impl Conn {
     /// False once the peer has closed its end (the spectator window went away): a non-blocking peek reads EOF.
     /// Checked before each write so a closed GUI is noticed at once instead of one event later.
     fn alive(&mut self) -> bool {
+        match self { Conn::File(_) => true, Conn::Tcp(s) => peer_open(s) }
+    }
+    /// One whole line. A spectator that is open but not reading (its socket buffer is full) is waited for: a write
+    /// that times out is retried for as long as the peer is open, so a slow GUI loses nothing and a live connection
+    /// never carries a line cut in half. A line is only ever cut when the peer itself has closed (nobody reads it).
+    fn write_line(&mut self, l: &[u8]) -> std::io::Result<()> {
         match self {
-            Conn::File(_) => true,
+            Conn::File(f) => f.write_all(l),
             Conn::Tcp(s) => {
-                if s.set_nonblocking(true).is_err() { return false; }
-                let mut b = [0u8; 1];
-                let ok = match s.peek(&mut b) {
-                    Ok(0) => false,
-                    Ok(_) => true,
-                    Err(e) => e.kind() == std::io::ErrorKind::WouldBlock,
-                };
-                ok && s.set_nonblocking(false).is_ok()
+                let mut off = 0;
+                while off < l.len() {
+                    match s.write(&l[off..]) {
+                        Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+                        Ok(n) => off += n,
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                            if !peer_open(s) { return Err(e); }
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                Ok(())
             }
         }
     }
-    fn write_line(&mut self, l: &[u8]) -> std::io::Result<()> {
-        match self { Conn::File(f) => f.write_all(l), Conn::Tcp(s) => s.write_all(l) }
-    }
-    fn flush(&mut self) {
-        let _ = match self { Conn::File(f) => f.flush(), Conn::Tcp(s) => s.flush() };
-    }
+}
+
+/// False once the peer has closed its end: a non-blocking peek reads EOF (or fails).
+fn peer_open(s: &std::net::TcpStream) -> bool {
+    if s.set_nonblocking(true).is_err() { return false; }
+    let mut b = [0u8; 1];
+    let ok = match s.peek(&mut b) {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(e) => e.kind() == std::io::ErrorKind::WouldBlock,
+    };
+    s.set_nonblocking(false).is_ok() && ok
 }
 
 fn open(dest: &Dest) -> Option<Conn> {
@@ -194,34 +293,45 @@ impl Default for Backoff { fn default() -> Self { Self::new() } }
 /// Background writer, the only place that touches the sink. It connects lazily when an event arrives, with
 /// `Backoff` between failed attempts; a write error or a peer that closed drops the connection and the event.
 /// Events that arrive while disconnected (or inside a backoff wait) are dropped, never queued for later.
-/// Nothing here can panic or reach the dispatch thread, which only ever `try_send`s into the bounded queue.
-fn writer(dest: Dest, rx: Receiver<Msg>) {
+/// Nothing here can panic or reach the dispatch thread, which only ever appends to a lane (`enqueue`, `emit_frame`).
+fn writer(dest: Dest) {
     let mut conn: Option<Conn> = None;
     let mut backoff = Backoff::new();
     let mut retry_at = Instant::now();
-    for m in rx {
-        match m {
-            Msg::Flush(ack) => { if let Some(c) = conn.as_mut() { c.flush(); } let _ = ack.send(()); }
-            Msg::Line(mut l) => {
-                if conn.as_mut().map_or(false, |c| !c.alive()) {
-                    conn = None;
-                    CONNECTED.store(false, Ordering::Relaxed);
-                    retry_at = Instant::now();
-                }
-                if conn.is_none() && Instant::now() >= retry_at {
-                    conn = open(&dest);
-                    if conn.is_some() {
-                        backoff.reset();
-                        CONNECTED.store(true, Ordering::Relaxed);
-                        crate::preview::reconnected(); // a spectator that just (re)opened gets the current frame
-                    } else { retry_at = Instant::now() + backoff.fail(); }
-                }
-                if let Some(c) = conn.as_mut() {
-                    l.push('\n');
-                    if c.write_line(l.as_bytes()).is_err() { conn = None; CONNECTED.store(false, Ordering::Relaxed); retry_at = Instant::now() + backoff.fail(); }
+    loop {
+        // the next line in emission order across both lanes; the writer is marked busy until it is handled
+        let (mut l, kind) = {
+            let mut q = LANES.lock().unwrap_or_else(|e| e.into_inner());
+            q.writing = false;
+            loop {
+                match frame_first(q.state.front().map(|x| x.0), q.frames.front().map(|x| x.0)) {
+                    Some(true) => { let (_, l) = q.frames.pop_front().unwrap(); q.writing = true; break (l, None); }
+                    Some(false) => { let (_, l, k) = q.state.pop_front().unwrap(); q.state_bytes -= l.len(); q.writing = true; break (l, Some(k)); }
+                    None => { LANES_CV.notify_all(); q = LANES_CV.wait(q).unwrap_or_else(|e| e.into_inner()); }
                 }
             }
+        };
+        LANES_CV.notify_all(); // room on the state lane for an emitter that waits on the bound
+        if conn.as_mut().map_or(false, |c| !c.alive()) {
+            conn = None;
+            CONNECTED.store(false, Ordering::Relaxed);
+            retry_at = Instant::now();
         }
+        if conn.is_none() && Instant::now() >= retry_at {
+            let first = !ATTEMPTED.load(Ordering::SeqCst);
+            conn = open(&dest);
+            if conn.is_some() {
+                backoff.reset();
+                CONNECTED.store(true, Ordering::Relaxed);
+                crate::preview::reconnected(first); // a spectator that just (re)opened gets the current frame
+            } else { retry_at = Instant::now() + backoff.fail(); }
+            if first { ATTEMPTED.store(true, Ordering::SeqCst); }
+        }
+        if let Some(c) = conn.as_mut() {
+            l.push('\n');
+            if c.write_line(l.as_bytes()).is_err() { conn = None; CONNECTED.store(false, Ordering::Relaxed); retry_at = Instant::now() + backoff.fail(); }
+        }
+        if let Some(Kind::Demo(seq)) = kind { crate::preview::demo_delivered(seq); }
     }
 }
 
@@ -400,11 +510,11 @@ fn since_start() -> f64 {
 }
 
 fn event(a: &Active, phase: &str, payload: Value) -> Value {
-    json!({"tool_name": a.tool, "call_id": a.call_id, "phase": phase, "target": a.target, "payload": payload, "ts": since_start(), "ts_ms": ts_ms()})
+    json!({"tool_name": a.tool, "call_id": a.call_id, "rpc_id": a.rpc_id, "phase": phase, "target": a.target, "payload": payload, "ts": since_start(), "ts_ms": ts_ms()})
 }
 
 /// A tools/call is about to run. Off: returns at once.
-pub fn call_start(name: &str, args: &Value, ss: &Arc<Mutex<Session>>) {
+pub fn call_start(name: &str, args: &Value, rpc_id: Option<&Value>, ss: &Arc<Mutex<Session>>) {
     if !enabled() { return; }
     let (tool, eff, group) = if toolgroups::is_group(name) {
         match toolgroups::resolve_group_call(name, args) { Ok((a, ia)) => (a, ia, Some(name)), Err(_) => (name.to_string(), args.clone(), None) }
@@ -414,7 +524,7 @@ pub fn call_start(name: &str, args: &Value, ss: &Arc<Mutex<Session>>) {
     if target["track_id"].is_null() {
         if let Some((t, _, _)) = target["clip_id"].as_str().and_then(|c| snap.find(c)) { target["track_id"] = json!(t); }
     }
-    let a = Active { call_id: new_call_id(), tool, target, t0: Instant::now(), snap, last_progress: None, last_frame: None, frames_t0: None, args: eff };
+    let a = Active { call_id: new_call_id(), rpc_id: rpc_id.cloned().unwrap_or(Value::Null), tool, target, t0: Instant::now(), snap, last_progress: None, last_frame: None, frames_t0: None, args: eff };
     let mut ev = event(&a, "start", json!({"args": summarize(&a.args)}));
     if let Some(g) = group { ev["group"] = json!(g); }
     emit(&ev);
@@ -472,6 +582,7 @@ pub fn call_end(result: &Value, ss: &Arc<Mutex<Session>>) {
         let mut ev = event(&a, "error", p); ev["duration_ms"] = json!(dur_ms);
         emit(&ev);
         crate::preview::call_finished(ss, &a.call_id, REV.load(Ordering::Relaxed), false, crate::preview::Hint::None, a.snap.duration, connected());
+        crate::preview::demo_frame(&a.call_id, &a.rpc_id, &a.tool);
         return;
     }
     let after = snapshot(ss, a.target["clip_id"].as_str());
@@ -492,7 +603,12 @@ pub fn call_end(result: &Value, ss: &Arc<Mutex<Session>>) {
     // live preview: any call that changed the project (or is declared mutating) queues one frame at the playhead
     let live = mutated || declared_mutating(&a.tool);
     crate::preview::call_finished(ss, &a.call_id, REV.load(Ordering::Relaxed), live, hint, after.duration, connected());
+    crate::preview::demo_frame(&a.call_id, &a.rpc_id, &a.tool);
 }
+
+/// Spectator demo mode only (preview.rs): after the response to a tools/call went out, hold the next request until this
+/// call's own frame reached the spectator and the pace has passed. Headless (demo off) or nobody listening: returns at once.
+pub fn pace() { if enabled() { crate::preview::demo_wait(); } }
 
 /// Size on disk of a finished export's output file, for the GUI's Renders history ("done · 18.4 MB"). Telemetry
 /// only: the tool result on stdout is not touched. None for a path pattern (PNG sequences) or a missing file.
@@ -534,6 +650,25 @@ pub fn call_abort(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn frames_are_latest_only_and_never_hold_state() {
+        // the frame lane keeps the newest FRAME_DEPTH, dropping the oldest
+        let mut f = VecDeque::new();
+        for k in 1..=5u64 { push_latest(&mut f, k, FRAME_DEPTH); }
+        assert_eq!(f.iter().copied().collect::<Vec<_>>(), vec![4, 5]);
+        // state waits only past STATE_BOUND, only while a spectator is connected, and one line always fits
+        assert!(!must_wait(0, STATE_BOUND * 2, true), "one line always fits an empty lane");
+        assert!(!must_wait(STATE_BOUND - 10, 10, true));
+        assert!(must_wait(STATE_BOUND - 10, 11, true), "past the bound: backpressure, not a drop");
+        assert!(!must_wait(STATE_BOUND * 4, 11, false), "nobody listening: never waits");
+        // the writer serves lines in emission order across the lanes
+        assert_eq!(frame_first(Some(3), Some(2)), Some(true));
+        assert_eq!(frame_first(Some(2), Some(3)), Some(false));
+        assert_eq!(frame_first(None, Some(9)), Some(true));
+        assert_eq!(frame_first(Some(9), None), Some(false));
+        assert_eq!(frame_first(None, None), None);
+    }
+
     #[test]
     fn reconnect_backoff_doubles_to_a_ceiling_and_resets() {
         let mut b = Backoff::new();
