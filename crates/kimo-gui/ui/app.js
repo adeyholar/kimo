@@ -393,7 +393,10 @@ function paint(el, html) {
     }
   }
   if (el._h != null && html.length < 4096 && !html.includes('flash') && retext(el, el._h, html)) { el._h = html; metrics.textPatches++; return false; }
-  el.innerHTML = html; el._h = html; metrics.panelWrites++; return true;
+  const of = el.querySelector(':scope > .frame'), oi = of && of.querySelector(':scope > img:not(.before)');
+  el.innerHTML = html; el._h = html; metrics.panelWrites++;
+  if (of) keepFrame(el, of, oi);
+  return true;
 }
 /* Same tags and attributes, only the words differ (a viewer HUD caption naming the new call): the text nodes are
    updated in place and every element stays. Markup carrying a flash is always rebuilt, so its flash replays. */
@@ -406,6 +409,20 @@ function retext(el, prev, html) {
   if (now.length !== old.length) return false;
   for (let i = 0; i < now.length; i++) if (old[i].nodeValue !== now[i].nodeValue) old[i].nodeValue = now[i].nodeValue;
   return true;
+}
+/* An engine frame (Naman 11:38): the viewer's frame box and its <img> are never re-mounted. When a viewer panel is
+   rewritten (a new frame, the out-of-date mark, the call HUD), the frame box and the picture already on screen are
+   kept and only what is drawn over them is new: the frame buffer swaps by setting src on the same <img>. */
+function syncAttrs(from, to) {
+  for (const a of [...to.attributes]) if (!from.hasAttribute(a.name)) to.removeAttribute(a.name);
+  for (const a of from.attributes) if (to.getAttribute(a.name) !== a.value) to.setAttribute(a.name, a.value);
+}
+function keepFrame(el, of, oi) {
+  const nf = el.querySelector(':scope > .frame'); if (!nf || !of) return;
+  const ni = nf.querySelector(':scope > img:not(.before)');
+  if (ni && oi) { syncAttrs(ni, oi); ni.replaceWith(oi); }
+  syncAttrs(nf, of); of.replaceChildren(...nf.childNodes); nf.replaceWith(of);
+  metrics.frameKeeps = (metrics.frameKeeps || 0) + 1;
 }
 function box(el) { return el._sz || (el._sz = [el.clientWidth, el.clientHeight]); }
 function render() {

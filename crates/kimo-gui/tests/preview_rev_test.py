@@ -31,7 +31,9 @@ SNAP = """() => { const vs = [...document.querySelectorAll('[data-panel] .frame'
   const f = vs[0]; const img = f && f.querySelector('img'); const st = f && f.querySelector('.tag.stale');
   const cl = f && f.cloneNode(true); if (cl) cl.querySelectorAll('.hud, .gz').forEach(x => x.remove());   /* the call HUD and the fading transform gizmo are not the preview */
   return { html: cl ? cl.outerHTML : null, src: img ? img.getAttribute('src') : null, stale: st ? st.textContent : null, n: vs.length,
-    prev: JSON.parse(JSON.stringify(window.__kimo.state.preview || {})), staleFrames: window.__kimo.metrics.staleFrames ?? 0 }; }"""
+    prev: JSON.parse(JSON.stringify(window.__kimo.state.preview || {})), staleFrames: window.__kimo.metrics.staleFrames ?? 0,
+    /* element identity (Naman 11:38): each viewer node gets a serial once; a frame swap must keep the same nodes */
+    ids: [f && f.closest('[data-panel]'), f, img].map(x => x ? (x.__kid || (x.__kid = (window.__kidn = (window.__kidn || 0) + 1))) : null), mode: window.__kimo.state.mode }; }"""
 async def settle(pg): await pg.evaluate('() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))')
 async def main():
     for p in list((CRATE / 'ui').glob('*.js')) + list((CRATE / 'src').rglob('*.rs')):
@@ -48,6 +50,7 @@ async def main():
         msgs = []; pg.on('console', lambda m: msgs.append(m.type + ': ' + m.text) if m.type in ('warning', 'error') else None); pg.on('pageerror', lambda e: msgs.append('PAGEERR ' + str(e)))
         await pg.goto(url); await pg.wait_for_function('window.__kimo'); await settle(pg)
         swaps, last_src, mutations, pending = 0, None, 0, None
+        idswaps = 0
         byid = {}
         for e in EV:
             if e.get('tool_name'): byid.setdefault(e['call_id'], []).append(e)
@@ -63,6 +66,8 @@ async def main():
                     ok(now['src'] == before['src'], f'rev {e["rev"]}: the old frame stays up until the new one lands')
             elif ty == 'frame_rendered':
                 ok(now['src'] == frames[e['rev']], f'frame rev {e["rev"]} is what the viewer shows')
+                if before['src'] and now['mode'] == before['mode']:   # a swap on the same screen: the buffer changes, the viewer stays
+                    ok(now['ids'] == before['ids'], f'frame rev {e["rev"]}: the viewer was re-mounted (panel, frame, img ids {before["ids"]} -> {now["ids"]})'); idswaps += 1
                 ok(now['stale'] is None, f'frame rev {e["rev"]} clears the mark (still {now["stale"]!r})')
                 ok(now['prev'].get('shown') == e['rev'], f'shown rev {now["prev"].get("shown")} != {e["rev"]}')
             elif tn and e.get('phase') in ('complete', 'error'):
@@ -87,6 +92,7 @@ async def main():
                 if e['png_b64'] != prev_: distinct += 1
                 prev_ = e['png_b64']
         ok(swaps == distinct, f'viewer image swaps {swaps} != engine frames with new pixels {distinct}')
+        ok(idswaps >= 3, f'only {idswaps} same-screen frame swaps checked for viewer identity')
         end = await pg.evaluate(SNAP)
         ok(end['stale'] is None and end['prev'].get('shown') == 8 and end['prev'].get('want') == 8, f'end state {end["prev"]} mark {end["stale"]!r}')
         ok(end['n'] >= 1, 'a viewer is on screen')
