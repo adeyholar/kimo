@@ -49,7 +49,7 @@ CHECK = """() => { const out = [];
       const dm = f => /^([^:]+): (.+?) → (.+)$/.exec(f);
       const tightOf = f => { const m = dm(f); if (!m) return null; const [, k, a, b] = m, ua = /[^\\d.]*$/.exec(a)[0], ub = /[^\\d.]*$/.exec(b)[0];
         const one = ua && ua === ub && /\\d$/.test(a.slice(0, a.length - ua.length)); return `${k} ${one ? a.slice(0, a.length - ua.length) : a}→${b}`; };
-      const compactOf = f => { const t = tightOf(f); return t ? t.slice(t.indexOf(' ') + 1) : null; };   /* values only, "104→112%" */
+      const compactOf = f => { const t = tightOf(f); return t ? t.slice(dm(f)[1].length + 1) : null; };   /* values only, "104→112%": the tight form less its name (a name may hold a space, "x @2s") */
       const same = (f, q) => f === q || tightOf(f) === q || compactOf(f) === q;
       const compacts = [];
       /* last resort, when no whole arg fits: the first arg's leading whole words and " …" ("1s: low-res …"); never a

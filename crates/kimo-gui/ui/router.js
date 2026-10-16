@@ -93,8 +93,10 @@ function inspectorDiff(state, MODES, ev, fam) {
     if (row) { if (from != null || row.v != null) row.from = from != null ? fmtVal(from, k) : row.v; row.v = fmtVal(to, k); row._flash = now(); return true; }
     return false;
   };
-  if (param != null && (P.to != null || P.value != null)) { if (set(param, P.to ?? P.value, P.from)) return true; }
-  if (/^(x|y|pos_x|pos_y)$/i.test(String(param)) && kv.blocks.some(b => b.k && /^position$/i.test(b.k))) return true;   // xfOps wrote Position
+  if (!(P.key && P.key.ease)) {   /* an ease change has no value row to update: it gets its own row below */
+    if (param != null && (P.to != null || P.value != null)) { if (set(param, P.to ?? P.value, P.from)) return true; }
+    if (/^(x|y|pos_x|pos_y)$/i.test(String(param)) && kv.blocks.some(b => b.k && /^position$/i.test(b.k))) return true;   // xfOps wrote Position
+  }
   // Unknown or unmapped: a small section for the latest call's payload (replaces the previous one).
   const i = kv.blocks.findIndex(b => b._live); if (i >= 0) kv.blocks.splice(i);
   // what changed first (param / from / to / effect / label / text), bookkeeping (timing, bounds, diffs) never
@@ -104,10 +106,11 @@ function inspectorDiff(state, MODES, ev, fam) {
   const rows = Object.entries(P).filter(([k, v]) => v != null && typeof v !== 'object' && !HIDE.test(k) && !RAW_ID.test(String(v))).sort((a, b) => rank(a[0]) - rank(b[0])).slice(0, 4);
   const val = P.to ?? P.value, head = param != null && val != null;
   const rest = head ? rows.filter(([k]) => !['param', 'from', 'to', 'value'].includes(k)).slice(0, 3) : rows;
-  if (!head && !rest.length) return false;
+  if (!head && !rest.length && !P.key) return false;
   kv.blocks.push({ sec: ev.tool_name, _live: true });
-  // the change itself leads: "Amount 0 → 0.35"
-  if (head) kv.blocks.push({ k: label(param), v: fmtVal(val, param), ...(P.from != null ? { from: fmtVal(P.from, param) } : {}), _live: true, _flash: now() });
+  // the change itself leads: "Amount 0 → 0.35"; a keyframe's own key, "Scale @2s 100% → 125%"
+  if (P.key) kv.blocks.push({ k: label(P.key.label), v: P.key.to, from: P.key.from, _live: true, _flash: now() });
+  else if (head) kv.blocks.push({ k: label(param), v: fmtVal(val, param), ...(P.from != null ? { from: fmtVal(P.from, param) } : {}), _live: true, _flash: now() });
   for (const [k, v] of rest) kv.blocks.push({ k: label(k), v: fmtVal(v, k), _live: true, _flash: now() });
   return true;
 }
@@ -833,15 +836,108 @@ const COV_H = { now, flashing, fmtVal, RAW_ID, findClip, findTrack, ensureTrack,
 const COVB_H = { now: () => now(), fmtVal, gamut: g => space(g, 0) || null, modeViews: (s, M, e) => modeViews(s, M, e),
   clipName: (s, M, id) => { const tl = s.liveTL || panels(s, M, ['timeline'])[0]; const [t, i] = tl ? findClip(tl, { clip_id: id }) : [null]; const lb = t ? t.clips[i].label : null; return lb && !RAW_ID.test(String(lb)) ? String(lb) : null; },
   clipObj: (s, id) => { const tl = s.liveTL; const [t, i] = tl ? findClip(tl, { clip_id: id }) : [null]; return t ? t.clips[i] : null; } };
+/* A keyframe call's payload carries the whole key list before and after ({t, v, ease, bez} each), so a plain
+   fmtVal of it read "x: → ,". keyChange turns it into the one key that changed, the way the rail and the Inspector
+   read every other change: "scale @2s: 100% → 125%" (the curve's value there before → the new key's value),
+   "x @0s ease: linear → .42 .0 .58 1" for a bezier ease. The key lists stay on the payload for the Graph. */
+const isKey = k => k && typeof k === 'object' && !Array.isArray(k) && numOf(k.t) != null && 'v' in k;
+const keyAt = (keys, t) => keys.find(k => Math.abs(numOf(k.t) - t) < 1e-6);
+function curveAt(keys, t) {
+  const ks = keys.filter(k => numOf(k.v) != null).sort((a, b) => numOf(a.t) - numOf(b.t)); if (!ks.length) return null;
+  if (t <= numOf(ks[0].t)) return numOf(ks[0].v);
+  for (let i = 1; i < ks.length; i++) { const a = ks[i - 1], b = ks[i], ta = numOf(a.t), tb = numOf(b.t); if (t <= tb) return tb > ta ? numOf(a.v) + (numOf(b.v) - numOf(a.v)) * (t - ta) / (tb - ta) : numOf(b.v); }
+  return numOf(ks[ks.length - 1].v);
+}
+const CSS_EASE = { '0.25 0.1 0.25 1': 'ease', '0.42 0 1 1': 'ease-in', '0 0 0.58 1': 'ease-out', '0.42 0 0.58 1': 'ease-in-out' };
+const easeOf = k => { if (!(Array.isArray(k.bez) && k.bez.length === 4)) return String(k.ease ?? 'linear'); const s = k.bez.map(v => fmtVal(v)).join(' '); return CSS_EASE[s] || 'bezier ' + s.replace(/(^| )0\./g, '$1.'); };   /* the standard curves by name */
+const keySecs = t => `${Math.round(t * 1000) / 1000}s`;
+const KEY_TOOLS = /^set_keyframe(_bezier)?$/;   /* cov_b.js reads move_key / remove_key / … key lists itself */
+function keyChange(ev) {
+  const P = ev.payload; if (!KEY_TOOLS.test(String(ev.tool_name)) || ev.phase !== 'complete' || !P || !Array.isArray(P.from) || !Array.isArray(P.to)) return ev;
+  const F = P.from, To = P.to; if (![...F, ...To].length || ![...F, ...To].every(isKey)) return ev;
+  const param = String((ev.target || {}).param ?? P.param ?? (P.args || {}).property ?? 'value'), A = P.args || {};
+  /* the key the call named, else the first key that differs */
+  const ts = [...new Set([...F, ...To].map(k => numOf(k.t)))].sort((a, b) => a - b);
+  const differs = t => { const a = keyAt(F, t), b = keyAt(To, t); return !a || !b || numOf(a.v) !== numOf(b.v) || easeOf(a) !== easeOf(b); };
+  const ta = numOf(A.time ?? A.t), t = ta != null && differs(ta) ? ta : ts.find(differs);
+  const base = { ...P, from_keys: F, to_keys: To, from: undefined, to: undefined };
+  if (t == null) return { ...ev, payload: { ...base, key: { label: `${param} keys`, from: String(F.length), to: String(To.length), t: null } } };
+  const a = keyAt(F, t), b = keyAt(To, t);
+  let key;
+  if (a && b && numOf(a.v) === numOf(b.v)) key = { label: `${param} @${keySecs(t)} ease`, from: easeOf(a), to: easeOf(b), t, ease: true };
+  else {
+    const was = a ? numOf(a.v) : curveAt(F, t), now_ = b ? numOf(b.v) : curveAt(To, t);
+    key = { label: `${param} @${keySecs(t)}`, from: was == null ? 'none' : fmtVal(was, param), to: now_ == null ? 'none' : fmtVal(now_, param), t };
+    base.from = was ?? undefined; base.to = now_ ?? undefined;
+  }
+  return { ...ev, payload: { ...base, key } };
+}
+/* The Graph (m03's curves panel) for a keyframe call: the property's curve as the engine now holds it, evaluated
+   segment by segment — a key with a bezier ease [x1, y1, x2, y2] runs the CSS cubic-bezier between it and the next
+   key (sampled, so the drawn line IS the timing curve), with its two handles in ember; a linear key a straight line;
+   a hold key a step. The curve before the call is dashed underneath, the changed key is ember. Only on a screen that
+   has a Graph (set_keyframe_bezier opens m03); everything drawn comes from the engine's own key lists. */
+const BEZ_NAMED = { ease: [0.25, 0.1, 0.25, 1], 'ease-in': [0.42, 0, 1, 1], 'ease-out': [0, 0, 0.58, 1], 'ease-in-out': [0.42, 0, 0.58, 1] };
+function bezOf(k) {
+  if (Array.isArray(k.bez) && k.bez.length === 4 && k.bez.every(v => numOf(v) != null)) return k.bez.map(numOf);
+  return BEZ_NAMED[String(k.ease ?? '').toLowerCase().replace(/_/g, '-')] || null;
+}
+function cubicY([x1, y1, x2, y2], x) {   // CSS cubic-bezier: solve x(s) = x (Newton, bisection fallback), return y(s)
+  const B = (a, b, s) => 3 * a * s * (1 - s) * (1 - s) + 3 * b * s * s * (1 - s) + s * s * s;
+  const dB = (a, b, s) => 3 * a * (1 - s) * (1 - s) + 6 * (b - a) * s * (1 - s) + 3 * (1 - b) * s * s;
+  let s = x;
+  for (let i = 0; i < 8; i++) { const e = B(x1, x2, s) - x, d = dB(x1, x2, s); if (Math.abs(e) < 1e-6) break; if (Math.abs(d) < 1e-6) { s = NaN; break; } s -= e / d; }
+  if (!(s >= 0 && s <= 1) || Math.abs(B(x1, x2, s) - x) > 1e-4) { let lo = 0, hi = 1; s = x; for (let i = 0; i < 40; i++) { if (B(x1, x2, s) < x) lo = s; else hi = s; s = (lo + hi) / 2; } }
+  return B(y1, y2, s);
+}
+export function evalKeys(keys, n = 24) {   // [[t, v]] along the curve, plus the bezier handles [[t, v], [t, v]] (key → handle)
+  const ks = keys.filter(k => numOf(k.t) != null && numOf(k.v) != null).sort((a, b) => numOf(a.t) - numOf(b.t));
+  const pts = [], handles = [];
+  ks.forEach((a, i) => {
+    const ta = numOf(a.t), va = numOf(a.v); pts.push([ta, va]);
+    const b = ks[i + 1]; if (!b) return;
+    const tb = numOf(b.t), vb = numOf(b.v), dt = tb - ta, dv = vb - va, bz = bezOf(a), ease = String(a.ease ?? '').toLowerCase();
+    if (/^(hold|step|constant)$/.test(ease)) { pts.push([tb, va]); return; }
+    if (!bz || dt <= 0) return;
+    for (let j = 1; j < n; j++) { const x = j / n; pts.push([ta + x * dt, va + cubicY(bz, x) * dv]); }
+    handles.push([[ta, va], [ta + bz[0] * dt, va + bz[1] * dv]], [[ta + bz[2] * dt, va + bz[3] * dv], [tb, vb]]);
+  });
+  return { pts, handles, keys: ks.map(k => [numOf(k.t), numOf(k.v)]) };
+}
+const KG_PROP = { x: 'position x', y: 'position y', pos_x: 'position x', pos_y: 'position y' };
+function keyGraph(state, MODES, ev) {
+  const P = ev.payload || {}, T = ev.target || {};
+  if (!Array.isArray(P.to_keys)) return false;
+  const [mode, V] = modeViews(state, MODES, ev), PP = MODES[mode] ? MODES[mode].panels : {};
+  const e = Object.entries(PP).find(([, sp]) => sp.kind === 'curves'); if (!e) return false;
+  const G = V[e[0]] || (V[e[0]] = {});
+  const cur = evalKeys(P.to_keys), prev = evalKeys(P.from_keys || []);
+  const ts = [...cur.pts, ...prev.pts].map(p => p[0]); let t0 = ts.length ? Math.min(...ts) : 0, t1 = ts.length ? Math.max(...ts) : 1; if (t1 - t0 < 1e-6) { t0 -= .5; t1 += .5; }
+  const raw = (t1 - t0) / 6, mag = Math.pow(10, Math.floor(Math.log10(raw))), step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(x => x >= raw) || raw, pad = (t1 - t0) * .04;
+  const vs = [...cur.pts, ...prev.pts, ...cur.handles.flat()].map(p => p[1]); let lo = Math.min(...vs), hi = Math.max(...vs); if (!(hi - lo > 1e-9)) { lo -= 1; hi += 1; }
+  const N = v => .12 + (v - lo) / (hi - lo) * .76, nn = q => [q[0], N(q[1])];
+  const kt = P.key && P.key.t;
+  G.ruler = { t0: t0 - pad, t1: t1 + pad, step, first: Math.ceil((t0 - pad) / step - 1e-9) * step, fmt: 's' };
+  G.curves = [];
+  if (prev.pts.length) G.curves.push({ pts: prev.pts.length > 1 ? prev.pts.map(nn) : [nn(prev.pts[0]), nn(prev.pts[0])], keys: prev.keys.map(k => [k[0], N(k[1]), '#4d4a44']), color: '#4d4a44', w: 1.4, dash: '5 4', cls: 'kg-prev' });
+  if (cur.pts.length) G.curves.push({ pts: cur.pts.length > 1 ? cur.pts.map(nn) : [nn(cur.pts[0]), nn(cur.pts[0])], em: true, cls: 'kg-cur', _raw: cur.pts, _handles: cur.handles,
+    handles: cur.handles.map(h => h.map(nn)), keys: cur.keys.map(k => [k[0], N(k[1]), kt != null && Math.abs(k[0] - kt) < 1e-6 ? 'var(--ember)' : 'var(--cream)']) });
+  const nm = (() => { const tl = state.liveTL || panels(state, MODES, ['timeline'])[0]; const [tr, i] = tl && T.clip_id != null ? findClip(tl, { clip_id: T.clip_id }) : [null]; const lb = tr ? tr.clips[i].label : null; return lb && !RAW_ID.test(String(lb)) ? String(lb) : null; })();
+  const prop = KG_PROP[String(T.param ?? P.param ?? 'value').toLowerCase()] || String(T.param ?? P.param ?? 'value').replace(/_/g, ' ');
+  G.lanes = [nm ? `${nm} · ${prop}` : prop];
+  G.playhead = kt != null ? kt : null; G._kg = ev.call_id;
+  return true;
+}
 export function route(ev, state, MODES) {
   if (!ev || ev.type || !ev.tool_name) return [ev];        // legacy or non-tool event: unchanged
-  ev = assetNames(ev, state);
+  ev = keyChange(assetNames(ev, state));
   if (COV_A.test(String(ev.tool_name))) ev = covAPre(state, ev, COV_H);   /* rail args read as names; raw args kept for covAOps */
   covbHistory(state, MODES, ev, COVB_H);   // before any op: the screen as it was before this step (cov_b.js)
   const fam = family(ev.tool_name), id = ev.call_id ?? ev.tool_name + '@' + (ev.ts ?? '');
   const out = [];
   if (fam === 'inspect') return inspectOps(state, MODES, ev, id);
   if (fam === 'transform' && (ev.phase === 'start' || ev.phase === 'complete')) xfOps(state, MODES, ev);
+  if (ev.phase === 'complete' && KEY_TOOLS.test(String(ev.tool_name))) keyGraph(state, MODES, ev);   // the curve on the Graph, when the screen has one
   if (fam === '3d') sceneOps(state, MODES, ev);
   if (fam === 'graphics') graphicsOps(state, MODES, ev);
   if (fam === 'roto') maskOps(state, MODES, ev);
@@ -878,7 +974,7 @@ export function route(ev, state, MODES) {
     const t0 = state._t0 && state._t0[id]; if (t0 != null) delete state._t0[id];
     const dur = numOf(P.dur_ms) ?? numOf(ev.duration_ms) ?? (t0 != null && ev.ts_ms != null && ev.ts_ms >= t0 ? ev.ts_ms - t0 : null); ev._dur = dur;
     // the landed value replaces the rail's start-time args: "scale: 104% → 112%"
-    const landed = !err && param && val != null && typeof val !== 'object' && fmtVal(val, param) !== '' ?   /* a key list (to: [{t, v}…]) is not a landed value */ { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
+    const landed = !err && P.key ? { ...(T.clip_id ? { clip: T.clip_id } : {}), [P.key.label]: `${P.key.from} → ${P.key.to}` } : !err && param && val != null && typeof val !== 'object' && fmtVal(val, param) !== '' ?   /* a key list (to: [{t, v}…]) is not a landed value */ { ...(T.clip_id ? { clip: T.clip_id } : {}), [param]: (P.from != null ? fmtVal(P.from, param) + ' → ' : '') + fmtVal(val, param) } : undefined;
     out.push({ type: 'tool_end', id, name: ev.tool_name, dur_ms: dur, status: err ? 'error' : 'ok', error: P.error, ...(P.result !== undefined ? { result: P.result } : {}), ...(landed ? { args: railArgs(state, landed) } : ev._railArgs ? { args: ev._railArgs } : {}) });
     if (!err) {
       const v = views(state); if (v.viewer && v.viewer.wipe != null) v.viewer.wipe = 1;
