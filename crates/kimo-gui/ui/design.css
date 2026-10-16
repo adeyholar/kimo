@@ -313,3 +313,9 @@ body::before{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;wi
 
 /* no SVG filter glows: a drop-shadow filter on the wheels / curves / keys re-rasterises under every moving panel on a
    software compositor (edit -> grading dropped frames with them, held 60 fps without) */
+
+/* perf (PERF-1): an edit flash (kflash on the clip, kflashrow on the track label and the Inspector row) animates
+   box-shadow / background, so it repaints on every frame for 0.7 s. Under this layer's lit slabs, gradients and soft
+   shadows each repaint re-rasterised whole tiles (28 ms of raster per edit vs 10 ms without it). While it flashes, the
+   element gets its own small compositor layer, so the repaint touches only its own pixels. Nothing drawn changes. */
+.clip.flash,.trk.flash .lab,.kv .row.flash{will-change:transform}
