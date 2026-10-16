@@ -116,6 +116,7 @@ function viewer({ spec, data, w, h, state }) {
     const pos = t.pos === 'tr' ? `right:${t.x ?? 10}px` : `left:${t.x ?? 10}px`;
     html += `<span class="tag" style="${pos};top:${t.y ?? 10}px">${E(t.text)}</span>`;
   }
+  if (data.stale != null) html += `<span class="tag stale"><i></i>out of date · rev ${E(data.stale)}</span>`;   /* the frame shows an older rev than the project's (app.js previewMark) */
   const hd = state && state.hud;
   if (hd && performance.now() - hd.t < 1600) html += `<span class="hud${hd.phase === 'error' ? ' err' : hd.fam === 'inspect' ? ' read' : ''}" style="right:${o.hudX ?? 10}px;top:${o.hudY ?? 10}px"><i></i>${E(hd.fam)} - ${E(hd.text)}</span>`;
   html += '</div>';

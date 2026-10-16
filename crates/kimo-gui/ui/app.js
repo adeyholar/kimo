@@ -15,6 +15,7 @@ export const state = {
   calls: [], callCount: 0,
   views: {},
   stats: {},
+  preview: { shown: -1, want: 0, revs: false },   // the engine frame's rev on the viewer, the project's latest rev (see previewMark)
 };
 
 // ---------- reducer ----------
@@ -28,11 +29,23 @@ function merge(dst, src) {
 }
 function view(mode) { return state.views[mode] || (state.views[mode] = {}); }
 
+/* "out of date · rev N" on every viewer the engine's frames own, from the moment a mutating call moves the project past
+   the frame on screen until the engine's frame for that rev (or a newer one) arrives. Off until the engine has sent a
+   frame with a rev: an engine without auto-preview never gets a mark it could not clear. */
+function previewMark() {
+  const P = state.preview, mark = P.revs && P.want > P.shown ? P.want : null;
+  for (const [mode, M] of Object.entries(MODES)) for (const [name, spec] of Object.entries(M.panels)) {
+    if (spec.kind !== 'viewer') continue;
+    const v = (state.views[mode] || {})[name]; if (!v || !v._engine) continue;
+    if (mark != null) v.stale = mark; else delete v.stale;
+  }
+}
+
 export function apply(ev) {
   if (!ev || typeof ev !== 'object') return;
   switch (ev.type) {
     case 'session':
-      if (ev.reset) { state.calls = []; state.callCount = 0; state.views = {}; state.stats = {}; state.explicitActivity = false; state.explicitMode = false; state.activity = null; }
+      if (ev.reset) { state.calls = []; state.callCount = 0; state.views = {}; state.stats = {}; state.preview = { shown: -1, want: 0, revs: false }; state.explicitActivity = false; state.explicitMode = false; state.activity = null; }
       for (const k of ['project', 'agent', 'read_only']) if (ev[k] !== undefined) state.session[k] = ev[k];
       if (ev.width > 0 && ev.height > 0) { state.session.width = ev.width; state.session.height = ev.height; }   // project size: the transform gizmo places x/y pixels with it
       if (ev.elapsed_s !== undefined) { state.session.elapsed_s = ev.elapsed_s; state.session.t0 = performance.now(); }
@@ -73,6 +86,12 @@ export function apply(ev) {
       break;
     }
     case 'frame_rendered': {
+      /* Preview safety: an engine frame carries the project rev it shows (k5 auto-preview). A frame older than the one on
+         the viewer is dropped (a slow render never overwrites a newer one); a frame with no rev (an older engine) shows
+         as before. The GUI never asks for a frame: it only listens. */
+      const P = state.preview, fr = Number.isFinite(ev.rev) ? ev.rev : null;
+      if (fr != null) { if (fr < P.shown) { metrics.staleFrames++; return; } P.shown = fr; P.revs = true; }
+      else if (P.revs) P.shown = Math.max(P.shown, P.want);
       const src = ev.png_b64 ? 'data:image/png;base64,' + ev.png_b64 : ev.jpg_b64 ? 'data:image/jpeg;base64,' + ev.jpg_b64 : ev.src;
       // the engine's frame shows in this mode's viewer and in every other mode's viewer the engine
       // already owns or that has no frame yet, so a live session never hops to an empty viewer
@@ -87,10 +106,12 @@ export function apply(ev) {
       // a render job still running takes each new engine frame as its Renders thumbnail
       if (src) for (const r of state.views.export?.renders?.rows || []) if (r._live) r._thumb = src;
       if (src && (ev.png_b64 || ev.jpg_b64)) computeParade(src);
+      previewMark();
       break;
     }
     case 'project_changed':
       state.stats.saved_at = performance.now(); state.stats.rev = ev.rev;
+      if (Number.isFinite(ev.rev)) { state.preview.want = Math.max(state.preview.want, ev.rev); previewMark(); }   // only a mutating call moves the rev
       if (ev.width > 0 && ev.height > 0) { state.session.width = ev.width; state.session.height = ev.height; }
       if (typeof ev.project === 'string' && ev.project.trim()) state.session.project = ev.project.trim();
       break;
@@ -198,7 +219,7 @@ function stepSprings(now) {
 const queue = [];
 let rafId = 0, dirty = true, hidden = document.visibilityState === 'hidden';
 export const QMAX = 2048;
-export const metrics = { raf: 0, renders: 0, scoped: 0, panelWrites: 0, textPatches: 0, trackWrites: 0, ticks: 0, events: 0, coalesced: 0, dropped: 0, qmax: 0 };
+export const metrics = { raf: 0, renders: 0, scoped: 0, panelWrites: 0, textPatches: 0, trackWrites: 0, ticks: 0, events: 0, coalesced: 0, dropped: 0, qmax: 0, staleFrames: 0 };
 function enqueue(ev) {
   metrics.events++;
   // Hidden: fold the event into state right away (the reducer never touches
