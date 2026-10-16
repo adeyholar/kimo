@@ -22,7 +22,7 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
 JS = r"""
 window.__q = {
   mode: () => __kimo.state.mode,
-  rows: () => [...document.querySelectorAll('.kv .row')].map(r => r.textContent.replace(/\s+/g, ' ').trim()),
+  rows: () => [...document.querySelectorAll('.kv .row')].filter(r => !r.closest('[data-leaving]')).map(r => r.textContent.replace(/\s+/g, ' ').trim()),
   secs: () => [...document.querySelectorAll('.kv .sec')].map(r => r.textContent.trim()),
   tags: () => [...document.querySelectorAll('.frame .tag')].map(e => e.textContent),
   clips: () => [...document.querySelectorAll('.trk .clip')].map(c => ({ label: (c.querySelector('.cl') || {}).textContent || '', left: parseFloat(c.style.left), width: parseFloat(c.style.width),

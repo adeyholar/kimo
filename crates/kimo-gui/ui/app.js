@@ -215,7 +215,7 @@ function buildLayout() {
     c.dataset.leaving = c.dataset.panel; delete c.dataset.panel; delete c.dataset.anim;
     c.style.cssText = `position:absolute;left:${ob[0]}px;top:${ob[1]}px;width:${ob[2]}px;height:${ob[3]}px;z-index:0;pointer-events:none`;
     main.insertBefore(c, main.firstChild);
-    const a = c._leave = c.animate([{ opacity: 1 }, { opacity: 1, offset: .55 }, { opacity: 0 }], { duration: 200, easing: 'linear' });
+    const a = c._leave = c.animate([{ opacity: 1 }, { opacity: 1, offset: .55 }, { opacity: 0 }], { duration: 150, easing: 'linear' });
     a.pause(); leaving.push(a);
     a.onfinish = () => { if (c._leave === a) { c._leave = null; c.remove(); } };
   }
