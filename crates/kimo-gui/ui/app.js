@@ -89,6 +89,14 @@ export function apply(ev) {
       /* Preview safety: an engine frame carries the project rev it shows (k5 auto-preview). A frame older than the one on
          the viewer is dropped (a slow render never overwrites a newer one); a frame with no rev (an older engine) shows
          as before. The GUI never asks for a frame: it only listens. */
+      /* A scope render (render_scope) sends its image as a frame too: it goes to the scope dock of every screen that has
+         one, never onto a viewer, and it is not a preview of the project (no rev, no parade from it). */
+      const sk = ev.call_id != null && state._scopeCalls ? state._scopeCalls[ev.call_id] : undefined;
+      if (sk !== undefined) {
+        const ssrc = ev.png_b64 ? 'data:image/png;base64,' + ev.png_b64 : ev.jpg_b64 ? 'data:image/jpeg;base64,' + ev.jpg_b64 : ev.src;
+        if (ssrc) for (const [mode, M] of Object.entries(MODES)) for (const [name, spec] of Object.entries(M.panels)) if (spec.kind === 'scopes') { const V = view(mode); (V[name] || (V[name] = {})).img = { src: ssrc, kind: sk, tc: ev.tc ?? null }; }
+        break;
+      }
       const P = state.preview, fr = Number.isFinite(ev.rev) ? ev.rev : null;
       if (fr != null) { if (fr < P.shown) { metrics.staleFrames++; return; } P.shown = fr; P.revs = true; }
       else if (P.revs) P.shown = Math.max(P.shown, P.want);

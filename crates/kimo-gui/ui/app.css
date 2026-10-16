@@ -337,3 +337,11 @@ body.calls-sans{--call-font:var(--sans)}
 .tlcut{position:absolute;width:0;margin-left:-.5px;border-left:1px dashed var(--cream);opacity:.75;z-index:4;pointer-events:none}
 .tlcut.flash{opacity:1;animation:kmkout .7s ease-in 1 reverse}
 .clip .cbeat{position:absolute;top:2px;width:1px;height:6px;background:var(--cream);opacity:.85;z-index:1}
+
+/* the engine's scope image, in the scope dock (never the viewer) */
+.scopedock{position:absolute;z-index:2;background:var(--ink,#0b0b0a);border-radius:4px;overflow:hidden}
+.scopedock img{position:absolute;inset:0 0 18px 0;width:100%;height:calc(100% - 18px);object-fit:contain}
+.scopedock .lab{position:absolute;left:0;right:0;bottom:0;height:18px;line-height:18px;text-align:center;font:500 11.5px var(--mono);color:var(--dim)}
+.pbar.indet>div{animation:kindet 1.4s ease-in-out infinite;will-change:transform}
+@keyframes kindet{0%{transform:translateX(-100%)}100%{transform:translateX(360%)}}
+.pbar.indet.halt>div{animation:none;opacity:.35}

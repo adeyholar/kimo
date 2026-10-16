@@ -122,8 +122,9 @@ function viewer({ spec, data, w, h, state }) {
   html += '</div>';
   if (data.progress) {
     const p = data.progress, y = pt + fh + (o.progY ?? 14);
-    html += `<div style="position:absolute;left:${pl}px;right:${pr}px;top:${y}px;height:${o.progH ?? 3}px;background:var(--raise2);border-radius:2px"><div style="width:${p.pct}%;height:100%;background:var(--ember);border-radius:2px"></div></div>` +
-      `<div class="vmeta" style="top:${y + (o.progMetaDy ?? 9)}px;left:${pl}px;right:${pr}px"><span>${E(p.left)}</span><span class="r"><span class="em">${E(p.pct)}%</span>&nbsp;&nbsp;&nbsp;${E(p.right)}</span></div>`;
+    const det = p.pct != null;   /* no progress event yet: an indeterminate sweep, no percentage */
+    html += `<div class="pbar${det ? '' : ' indet'}${p.halt ? ' halt' : ''}" style="position:absolute;left:${pl}px;right:${pr}px;top:${y}px;height:${o.progH ?? 3}px;background:var(--raise2);border-radius:2px${det ? '' : ';overflow:hidden'}"><div style="width:${det ? p.pct : 28}%;height:100%;background:var(--ember);border-radius:2px"></div></div>` +
+      `<div class="vmeta" style="top:${y + (o.progMetaDy ?? 9)}px;left:${pl}px;right:${pr}px"><span>${E(p.left)}</span><span class="r">${det ? `<span class="em">${E(p.pct)}%</span>&nbsp;&nbsp;&nbsp;` : ''}${E(p.right)}</span></div>`;
   }
   if (data.thumbs) {
     const ty = o.thumbY ?? (pt + fh + 12), th = o.thumbH ?? 50;
@@ -676,6 +677,7 @@ function vectorscope(cx, cy, r, seed) {
 }
 function scopes({ spec, data, w, h }) {
   const o = spec.opts || {};
+  const dock = data.img ? scopeDock(data.img, o, w, h, data.wave ? scopeGeom(o, w, h).split : (o.split ?? Math.round(w * .5))) : '';
   if (!data.wave) {   // legacy synthetic look (no binned scope data from the engine)
     const split = o.split ?? Math.round(w * .5);
     let s = '';
@@ -685,7 +687,7 @@ function scopes({ spec, data, w, h }) {
     s += `<line x1="${split}" x2="${split}" y1="12" y2="${h - 12}" stroke="var(--line)"/>`;
     const cx = split + (w - split) / 2, cy = (y0 + y1) / 2, r = Math.min((w - split) / 2 - 20, (y1 - y0) / 2 + 6);
     s += vectorscope(cx, cy, r, 7);
-    return head(spec, data) + `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
+    return head(spec, data) + `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>` + dock;
   }
   // Binned scope data (what an engine's render_scope sends): drawn on canvas after mount.
   const g = scopeGeom(o, w, h);
@@ -699,7 +701,13 @@ function scopes({ spec, data, w, h }) {
   s += `<text x="${px((g.wx0 + g.wx1) / 2)}" y="${h - (o.labB ?? 5)}" text-anchor="middle" font-size="${o.labFs ?? 15}" fill="var(--dim)" font-family="var(--mono)">waveform</text>`;
   s += `<text x="${g.vx}" y="${h - (o.labB ?? 5)}" text-anchor="middle" font-size="${o.labFs ?? 15}" fill="var(--dim)" font-family="var(--mono)">vectorscope</text>`;
   return head(spec, data) + `<canvas class="scopecv" width="${w}" height="${h}" style="position:absolute;left:0;top:0;width:${w}px;height:${h}px"></canvas>` +
-    `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>`;
+    `<svg style="position:absolute;inset:0" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${s}</svg>` + dock;
+}
+/* the engine's own scope image (render_scope) in its half of the dock: a vectorscope over the vectorscope, anything
+   else (waveform, parade, histogram) over the waveform; the main viewer keeps the frame */
+function scopeDock(img, o, w, h, split) {
+  const vec = /vector/i.test(img.kind), x = vec ? split + 6 : 6, bw = vec ? w - split - 12 : split - 12, top = 6, bh = h - 12;
+  return `<div class="scopedock" style="left:${px(x)}px;top:${top}px;width:${px(bw)}px;height:${bh}px"><img src="${E(img.src)}" alt=""><span class="lab">${E(img.kind)}${img.tc ? ' · ' + E(img.tc) : ''}</span></div>`;
 }
 function scopeGeom(o, w, h) {
   return { wx0: o.wx0 ?? 44, wx1: o.wx1 ?? 680, wy0: o.wy0 ?? 20, wy1: o.wy1 ?? 222, split: o.split ?? 701, vx: o.vx ?? 894, vy: o.vy ?? 122, vr: o.vr ?? 110 };

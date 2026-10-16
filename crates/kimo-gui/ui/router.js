@@ -782,7 +782,7 @@ function exportOps(state, MODES, ev) {
     const job = ren.rows.find(r => A.job_id != null && r._jobId === A.job_id) || ren.rows.find(r => r._live);
     if (!job) return false;
     if (tn === 'cancel_job' && ev.phase === 'complete') { const kept = Array.isArray(R0.completed_ranges) ? R0.completed_ranges.length : null; job[3] = '✕ cancelled' + (kept ? ` · ${kept} chunk${kept > 1 ? 's' : ''} kept` : ''); job._live = false; job._flash = now(); if (vw.progress) vw.progress = { ...vw.progress, right: 'cancelled' }; }
-    if (tn === 'resume_job' && ev.phase === 'start') { job[3] = '● resuming'; job._live = true; job._call = id; job._flash = now(); vw.progress = { pct: vw.progress ? vw.progress.pct : 0, left: 'resuming', right: '' }; }
+    if (tn === 'resume_job' && ev.phase === 'start') { job[3] = '● resuming'; job._live = true; job._call = id; job._flash = now(); vw.progress = { pct: vw.progress ? vw.progress.pct : null, left: 'resuming', right: '' }; }
     if (tn === 'resume_job' && ev.phase !== 'start') { job._call = id; row = job; } else return true;
   }
   if (ev.phase === 'start') {
@@ -798,9 +798,9 @@ function exportOps(state, MODES, ev) {
     const preset = tn === 'join_export' ? (nParts ? `join ${nParts} parts` : 'join') : tn === 'preview_range' ? `preview${sc != null && sc !== 1 ? ' ' + sc + 'x' : ''}` : tn === 'collect_project' ? 'collect' : tn === 'contact_sheet' ? 'contact sheet'
       : [res && String(res).replace(/\s*x\s*/, 'x'), codec].filter(Boolean).join(' ') || A.preset || '';
     const label = tn === 'collect_project' && !path && A.dest_dir ? (String(A.dest_dir).split(/[\\/]/).filter(Boolean).pop() || base) : base;
-    if (!row) { row = [label, preset, '', tn === 'collect_project' ? '● collecting' : tn === 'contact_sheet' ? '● rendering' : '● rendering 0%', 'now']; row._call = id; row._t0 = now(); row._job = true; ren.rows.unshift(row); }
+    if (!row) { row = [label, preset, '', tn === 'collect_project' ? '● collecting' : tn === 'contact_sheet' ? '● rendering' : '● rendering', 'now']; row._call = id; row._t0 = now(); row._job = true; ren.rows.unshift(row); }
     row._live = true; if (path) row._path = shortPath(path, 48); if (vw.src) row._thumb = vw.src;
-    if (!/^(collect_project|contact_sheet)$/.test(tn)) vw.progress = { pct: 0, left: 'starting', right: '' };   // a collect / sheet is not a frame render: no bar
+    if (!/^(collect_project|contact_sheet)$/.test(tn)) vw.progress = { pct: null, left: 'starting', right: '' };   /* indeterminate until the engine's first progress event: never a made-up 0% */   // a collect / sheet is not a frame render: no bar
     return true;
   }
   if (ev.phase === 'progress') {
@@ -825,7 +825,7 @@ function exportOps(state, MODES, ev) {
     if (vw.src) row._thumb = vw.src;
     if (dur != null) row[4] = mmss(dur); row._flash = now(); row._live = false;
   }
-  if (vw.progress && !/^(collect_project|contact_sheet)$/.test(tn)) vw.progress = ok ? (vw.progress.left === 'starting' ? { ...vw.progress, pct: 100, left: 'done', right: dur != null ? `in ${mmss(dur)}` : '' } : { ...vw.progress, pct: 100, right: (dur != null ? `done in ${mmss(dur)}` : 'done') }) : { ...vw.progress, right: 'failed' };
+  if (vw.progress && !/^(collect_project|contact_sheet)$/.test(tn)) vw.progress = ok ? (vw.progress.left === 'starting' ? { ...vw.progress, pct: 100, left: 'done', right: dur != null ? `in ${mmss(dur)}` : '' } : { ...vw.progress, pct: 100, right: (dur != null ? `done in ${mmss(dur)}` : 'done') }) : { ...vw.progress, right: 'failed', halt: true };   /* a failed job's sweep stops */
   return true;
 }
 
@@ -931,6 +931,7 @@ function keyGraph(state, MODES, ev) {
 export function route(ev, state, MODES) {
   if (!ev || ev.type || !ev.tool_name) return [ev];        // legacy or non-tool event: unchanged
   ev = keyChange(assetNames(ev, state));
+  if (ev.tool_name === 'render_scope' && ev.call_id != null && (ev.phase === 'start' || !(state._scopeCalls || {})[ev.call_id])) (state._scopeCalls || (state._scopeCalls = {}))[ev.call_id] = String(((ev.payload || {}).args || {}).scope ?? 'scope');   /* its image goes to the scope dock (app.js) */
   if (COV_A.test(String(ev.tool_name))) ev = covAPre(state, ev, COV_H);   /* rail args read as names; raw args kept for covAOps */
   covbHistory(state, MODES, ev, COVB_H);   // before any op: the screen as it was before this step (cov_b.js)
   const fam = family(ev.tool_name), id = ev.call_id ?? ev.tool_name + '@' + (ev.ts ?? '');
