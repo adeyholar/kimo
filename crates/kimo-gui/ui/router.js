@@ -328,7 +328,7 @@ function fitRuler(tl) {
 }
 // Clip names a person reads: a file name when the call carried a path, the text of a text clip,
 // the engine's own label when it is a real name, else "V1 · Clip 02" (never a raw engine id).
-const RAW_ID = /^(c|clip|t|track|fx|effect|node|n|layer|l)[_-]?\d+$/i;
+const RAW_ID = /^(c|clip|t|track|fx|effect|node|n|layer|l|asset|media)[_-]?\d+(?:[_-][a-z]{0,5}\d+|[_-][a-z])*$/i;   /* also an id derived from one: c475_s0, clip2_b */
 // The rail's copy of a call's args: a raw clip id becomes that clip's name on the live timeline, or is
 // left out when the window has no name for it (never shown raw, never invented)
 // A picked call's state diff (the Inspector's Diff section): before -> after for each target field the engine
@@ -389,10 +389,37 @@ function railArgs(state, a) {
   for (const k of CLIP_KEYS) { const v = a[k]; if (typeof v !== 'string' || !RAW_ID.test(v)) continue;
     const [t, i] = state.liveTL ? findClip(state.liveTL, { clip_id: v }) : [null, -1], lb = t ? t.clips[i].label : null;
     o = o || { ...a }; if (lb && !RAW_ID.test(String(lb))) o[k] = String(lb); else delete o[k]; }
+  for (const k of ['asset_id', 'asset']) { const v = a[k]; if (typeof v !== 'string' || !RAW_ID.test(v)) continue;   /* a media id reads as its file name, else is left out */
+    const nm = state.assets && state.assets[v]; o = o || { ...a }; if (nm) o[k] = nm; else delete o[k]; }
   for (const k of ['track_id', 'track']) { const v = a[k]; if (typeof v !== 'string' || !RAW_ID.test(v)) continue;   // raw track ids the same way ('track1' -> 'V1')
     const t = state.liveTL ? findTrack(state.liveTL, v) : null, lb = t ? t.label : null;
     o = o || { ...a }; if (lb && !RAW_ID.test(String(lb))) o[k] = String(lb); else delete o[k]; }
   return o || a;
+}
+// Media by name: import_media's file name is kept under the asset id its result returns, so a clip placed by
+// asset_id (add_clip source_type media) reads "shot_0009.mp4", not "asset2" or "V1 · Clip 01"; the rail's asset_id
+// arg reads the same name. The call's payload gets the name as its path (a copy; the event itself is not touched).
+function assetNames(ev, state) {
+  const P = ev.payload || {}, A = P.args || {}, base = p => String(p).split(/[\\/]/).pop();
+  if (ev.phase === 'start') {
+    if (typeof A.path === 'string' && A.path) (state._paths || (state._paths = {}))[ev.call_id] = base(A.path);
+    if (typeof A.asset_id === 'string') (state._assetArg || (state._assetArg = {}))[ev.call_id] = A.asset_id;
+    return ev;
+  }
+  if (ev.phase === 'progress') return ev;
+  const nm = state._paths && state._paths[ev.call_id], R = P.result;
+  if (nm && R && typeof R.asset_id === 'string') (state.assets || (state.assets = {}))[R.asset_id] = nm;
+  if (state._paths) delete state._paths[ev.call_id];
+  const aid = state._assetArg && state._assetArg[ev.call_id]; if (state._assetArg) delete state._assetArg[ev.call_id];
+  const an = aid != null && state.assets && state.assets[aid];
+  return an && P.path == null ? { ...ev, payload: { ...P, path: an } } : ev;
+}
+// A split's right-hand piece: the source clip's name and a split ordinal, "shot_0009.mp4 · split 1" (a second
+// split of the same source is "· split 2"); the engine's new id is never shown
+function splitName(tl, label) {
+  const b = String(label ?? '').replace(/ · split \d+$/, '');
+  const n = (tl._splitN || (tl._splitN = {}))[b] = (tl._splitN[b] || 0) + 1;
+  return b ? `${b} · split ${n}` : label;
 }
 function clipLabel(P, t, fam) {
   const A = P.args || {};
@@ -634,7 +661,7 @@ function timelineOps1(tl, ev, fam) {
   if (fam === 'edit' && t) {
     const c = t.clips[i];
     if (/^(cut|split|blade|razor)/.test(n) && ph > c.s && ph < c.e) {
-      const right = { ...c, id: P.clip != null && P.clip !== c.id ? P.clip : (c.id || c.label) + '_b', label: c.label, s: ph, _flash: now() };
+      const right = { ...c, id: P.clip != null && P.clip !== c.id ? P.clip : (c.id || c.label) + '_b', label: splitName(tl, c.label), s: ph, _flash: now() };
       delete right.thumb;
       c.e = ph; c._flash = now();
       t.clips.splice(i + 1, 0, right);
@@ -796,6 +823,7 @@ function exportOps(state, MODES, ev) {
 // events the reducer should apply (the rail), having already mutated views.
 export function route(ev, state, MODES) {
   if (!ev || ev.type || !ev.tool_name) return [ev];        // legacy or non-tool event: unchanged
+  ev = assetNames(ev, state);
   const fam = family(ev.tool_name), id = ev.call_id ?? ev.tool_name + '@' + (ev.ts ?? '');
   const out = [];
   if (fam === 'inspect') return inspectOps(state, MODES, ev, id);

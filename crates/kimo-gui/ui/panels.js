@@ -15,7 +15,7 @@ export function fmtArgs(a, tool = '') {
   // a live call's args object, in the mockups' rail style: what it acts on first, positional
   // ("set_material(cap, …)", "add_emitter(V2, dust, …)"), then its own values named; nested arrays /
   // objects stay out of the rail (they are in the inspector)
-  const ID = ['clip_id', 'clip', 'name', 'id', 'track_id', 'preset', 'kind', 'shape', 'mode', 'material', 'path', 'text', 'label', 'effect', 'property'];
+  const ID = ['clip_id', 'clip', 'name', 'id', 'track_id', 'asset_id', 'preset', 'kind', 'shape', 'mode', 'material', 'path', 'text', 'label', 'effect', 'property'];
   const prim = v => v != null && v !== '' && typeof v !== 'object' && !(typeof v === 'number' && !Number.isFinite(v));
   // the mask is the target of a mask call (its mask_id, or the name add_mask gives it): it goes first and the clip
   // is left out — "set_mask_path_key(mask_1, time: 4.2)", "add_mask(mask_1, bezier, feather: 2)"

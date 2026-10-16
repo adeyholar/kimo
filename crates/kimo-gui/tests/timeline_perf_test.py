@@ -140,6 +140,16 @@ async def main():
             doms = [o[1] for o in await pg.evaluate('window.__obs')]
             return per, await pg.evaluate(MUT_OFF), catch, doms
         runs = [await edit_run(pg, rnd)]
+        # names after the splits: every clip on the timeline and the Inspector read as names, never a raw engine id
+        # (c475, c475_s0, clip7), and a split's right-hand piece reads "<source name> · split N"
+        nm = await pg.evaluate(r"""() => { const RAW = /^(c|clip|t|track|fx|effect|node|n|layer|l|asset|media)[_-]?\d+(?:[_-][a-z]{0,5}\d+|[_-][a-z])*$/i;
+          const labs = (__kimo.state.liveTL.tracks || []).flatMap(t => t.clips.map(c => String(c.label)));
+          const insp = [...document.querySelectorAll('[data-panel=insp] .v, [data-panel=insp] .sub')].map(e => e.textContent.trim());
+          return { n: labs.length, raw: labs.filter(l => RAW.test(l)).slice(0, 5), split: labs.filter(l => / · split \d+$/.test(l)).length,
+            ex: labs.filter(l => / · split \d+$/.test(l)).slice(0, 2), inspRaw: insp.filter(l => RAW.test(l)) }; }""")
+        names_ok = not nm['raw'] and not nm['inspRaw'] and nm['split'] > 0
+        print(f"clip names after the edits: {nm['n']} clips, {len(nm['raw'])} raw ids {nm['raw']}, {nm['split']} split pieces named like {nm['ex']}; Inspector raw ids: {nm['inspRaw']} [{'ok' if names_ok else 'FAIL'}]")
+        ok &= names_ok
         await pg.wait_for_timeout(1300); h2 = await heap(); s2 = await pg.evaluate(SNAP)
         for r in range(1, A.runs):
             q = await b.new_page(viewport={'width': 1376, 'height': 768}); q.on('pageerror', lambda e: errs.append(str(e)))
