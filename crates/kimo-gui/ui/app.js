@@ -4,7 +4,7 @@
 import { connect } from './bridge.js';
 import { MODES, inferMode } from './modes.js';
 import { KINDS, POST, tickRunning, pickedRows } from './panels.js';
-import { route } from './router.js';
+import { route, freezeNow } from './router.js';
 
 const DESIGN_W = 1376, DESIGN_H = 768;
 
@@ -173,6 +173,7 @@ function buildLayout() {
 // from the hop's start, so a slow frame cannot make it ring. Driven by the render loop's own rAF only while a
 // spring is moving; hidden -> snapped.
 const springs = []; let builtMode = null, springT0 = 0;
+const pans = {}, panDirty = new Set();   /* timeline pan / zoom per mode:panel (see onWheel) */
 const SW = 60, SMAX = .185;
 function stepSprings(now) {
   if (!springs.length) return false;
@@ -244,10 +245,14 @@ function computeParade(src) {
 function schedule() { dirty = true; requestFrame(); }
 function requestFrame() { if (!rafId && !hidden) rafId = requestAnimationFrame(frame); }
 function frame() {
-  rafId = 0; metrics.raf++;
+  rafId = 0; metrics.raf++; freezeNow(performance.now());
+  try { frameBody(); } finally { freezeNow(0); }
+}
+function frameBody() {
   if (queue.length > 1) metrics.coalesced += queue.length - 1;
   for (const ev of queue.splice(0)) for (const e of route(ev, state, MODES)) apply(e);
-  if (dirty) { dirty = false; render(); metrics.renders++; }
+  if (dirty) { dirty = false; panDirty.clear(); render(); metrics.renders++; }
+  else if (panDirty.size) { for (const n of panDirty) renderPanel(n); panDirty.clear(); metrics.renders++; }
   // meter ballistics: frames only while a hit/decay window is open, then nothing
   if (state.animUntil && performance.now() < state.animUntil) { dirty = true; requestFrame(); } else state.animUntil = 0;
   if (stepSprings(performance.now())) requestFrame();   // a split still springing: one more frame
@@ -346,7 +351,7 @@ function render() {
     const w = el.clientWidth, h = el.clientHeight;
     let data = V[name] || {};
     if (name === pickPanel && pickCall) data = { sub: `${pickCall.name}${pickCall.status === 'running' ? '' : ''}`, blocks: pickedRows(pickCall) };   // a clicked rail row, in the existing inspector
-    const args = { spec, data, view: V, state, w, h, mode: state.mode };
+    const args = { spec, data, view: V, state, w, h, mode: state.mode, pan: pans[state.mode + ':' + name] };
     el.innerHTML = fn(args);
     if (name === pickPanel && pickCall) fitPicked(el);
     if (POST[spec.kind]) POST[spec.kind](el, args);
@@ -354,6 +359,42 @@ function render() {
 }
 
 window.addEventListener('resize', () => { layoutDirty = true; schedule(); });
+// Timeline pan / zoom, the minimal scroll the mockups allow (no scrollbar, no control drawn): wheel / trackpad
+// sideways (or shift+wheel) pans a zoomed-in timeline, ctrl+wheel or a pinch zooms around the pointer, plain wheel
+// steps the track rows so a track below the panel (V6) can be brought up. Input only queues a frame, and that
+// frame redraws just the timeline panel; nothing runs between inputs.
+function onWheel(e) {
+  const el = e.target.closest && e.target.closest('[data-panel]'); if (!el) return;
+  const name = el.dataset.panel, spec = (MODES[state.mode] || {}).panels[name]; if (!spec || spec.kind !== 'timeline') return;
+  const data = view(state.mode)[name]; if (!data || !(data.tracks || []).length) return;
+  const key = state.mode + ':' + name, P = pans[key] || (pans[key] = { z: 1, t: null, k: 0, acc: 0 });
+  const o = spec.opts || {}, x0 = o.x0 ?? 48, wpx = Math.max(1, el.clientWidth - (o.xr ?? 12) - x0);
+  const r = data.ruler || { t0: 0, t1: 20 }, full = r.t1 - r.t0, span = full / P.z, t0 = P.t ?? r.t0;
+  const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? wpx : 1;
+  let dx = e.deltaX * k, dy = e.deltaY * k;
+  if (e.shiftKey && !dx) { dx = dy; dy = 0; }
+  if (e.ctrlKey || e.metaKey) {
+    const zmax = Math.max(1, full / 4), z = Math.min(zmax, Math.max(1, P.z * Math.exp(-dy * .004)));
+    if (z === P.z) return;
+    const fx = Math.min(1, Math.max(0, (e.clientX - el.getBoundingClientRect().left - x0) / wpx)), at = t0 + fx * span;
+    P.z = z; P.t = z > 1 ? at - fx * full / z : null;
+  } else if (Math.abs(dx) >= Math.abs(dy)) {
+    if (P.z <= 1 || !dx) return;
+    P.t = t0 + dx * span / wpx;
+  } else {
+    if (P.kmax === 0 && !P.k) return;
+    P.acc += dy; const rows = Math.trunc(P.acc / 40); if (!rows) { e.preventDefault(); return; }
+    P.acc -= rows * 40; P.k = (P.k || 0) + rows;
+  }
+  e.preventDefault(); panDirty.add(name); requestFrame();
+}
+main.addEventListener('wheel', onWheel, { passive: false });
+function renderPanel(name) {
+  const spec = (MODES[state.mode] || {}).panels[name], el = nodes[name]; if (!spec || !el) return;
+  const V = view(state.mode), args = { spec, data: V[name] || {}, view: V, state, w: el.clientWidth, h: el.clientHeight, mode: state.mode, pan: pans[state.mode + ':' + name] };
+  el.innerHTML = KINDS[spec.kind](args);
+  if (POST[spec.kind]) POST[spec.kind](el, args);
+}
 // click a rail row: its args / latency / result in the existing inspector; click it again or Esc to go back
 main.addEventListener('click', e => { const r = e.target.closest && e.target.closest('.call[data-call]'); if (!r) return; const id = r.dataset.call, c = state.calls.find(x => String(x.id) === id); state.pick = c && state.pick !== c.id ? c.id : null; schedule(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.pick != null) { state.pick = null; schedule(); } });

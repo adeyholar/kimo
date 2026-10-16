@@ -361,15 +361,34 @@ function smoothArea(w, h, a) {
   for (let i = 1; i < pts.length; i++) { const [x0, y0] = pts[i - 1], [x1, y1] = pts[i], mx = (x0 + x1) / 2; d += ` C${px(mx)} ${px(y0)} ${px(mx)} ${px(y1)} ${px(x1)} ${px(y1)}`; }
   return d + ` L${px(w)} ${h}Z`;
 }
-function timeline({ spec, data, w, h }) {
+// Pan / zoom of a timeline panel (app.js wheel handler; nothing drawn for it, no scrollbar or control): pan.z > 1
+// shows 1/z of the ruler's span starting at pan.t seconds, on a ruler re-stepped for the visible span; pan.k is the
+// first track row drawn (row-snapped vertical scroll, so a track never draws half under the ruler). Both are
+// clamped here and written back. With no pan the panel draws exactly as before.
+const PAN_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+function panRuler(r, pan, wpx) {
+  const full = r.t1 - r.t0, span = full / pan.z, t0 = Math.min(Math.max(pan.t ?? r.t0, r.t0), r.t1 - span);
+  pan.t = t0;
+  const step = PAN_STEPS.find(s => s * wpx / span >= 72) || PAN_STEPS[PAN_STEPS.length - 1];
+  return { t0, t1: t0 + span, step, first: Math.ceil(t0 / step - 1e-9) * step, last: t0 + span, fmt: r.fmt, ticks: r.ticks };
+}
+export function panRows(tracks, o, h, pan) {
+  let kmax = 0, need = o.trackY ?? 30;
+  for (let i = tracks.length - 1; i >= 0; i--) { need += (tracks[i].h ?? o.trackH ?? 38) + (o.trackGap ?? 0); if (need > h + (o.trackGap ?? 0)) { kmax = i + 1; break; } }
+  pan.k = Math.min(Math.max(pan.k || 0, 0), kmax); pan.kmax = kmax;
+  return pan.k;
+}
+function timeline({ spec, data, w, h, pan }) {
   const o = spec.opts || {};
   const x0 = o.x0 ?? 48, x1 = w - (o.xr ?? 12);
-  const r = data.ruler || { t0: 0, t1: 20, step: 5 };
-  const X = rulerX(r, x0, x1);
+  let r = data.ruler || { t0: 0, t1: 20, step: 5 };
+  if (pan && pan.z > 1) r = panRuler(r, pan, x1 - x0);
+  const X = rulerX(r, x0, x1), inView = x => !pan || pan.z <= 1 || (x >= x0 - 1 && x <= x1 + 1);
   let html = head(spec, data);
   html += `<div class="tl">` + ruler(r, X, o.rulerY ?? 6);
   let y = o.trackY ?? 30;
-  for (const t of (data.tracks || [])) {
+  const TR = data.tracks || [], k0 = pan ? panRows(TR, o, h, pan) : 0;
+  for (const t of (k0 ? TR.slice(k0) : TR)) {
     const th = t.h ?? o.trackH ?? 38;
     html += `<div class="trk ${t.cls || ''}${t.mute ? ' muted' : ''}${F(t)}" style="top:${y}px;height:${th}px">`;
     if (t.area) html += `<svg style="position:absolute;left:${px(X(t.area.s ?? r.t0))}px;top:0;width:${px((x1) - X(t.area.s ?? r.t0))}px;height:${th}px" viewBox="0 0 ${px(x1 - X(t.area.s ?? r.t0))} ${th}"><rect width="100%" height="100%" rx="7" fill="${t.area.bg || '#2a2824'}"/><path d="${smoothArea(x1 - X(t.area.s ?? r.t0), th, t.area)}" fill="${t.area.fill || '#4a4741'}"/></svg>`;
@@ -388,13 +407,17 @@ function timeline({ spec, data, w, h }) {
     // about one element per few pixel columns whatever the clip count (tests/timeline_perf_test.py: 1,000 clips)
     if (y >= h) { html += '</div>'; y += th + (o.trackGap ?? 0); continue; }
     const MINW = 12; let run = null;   // under 12 px a clip has no room for its label; its edges stay as 1 px seams in the run
+    // a flashing (just edited) narrow clip draws on its own so the edit stays visible; when a burst flashes more than
+    // FLASH_SOLO of them on one track (a 1,000-clip load), they merge like the rest and their run carries the flash
+    const FLASH_SOLO = 24; let nf = 0; for (const c of (t.clips || [])) if (c._flash != null && F(c).trim() && ++nf > FLASH_SOLO) break;
     const flush = () => { if (!run) return; const w0 = Math.max(1, run[1] - run[0]), cuts = run[2].filter(x => x > run[0] + .5 && x < run[1] - .5).map(x => px(x - run[0]));
       const bg = cuts.length ? `;background:linear-gradient(90deg,${cuts.map((x, i) => `var(--clip) ${i ? px(cuts[i - 1] + 1) : 0}px ${x}px,transparent ${x}px ${px(x + 1)}px`).join(',')},var(--clip) ${px(cuts[cuts.length - 1] + 1)}px)` : '';
-      html += `<div class="clip crun" style="left:${px(run[0])}px;width:${px(w0)}px${bg}"></div>`; run = null; };
+      html += `<div class="clip crun${run[3] || ''}" style="left:${px(run[0])}px;width:${px(w0)}px${bg}"></div>`; run = null; };
     for (const c of (t.clips || [])) {
       const a = X(c.s), b = X(c.e);
       if (b < x0 - 1 || a > x1 + 1) continue;
-      if (b - a < MINW && !c.keys && !F(c).trim() && !c.pill && !c.cls && !c.bg && !c.thumb && !c.cover && !c.fx) { if (run && a <= run[1] + 1) { run[2].push(a); run[1] = Math.max(run[1], b); } else { flush(); run = [a, b, []]; } continue; }
+      const fl = F(c).trim();
+      if (b - a < MINW && !c.keys && (!fl || nf > FLASH_SOLO) && !c.pill && !c.cls && !c.bg && !c.thumb && !c.cover && !c.fx) { if (run && a <= run[1] + 1) { run[2].push(a); run[1] = Math.max(run[1], b); if (fl) run[3] = ' ' + fl; } else { flush(); run = [a, b, [], fl ? ' ' + fl : '']; } continue; }
       flush();
       html += `<div class="clip ${c.cls || ''}${F(c)}" style="left:${px(a)}px;width:${px(b - a)}px${c.bg ? ';background:' + c.bg : ''}">` +
         (c.thumb ? `<span class="ct"><img src="${E(c.thumb)}" alt=""></span>` : c.sw ? '<span class="ct sw"></span>' : '') + (c.cover ? `<img src="${E(c.cover)}" alt="">` : '') + (c.label ? `<span class="cl">${E(c.label)}</span>` : '') +
@@ -406,8 +429,8 @@ function timeline({ spec, data, w, h }) {
     html += '</div>';
     y += th + (o.trackGap ?? 0);
   }
-  if (data.playhead != null) html += `<div class="playhead" style="left:${px(X(data.playhead))}px;top:${o.phTop ?? 4}px;bottom:${o.phBot ?? 8}px"></div>`;
-  if (data.razor && flashing(data.razor.t)) html += `<div class="razor" style="left:${px(X(data.razor.at))}px;top:${o.trackY ?? 30}px;bottom:4px"></div>`;
+  if (data.playhead != null && inView(X(data.playhead))) html += `<div class="playhead" style="left:${px(X(data.playhead))}px;top:${o.phTop ?? 4}px;bottom:${o.phBot ?? 8}px"></div>`;
+  if (data.razor && flashing(data.razor.t) && inView(X(data.razor.at))) html += `<div class="razor" style="left:${px(X(data.razor.at))}px;top:${o.trackY ?? 30}px;bottom:4px"></div>`;
   return html + '</div>';
 }
 

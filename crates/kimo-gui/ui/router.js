@@ -32,7 +32,11 @@ export function family(name) {
   return 'other';
 }
 
-const now = () => performance.now();
+/* one clock reading per frame: app.js freezes it for the frame's drain + render (thousands of flash checks on a 1k-clip
+   timeline read it), and outside a frame it is the live clock */
+let frameNow = 0;
+export const freezeNow = t => { frameNow = t; };
+const now = () => frameNow || performance.now();
 const FLASH_MS = 700;
 export const flashing = t => t != null && now() - t < FLASH_MS;
 
