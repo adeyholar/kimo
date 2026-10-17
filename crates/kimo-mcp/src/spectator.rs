@@ -11,7 +11,9 @@
 //!     for the writer (bounded backpressure: the call that emits holds until the spectator has read enough) instead of
 //!     dropping. Nothing waits while no spectator is connected, so a dead or absent GUI never slows a call;
 //!   * live preview canvas frames (preview.rs) have their own latest-only queue of `FRAME_DEPTH`, oldest dropped first
-//!     (the newest frame supersedes them), so frames never displace, drop or hold up state events.
+//!     (the newest frame supersedes them), so frames never displace, drop or hold up state events. Each drop is
+//!     counted (`frame_lane_drops`, carried as `frame_lane_drops` on every auto frame) and reported as a state-lane
+//!     `frame_skipped` with `skip_reason: "frame_lane_dropped"` (preview.rs, "Headless skips").
 //! The writer takes lines in the order they were emitted across both lanes and writes whole lines only: a spectator
 //! that is open but slow to read (a busy webview) is waited for, never cut off, so no line is ever truncated on a live
 //! connection. With no listener events are dropped; the writer reconnects lazily with backoff when the GUI is closed
@@ -50,6 +52,9 @@ pub const GUI_ADDR: &str = "127.0.0.1:7421";
 pub const STATE_BOUND: usize = 64 << 20;
 /// Live canvas frames waiting for the writer: at most this many, the oldest dropped first.
 pub const FRAME_DEPTH: usize = 2;
+/// Largest image file a call wrote that is forwarded to the viewer as its `frame_rendered` (`frame_event`); a bigger
+/// one is reported as `frame_skipped` with `skip_reason: "oversize_agent_frame"`.
+pub const AGENT_FRAME_MAX: u64 = 1_500_000;
 /// Longest `flush` keeps waiting past its own bound while the spectator is still connected.
 const FLUSH_CEIL: Duration = Duration::from_secs(15);
 const STR_CAP: usize = 240;
@@ -64,7 +69,8 @@ pub(crate) enum Kind { State, Demo(u64) }
 
 /// The two lanes. `seq` orders lines across both (the order they were emitted); `writing`: a line is in the writer's
 /// hands. `state_bytes` counts queued state lines only (`STATE_BOUND`).
-struct Lanes { state: VecDeque<(u64, String, Kind)>, state_bytes: usize, frames: VecDeque<(u64, String)>, seq: u64, writing: bool }
+/// A frame-lane line carries its frame's (call_id, rev, gen), so a drop can be reported for that call.
+struct Lanes { state: VecDeque<(u64, String, Kind)>, state_bytes: usize, frames: VecDeque<(u64, String, (String, u64, u64))>, seq: u64, writing: bool }
 static LANES: Mutex<Lanes> = Mutex::new(Lanes { state: VecDeque::new(), state_bytes: 0, frames: VecDeque::new(), seq: 0, writing: false });
 /// Signals both ways: new lines for the writer, freed room and an idle writer for whoever waits on it.
 static LANES_CV: Condvar = Condvar::new();
@@ -75,6 +81,8 @@ pub enum Dest { Tcp(String), File(String) }
 static SINK: OnceLock<bool> = OnceLock::new();
 static SEQ: AtomicU64 = AtomicU64::new(0);
 static REV: AtomicU64 = AtomicU64::new(0);
+/// Live frames pushed off the latest-only frame lane before the writer took them, since the process started.
+static FRAME_LANE_DROPS: AtomicU64 = AtomicU64::new(0);
 /// True while the writer holds a live connection to the sink (a file sink counts once opened). Read by the live
 /// preview (preview.rs), which renders nothing while no spectator is listening.
 static CONNECTED: AtomicBool = AtomicBool::new(false);
@@ -142,16 +150,27 @@ pub(crate) fn connected_settled(within: Duration) -> bool {
 }
 
 /// A live preview canvas frame from the preview thread: its own latest-only lane (`FRAME_DEPTH`, oldest dropped first),
-/// so frames never displace, drop or hold up state telemetry, and never wait themselves.
-pub(crate) fn emit_frame(v: &Value) {
+/// so frames never displace, drop or hold up state telemetry, and never wait themselves. The frame carries
+/// `frame_lane_drops` (counting the drop this push causes); each frame it pushes off is reported on the state lane.
+pub(crate) fn emit_frame(mut v: Value) {
     if !enabled() { return; }
+    let meta = (v["call_id"].as_str().unwrap_or("").to_string(), v["rev"].as_u64().unwrap_or(0), v["gen"].as_u64().unwrap_or(0));
     let mut q = LANES.lock().unwrap_or_else(|e| e.into_inner());
+    let drops = (q.frames.len() + 1).saturating_sub(FRAME_DEPTH.max(1)) as u64;
+    v["frame_lane_drops"] = json!(FRAME_LANE_DROPS.fetch_add(drops, Ordering::Relaxed) + drops);
     q.seq += 1;
     let s = q.seq;
-    push_latest(&mut q.frames, (s, v.to_string()), FRAME_DEPTH);
+    let dropped = push_latest(&mut q.frames, (s, v.to_string(), meta), FRAME_DEPTH);
     drop(q);
     LANES_CV.notify_all();
+    for (_, _, (call_id, rev, gen)) in dropped { emit_skip(&crate::preview::skip_event(crate::preview::SKIP_FRAME_LANE_DROPPED, &call_id, rev, gen)); }
 }
+
+/// Live frames dropped from the frame lane so far (`frame_lane_drops`).
+pub(crate) fn frame_lane_drops() -> u64 { FRAME_LANE_DROPS.load(Ordering::Relaxed) }
+
+/// A `frame_skipped` (preview.rs): state telemetry, lossless and ordered like every other state event.
+pub(crate) fn emit_skip(v: &Value) { emit(v); }
 
 /// A spectator demo frame (preview.rs): on the lossless state lane, in order; the writer reports its delivery by `seq`
 /// (`preview::demo_delivered`). False: telemetry is off, and nobody will report it.
@@ -162,10 +181,12 @@ pub(crate) fn now_ms() -> u64 { ts_ms() }
 /// State telemetry: queued in order, never coalesced, never dropped, never displaced by frames.
 fn emit(v: &Value) { enqueue(v.to_string(), Kind::State); }
 
-/// The frame lane's rule: append, then drop the oldest past `depth`.
-pub(crate) fn push_latest<T>(q: &mut VecDeque<T>, item: T, depth: usize) {
+/// The frame lane's rule: append, then drop the oldest past `depth`. Returns what it dropped, oldest first.
+pub(crate) fn push_latest<T>(q: &mut VecDeque<T>, item: T, depth: usize) -> Vec<T> {
     q.push_back(item);
-    while q.len() > depth.max(1) { q.pop_front(); }
+    let mut dropped = Vec::new();
+    while q.len() > depth.max(1) { dropped.extend(q.pop_front()); }
+    dropped
 }
 
 /// The state lane's bound: a line of `len` bytes waits while `queued` bytes are already waiting and both together
@@ -305,7 +326,7 @@ fn writer(dest: Dest) {
             q.writing = false;
             loop {
                 match frame_first(q.state.front().map(|x| x.0), q.frames.front().map(|x| x.0)) {
-                    Some(true) => { let (_, l) = q.frames.pop_front().unwrap(); q.writing = true; break (l, None); }
+                    Some(true) => { let (_, l, _) = q.frames.pop_front().unwrap(); q.writing = true; break (l, None); }
                     Some(false) => { let (_, l, k) = q.state.pop_front().unwrap(); q.state_bytes -= l.len(); q.writing = true; break (l, Some(k)); }
                     None => { LANES_CV.notify_all(); q = LANES_CV.wait(q).unwrap_or_else(|e| e.into_inner()); }
                 }
@@ -490,18 +511,19 @@ fn base64(bytes: &[u8]) -> String {
     o
 }
 
-/// A frame image a call wrote (render_frame, previews): forwarded to the viewer when it is small enough.
-fn frame_event(call_id: &str, args: &Value, res: &Value) -> Option<Value> {
-    const MAX: u64 = 1_500_000;
+/// A frame image a call wrote (render_frame, previews): forwarded to the viewer when it is small enough
+/// (`AGENT_FRAME_MAX`); `Err(bytes)`: an image over it, which is not forwarded.
+fn frame_event(call_id: &str, args: &Value, res: &Value) -> Option<Result<Value, u64>> {
     let path = res.get("path").and_then(|v| v.as_str())?;
     let lower = path.to_ascii_lowercase();
     let key = if lower.ends_with(".png") { "png_b64" } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") { "jpg_b64" } else { return None };
-    if std::fs::metadata(path).ok()?.len() > MAX { return None; }
+    let size = std::fs::metadata(path).ok()?.len();
+    if size > AGENT_FRAME_MAX { return Some(Err(size)); }
     let bytes = std::fs::read(path).ok()?;
     let mut ev = json!({"type": "frame_rendered", "call_id": call_id, "ts_ms": ts_ms()});
     ev[key] = json!(base64(&bytes));
     if let Some(t) = args.get("time").and_then(|v| v.as_f64()) { ev["tc"] = json!(format!("{t:.2}s")); }
-    Some(ev)
+    Some(Ok(ev))
 }
 
 fn since_start() -> f64 {
@@ -598,7 +620,14 @@ pub fn call_end(result: &Value, ss: &Arc<Mutex<Session>>) {
     let mut ev = event(&a, "complete", p); ev["duration_ms"] = json!(dur_ms);
     emit(&ev);
     let hint = playhead_hint(&a.args, &a.target, &changed, &after);
-    if let Some(f) = frame_event(&a.call_id, &a.args, &res) { emit(&f); crate::preview::shown_by_agent(); }
+    match frame_event(&a.call_id, &a.args, &res) {
+        Some(Ok(f)) => { emit(&f); crate::preview::shown_by_agent(&a.call_id); }
+        // not forwarded: say so (the live preview, if one is pending, still renders)
+        Some(Err(bytes)) => emit(&json!({"type": "frame_skipped", "agent": true, "skip_reason": crate::preview::SKIP_OVERSIZE_AGENT_FRAME,
+            "call_id": a.call_id, "rev": REV.load(Ordering::Relaxed), "bytes": bytes, "max_bytes": AGENT_FRAME_MAX,
+            "frame_lane_drops": frame_lane_drops(), "ts_ms": ts_ms()})),
+        None => {}
+    }
     if mutated { emit(&json!({"type": "project_changed", "rev": REV.fetch_add(1, Ordering::Relaxed) + 1, "call_id": a.call_id, "width": after.w, "height": after.h, "ts_ms": ts_ms()})); }
     // live preview: any call that changed the project (or is declared mutating) queues one frame at the playhead
     let live = mutated || declared_mutating(&a.tool);
@@ -654,8 +683,10 @@ mod tests {
     fn frames_are_latest_only_and_never_hold_state() {
         // the frame lane keeps the newest FRAME_DEPTH, dropping the oldest
         let mut f = VecDeque::new();
-        for k in 1..=5u64 { push_latest(&mut f, k, FRAME_DEPTH); }
+        let mut dropped = vec![];
+        for k in 1..=5u64 { dropped.extend(push_latest(&mut f, k, FRAME_DEPTH)); }
         assert_eq!(f.iter().copied().collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(dropped, vec![1, 2, 3], "every drop is handed back, oldest first, so it can be counted and reported");
         // state waits only past STATE_BOUND, only while a spectator is connected, and one line always fits
         assert!(!must_wait(0, STATE_BOUND * 2, true), "one line always fits an empty lane");
         assert!(!must_wait(STATE_BOUND - 10, 10, true));
