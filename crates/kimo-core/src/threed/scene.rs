@@ -154,7 +154,98 @@ pub fn compile(s:&Scene,cache:&mut Cache)->Result<Compiled,String>{
  crate::guard::check();let draw_count=draws.len();
  Ok(Compiled{draws,lights:s.lights.clone(),camera:s.camera,stats:Stats{sources:s.sources.len(),sources_resolved:resolved_count,nodes:s.nodes.len(),draws:draw_count,vertices,triangles,contour_polygonized:polygonized,contour_cache_hits:hits}})}
 
+/// Optional CPU lighting extras for render_cpu_lit (IBL-CSM prototype): split-sum image-based
+/// lighting (threed::ibl) and cascaded shadow maps for one directional light (threed::csm).
+/// Carried by the CPU scene tools inside the `scene` object under the key "cpu_lighting" and
+/// removed (take_cpu_lighting) BEFORE the Scene descriptor parses, so Scene, its schema and the
+/// wgpu executor are unchanged (wgpu still rejects the key as an unknown field). Absent key or
+/// both members None renders exactly render_cpu.
+#[derive(Clone,Debug,Default,Serialize,Deserialize)]#[serde(deny_unknown_fields)]
+pub struct CpuLighting{#[serde(default)]pub ibl:Option<IblOptions>,#[serde(default)]pub shadows:Option<CsmOptions>}
+fn sky_zenith()->[f64;3]{[0.12,0.2,0.42]}
+fn sky_horizon()->[f64;3]{[0.42,0.44,0.46]}
+fn sky_ground()->[f64;3]{[0.09,0.08,0.07]}
+/// Environment radiance source (linear). Kimo world is +y DOWN, so sky zenith is world -y. sky: zenith/horizon/ground gradient (no sun disk;
+/// the sun is the scene's directional light). uniform: constant radiance. map: explicit
+/// equirectangular EnvMap texels.
+#[derive(Clone,Debug,Serialize,Deserialize)]#[serde(tag="kind",rename_all="snake_case",deny_unknown_fields)]
+pub enum Environment{Sky{#[serde(default="sky_zenith")]zenith:[f64;3],#[serde(default="sky_horizon")]horizon:[f64;3],#[serde(default="sky_ground")]ground:[f64;3]},Uniform{radiance:[f64;3]},Map{map:super::ibl::EnvMap}}
+fn default_environment()->Environment{Environment::Sky{zenith:sky_zenith(),horizon:sky_horizon(),ground:sky_ground()}}
+fn one()->f64{1.0}
+fn ibl_samples()->usize{256}
+#[derive(Clone,Debug,Serialize,Deserialize)]#[serde(deny_unknown_fields)]
+pub struct IblOptions{#[serde(default="default_environment")]pub environment:Environment,#[serde(default="one")]pub intensity:f64,#[serde(default="ibl_samples")]pub samples:usize}
+fn csm_cascades()->usize{4}
+fn csm_map_size()->usize{1024}
+fn csm_lambda()->f64{0.6}
+fn csm_blend()->f64{0.2}
+/// Cascaded shadow map for ONE directional light (default: the first directional light).
+/// far None = farthest scene-AABB corner from the eye, quantized UP to a quarter-octave step so
+/// the split depths and texel size (hence the snapped grid) stay fixed under small camera moves.
+/// PCF is the shipping rotated disk,
+/// radius 4 texels of each cascade's own map (lit_raster), blended across `blend_band`.
+#[derive(Clone,Debug,Serialize,Deserialize)]#[serde(deny_unknown_fields)]
+pub struct CsmOptions{#[serde(default)]pub light:Option<usize>,#[serde(default="csm_cascades")]pub cascades:usize,#[serde(default="csm_map_size")]pub map_size:usize,#[serde(default="csm_lambda")]pub lambda:f64,#[serde(default="csm_blend")]pub blend_band:f64,#[serde(default)]pub far:Option<f64>}
+/// What render_cpu_lit actually did (tool JSON).
+#[derive(Clone,Debug,Default,Serialize)]
+pub struct LitInfo{pub ibl:bool,pub ibl_intensity:f64,pub shadow_light:Option<usize>,pub cascade_splits:Vec<f64>,pub cascade_texel_world:Vec<f64>,pub cascade_bounds:Vec<[[f64;3];2]>,pub shadow_map_size:usize}
+/// Remove "cpu_lighting" from a scene JSON object (None when absent or not an object).
+pub fn take_cpu_lighting(scene:&mut serde_json::Value)->Result<Option<CpuLighting>,String>{
+ let Some(o)=scene.as_object_mut() else{return Ok(None)};
+ match o.remove("cpu_lighting"){None=>Ok(None),Some(v)=>serde_json::from_value(v).map(Some).map_err(|e|format!("scene.cpu_lighting: {e}"))}}
+const IBL_ENV:[usize;2]=[128,64];const IBL_IRR:[usize;2]=[32,16];const IBL_PF:[usize;2]=[64,32];const IBL_LEVELS:usize=6;const IBL_LUT:usize=64;
+/// Bake the IBL set for these options (once per environment; reusable across frames).
+pub fn bake_ibl(o:&IblOptions)->Result<super::ibl::IblSet,String>{
+ if o.samples==0||o.samples>4096{return Err("cpu_lighting.ibl.samples 1..=4096 required".into());}
+ let env=match &o.environment{
+  Environment::Sky{zenith,horizon,ground}=>{let(z,hz,g)=(*zenith,*horizon,*ground);super::ibl::EnvMap::from_fn(IBL_ENV[0],IBL_ENV[1],move|d|{let y=-d[1];if y>=0.{let t=y.sqrt();std::array::from_fn(|j|hz[j]+(z[j]-hz[j])*t)}else{let t=(-4.*y).min(1.);std::array::from_fn(|j|hz[j]+(g[j]-hz[j])*t)}})?}
+  Environment::Uniform{radiance}=>{let r=*radiance;super::ibl::EnvMap::from_fn(IBL_ENV[0],IBL_ENV[1],move|_|r)?}
+  Environment::Map{map}=>{map.validate()?;map.clone()}};
+ super::ibl::IblSet::bake(&env,IBL_IRR,IBL_PF,IBL_LEVELS,IBL_LUT,o.samples)}
+/// render_cpu + optional IBL and cascaded shadows (see CpuLighting). `baked` reuses a set from
+/// bake_ibl (sequence executors); None bakes here when opts.ibl is set. Cascades are refit per
+/// call from this camera (texel-snapped: csm::fit_cascade) and casters are every draw.
+pub fn render_cpu_lit(c:&Compiled,w:usize,h:usize,opts:&CpuLighting,baked:Option<&super::ibl::IblSet>)->Result<(super::lit_raster::Output,LitInfo),String>{
+ if opts.ibl.is_none()&&opts.shadows.is_none(){return Ok((render_cpu(c,w,h)?,LitInfo::default()));}
+ if w==0||h==0{return Err("target1..4096 required".into());}
+ let mut baked_streams=Vec::with_capacity(c.draws.len());
+ for d in &c.draws{baked_streams.push(super::node_ingest::transform(&d.stream,d.world)?);}
+ let materials:Vec<super::pbr::Material>=c.draws.iter().map(|d|surface_to_material(&d.surface)).collect();
+ let refs:Vec<(&Stream,&super::pbr::Material)>=baked_streams.iter().zip(materials.iter()).map(|(s,m)|(s,m)).collect();
+ let mut info=LitInfo::default();
+ let mut csm=None;
+ if let Some(so)=&opts.shadows{
+  let li=match so.light{Some(i)=>i,None=>c.lights.iter().position(|l|matches!(l,Light::Directional{..})).ok_or("cpu_lighting.shadows: scene has no directional light")?};
+  let dir=match c.lights.get(li){Some(Light::Directional{travel_direction,..})=>*travel_direction,_=>return Err("cpu_lighting.shadows.light: index of a directional light required".into())};
+  let mut pos:Vec<[f64;3]>=Vec::new();let mut idx:Vec<[u32;3]>=Vec::new();
+  for s in &baked_streams{let base=u32::try_from(pos.len()).map_err(|_|"caster vertex overflow")?;pos.extend(s.vertices.iter().map(|v|v.position.map(|x|x as f64)));for t in &s.indices{idx.push([t[0]+base,t[1]+base,t[2]+base]);}}
+  if !pos.is_empty(){
+   let mut lo=[f64::INFINITY;3];let mut hi=[f64::NEG_INFINITY;3];for p in &pos{for j in 0..3{lo[j]=lo[j].min(p[j]);hi[j]=hi[j].max(p[j]);}}
+   let near=c.camera.near;
+   let far=match so.far{Some(f)=>f,None=>{let mut m=0.0f64;for k in 0..8{let q=[if k&1==0{lo[0]}else{hi[0]},if k&2==0{lo[1]}else{hi[1]},if k&4==0{lo[2]}else{hi[2]}];m=m.max((0..3).map(|j|(q[j]-c.camera.eye[j]).powi(2)).sum::<f64>().sqrt());}let m=m.max(near*2.);let q=(2.0f64).powf(m.log2().floor()-2.);(m/q).ceil()*q}};
+   let fits=super::csm::cascaded_light_space(dir,&c.camera,w as f64/h as f64,near,far,so.cascades,so.lambda,[lo,hi],so.map_size)?;
+   info.cascade_splits=std::iter::once(fits[0].near).chain(fits.iter().map(|f|f.far)).collect();info.cascade_texel_world=fits.iter().map(|f|f.texel_world).collect();info.cascade_bounds=fits.iter().map(|f|f.bounds).collect();
+   let mut set=super::csm::build_cascade_maps(fits,so.map_size,so.blend_band)?;super::csm::raster_cascades(&pos,&idx,&mut set)?;
+   info.shadow_light=Some(li);info.shadow_map_size=so.map_size;csm=Some((li,set));}}
+ let mut slots:Vec<Option<super::shadow::ShadowMapRef>>=vec![None;c.lights.len()];
+ if let Some((li,set))=&csm{slots[*li]=Some(super::shadow::ShadowMapRef::Cascaded(set));}
+ let own;let ibl=match(&opts.ibl,baked){(None,_)=>None,(Some(o),Some(b))=>Some((b,o.intensity)),(Some(o),None)=>{own=bake_ibl(o)?;Some((&own,o.intensity))}};
+ if let Some((_,k))=ibl{info.ibl=true;info.ibl_intensity=k;}
+ let out=super::lit_raster::render_lit(&refs,&c.camera,w,h,&c.lights,&slots,ibl)?;
+ Ok((out,info))}
 #[cfg(test)]mod tests{use super::*;
+ fn lit_fixture()->Scene{let mut sw=ident();sw[1][3]=-1.;let mut gw=ident();gw[1][3]=0.05; // Kimo world is +y down
+  Scene{sources:vec![Source::Primitive{primitive:Primitive::Sphere{radius:1.,longitude_slices:24,latitude_slices:12}},Source::Primitive{primitive:Primitive::Cube{size:[8.,0.1,8.],subdivisions:1}}],nodes:vec![Node{source:0,world:sw,material:0},Node{source:1,world:gw,material:0}],materials:vec![surf()],lights:vec![Light::Directional{travel_direction:[0.3,1.,0.2],radiance:[3.;3]}],camera:Camera{eye:[0.,-3.,-7.],pan:0.,tilt:-15.,roll:0.,sensor_height:24.,focal_length:35.,near:0.1}}}
+ #[test]fn cpu_lit_none_is_exactly_render_cpu(){let c=compile(&lit_fixture(),&mut Cache::new()).unwrap();let a=render_cpu(&c,96,54).unwrap();let(b,info)=render_cpu_lit(&c,96,54,&CpuLighting::default(),None).unwrap();assert_eq!(a.frame.d,b.frame.d);assert_eq!(a.covered,b.covered);assert!(!info.ibl&&info.shadow_light.is_none());}
+ #[test]fn cpu_lit_shadows_darken_ground_and_ibl_brightens(){let c=compile(&lit_fixture(),&mut Cache::new()).unwrap();let(w,h)=(96,54);let base=render_cpu(&c,w,h).unwrap();
+  let sh=CpuLighting{ibl:None,shadows:Some(serde_json::from_value(serde_json::json!({"map_size":256})).unwrap())};let(s,info)=render_cpu_lit(&c,w,h,&sh,None).unwrap();assert_eq!(info.shadow_light,Some(0));assert_eq!(info.cascade_splits.len(),5);
+  let lum=|f:&crate::effects::Frame|f.d.chunks(4).map(|p|(p[0]+p[1]+p[2]) as f64).sum::<f64>();assert!(lum(&s.frame)<lum(&base.frame)*0.995,"shadow must remove light");
+  let darker=base.frame.d.chunks(4).zip(s.frame.d.chunks(4)).filter(|(a,b)|b[1]<a[1]-0.05).count();assert!(darker>20,"shadowed pixels {darker}");
+  let ib=CpuLighting{ibl:Some(serde_json::from_value(serde_json::json!({"samples":64})).unwrap()),shadows:None};let(i,info)=render_cpu_lit(&c,w,h,&ib,None).unwrap();assert!(info.ibl);assert!(lum(&i.frame)>lum(&base.frame)*1.05);assert_eq!(i.covered,base.covered);}
+ #[test]fn take_cpu_lighting_strips_key_and_types_errors(){let mut v=serde_json::json!({"a":1,"cpu_lighting":{"ibl":{}}});let o=take_cpu_lighting(&mut v).unwrap().unwrap();assert!(o.ibl.is_some()&&o.shadows.is_none());assert_eq!(v,serde_json::json!({"a":1}));
+  let mut none=serde_json::json!({"a":1});assert!(take_cpu_lighting(&mut none).unwrap().is_none());
+  let mut bad=serde_json::json!({"cpu_lighting":{"bogus":1}});assert!(take_cpu_lighting(&mut bad).unwrap_err().starts_with("scene.cpu_lighting:"));
+  let c=compile(&{let mut s=lit_fixture();s.lights=vec![];s},&mut Cache::new()).unwrap();let sh=CpuLighting{ibl:None,shadows:Some(serde_json::from_value(serde_json::json!({})).unwrap())};match render_cpu_lit(&c,32,18,&sh,None){Err(e)=>assert_eq!(e,"cpu_lighting.shadows: scene has no directional light"),Ok(_)=>panic!("shadows without a directional light must be a typed error")}}
  fn cam()->Camera{Camera{eye:[0.,0.,4.],pan:0.,tilt:0.,roll:0.,sensor_height:24.,focal_length:35.,near:0.1}}
  fn surf()->Surface{Surface{albedo:[0.8,0.2,0.2],metallic:0.,roughness:0.5,base:None,metal_rough:None,occlusion:None,normal:None,ao_strength:1.,normal_scale:1.,double_sided:false}}
  fn ident()->Matrix{[[1.,0.,0.,0.],[0.,1.,0.,0.],[0.,0.,1.,0.],[0.,0.,0.,1.]]}

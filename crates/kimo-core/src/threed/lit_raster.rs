@@ -24,7 +24,14 @@ pub fn render_multi(draws:&[(&Stream,&Material)],camera:&Camera,w:usize,h:usize,
 /// error otherwise). PCF uses the shipping rotated disk (radius 4 texels); radius 0
 /// semantics match the raycast reference exactly.
 /// With all-None shadows this takes the SAME arithmetic path as render_multi (bit-identical).
-pub fn render_shadowed(draws:&[(&Stream,&Material)],camera:&Camera,w:usize,h:usize,lights:&[Light],shadows:&[Option<super::shadow::ShadowMapRef>])->Result<Output,String>{
+pub fn render_shadowed(draws:&[(&Stream,&Material)],camera:&Camera,w:usize,h:usize,lights:&[Light],shadows:&[Option<super::shadow::ShadowMapRef>])->Result<Output,String>{render_lit(draws,camera,w,h,lights,shadows,None)}
+#[allow(clippy::too_many_arguments)]
+/// render_shadowed + optional image-based lighting (split-sum, lighting_stage::shade_ibl):
+/// per pixel, linear direct (shadowed) radiance plus `intensity` x IBL radiance, then the same
+/// ACES tone map. The IBL term is NOT shadowed (no sky occlusion). ibl None takes exactly the
+/// render_shadowed arithmetic (and render_multi when every shadow slot is None).
+pub fn render_lit(draws:&[(&Stream,&Material)],camera:&Camera,w:usize,h:usize,lights:&[Light],shadows:&[Option<super::shadow::ShadowMapRef>],ibl:Option<(&super::ibl::IblSet,f64)>)->Result<Output,String>{
+ if let Some((s,k))=ibl{s.validate()?;if !k.is_finite()||k<0.{return Err("ibl intensity finite >=0 required".into());}}
  if shadows.len()!=lights.len(){return Err("shadow slot per light required".into());}
  for(l,s)in lights.iter().zip(shadows){match(l,s){
   (Light::Directional{..},Some(super::shadow::ShadowMapRef::Directional(m)))=>{m.validate()?;},
@@ -32,21 +39,22 @@ pub fn render_shadowed(draws:&[(&Stream,&Material)],camera:&Camera,w:usize,h:usi
   (Light::Point{..},Some(super::shadow::ShadowMapRef::PointCube(m)))=>{m.validate()?;},
   (_,Some(_))=>return Err("shadow map kind must match light kind".into()),
   (_,None)=>{}}}
- if shadows.iter().all(|s|s.is_none()){return render_multi(draws,camera,w,h,lights);}
+ if ibl.is_none()&&shadows.iter().all(|s|s.is_none()){return render_multi(draws,camera,w,h,lights);}
  if draws.len()>256{return Err("max256 draws per scene pass".into());}for(s,_)in draws{s.validate()?;}super::lighting_stage::validate(lights)?;camera.validate()?;if w==0||h==0||w>4096||h>4096{return Err("target1..4096 required".into());}
  let mut frame=Frame::try_new(w,h)?;let mut depth=vec![f64::INFINITY;w*h];let projection=Camera{eye:[0.;3],pan:0.,tilt:0.,roll:0.,..*camera};let mut clipped_triangles=0;
- for(stream,material)in draws{let mesh=super::mesh::Mesh{positions:stream.vertices.iter().map(|v|v.position.map(|v|v as f64)).collect(),indices:stream.indices.clone()};raster_draw_shadowed(&mesh,stream,material,camera,&projection,w,h,lights,shadows,&mut frame,&mut depth,&mut clipped_triangles)?;}
+ for(stream,material)in draws{let mesh=super::mesh::Mesh{positions:stream.vertices.iter().map(|v|v.position.map(|v|v as f64)).collect(),indices:stream.indices.clone()};raster_draw_shadowed(&mesh,stream,material,camera,&projection,w,h,lights,shadows,ibl,&mut frame,&mut depth,&mut clipped_triangles)?;}
  let covered=depth.iter().filter(|v|v.is_finite()).count();Ok(Output{frame,depth,covered,clipped_triangles})}
 /// Normalize the interpolated receiver normal before both cosine bias and shading.
 fn shadow_receiver_normal(n:[f64;3])->Result<[f64;3],String>{super::vertex_stream::unit(n)}
 #[allow(clippy::too_many_arguments)]
-fn raster_draw_shadowed(mesh:&super::mesh::Mesh,stream:&Stream,material:&Material,camera:&Camera,projection:&Camera,w:usize,h:usize,lights:&[Light],shadows:&[Option<super::shadow::ShadowMapRef>],frame:&mut Frame,depth:&mut [f64],clipped_triangles:&mut usize)->Result<(),String>{
+fn raster_draw_shadowed(mesh:&super::mesh::Mesh,stream:&Stream,material:&Material,camera:&Camera,projection:&Camera,w:usize,h:usize,lights:&[Light],shadows:&[Option<super::shadow::ShadowMapRef>],ibl:Option<(&super::ibl::IblSet,f64)>,frame:&mut Frame,depth:&mut [f64],clipped_triangles:&mut usize)->Result<(),String>{
  let edge=|a:[f64;3],b:[f64;3],x:f64,y:f64|(b[0]-a[0])*(y-a[1])-(b[1]-a[1])*(x-a[0]);
  for indices in &mesh.indices{crate::guard::check();let mut vertices=Vec::with_capacity(3);for id in indices{let i=*id as usize;vertices.push(Vertex{position:camera.view(mesh.positions[i])?,attributes:stream.vertices[i].normal.iter().map(|v|*v as f64).chain(mesh.positions[i]).collect()});}let tri:[Vertex;3]=vertices.try_into().map_err(|_|"triangle conversion")?;let triangles=clip(tri,camera.near)?;*clipped_triangles+=triangles.len();for t in triangles{let mut projected=[[0.;3];3];for i in 0..3{projected[i]=projection.project(t[i].position,w as u32,h as u32)?.ok_or("clipped vertex failed camera projection")?;}let area=edge(projected[0],projected[1],projected[2][0],projected[2][1]);if !area.is_finite(){return Err("projected triangle area overflow".into());}if area==0.0{continue;}
  let bounds=|axis:usize,limit:usize|{let lo=projected.iter().map(|p|p[axis]).fold(f64::INFINITY,f64::min).floor().clamp(0.,limit as f64) as usize;let hi=projected.iter().map(|p|p[axis]).fold(f64::NEG_INFINITY,f64::max).ceil().clamp(0.,limit as f64) as usize;(lo,hi)};let (x0,x1)=bounds(0,w);let(y0,y1)=bounds(1,h);
  for y in y0..y1{crate::guard::check();for x in x0..x1{let(sx,sy)=(x as f64+0.5,y as f64+0.5);let b=[edge(projected[1],projected[2],sx,sy)/area,edge(projected[2],projected[0],sx,sy)/area,edge(projected[0],projected[1],sx,sy)/area];if b.iter().any(|v|*v<0.){continue;}let inv_z=(0..3).map(|i|b[i]/projected[i][2]).sum::<f64>();if !inv_z.is_finite()||inv_z<=0.{return Err("inverse depth invalid".into());}let z=1.0/inv_z;let id=y*w+x;if !z.is_finite(){return Err("depth overflow".into());}if z>=depth[id]{continue;}let interp=|j:usize|(0..3).map(|i|b[i]*t[i].attributes[j]/projected[i][2]).sum::<f64>()/inv_z;let n=shadow_receiver_normal(std::array::from_fn(|j|interp(j)))?;let p:[f64;3]=std::array::from_fn(|j|interp(j+3));
   let vis:Vec<f64>=lights.iter().zip(shadows).map(|(l,s)|Ok(match(l,s){(_,None)=>1.0,(Light::Directional{travel_direction,..},Some(super::shadow::ShadowMapRef::Cascaded(c)))=>{let ld=super::vertex_stream::unit(travel_direction.map(|v|-v)).unwrap_or([0.,0.,1.]);let nl=(0..3).map(|j|n[j]*ld[j]).sum::<f64>().max(0.);if nl<=0.{0.}else{super::csm::csm_visibility_validated(c,camera,p,n,nl,4.0,(x,y))?}},(Light::Directional{travel_direction,..},Some(super::shadow::ShadowMapRef::Directional(m)))=>{let ld=super::vertex_stream::unit(travel_direction.map(|v|-v)).unwrap_or([0.,0.,1.]);let nl=(0..3).map(|j|n[j]*ld[j]).sum::<f64>().max(0.);if nl<=0.{0.}else{super::shadow::visibility_disk(m,p,n,nl,4.0,x,y)?}},(Light::Point{position,..},Some(super::shadow::ShadowMapRef::PointCube(m)))=>{let ld=super::vertex_stream::unit(std::array::from_fn(|j|position[j]-p[j])).unwrap_or([0.,0.,1.]);let nl=(0..3).map(|j|n[j]*ld[j]).sum::<f64>().max(0.);if nl<=0.{0.}else{super::shadow::cube_visibility_disk(m,p,n,nl,4.0,x,y)?}},_=>1.0})).collect::<Result<Vec<f64>,String>>()?;
-  let color=aces_tonemap(super::lighting_stage::shade_shadowed(material,p,n,camera.eye,lights,&vis)?,1.0);depth[id]=z;for j in 0..3{frame.d[id*4+j]=color[j] as f32;}frame.d[id*4+3]=1.;}}
+  let mut lin=super::lighting_stage::shade_shadowed(material,p,n,camera.eye,lights,&vis)?;if let Some((s,k))=ibl{let e=super::lighting_stage::shade_ibl_validated(material,p,n,camera.eye,s)?;for j in 0..3{lin[j]+=k*e[j];}}
+  let color=aces_tonemap(lin,1.0);depth[id]=z;for j in 0..3{frame.d[id*4+j]=color[j] as f32;}frame.d[id*4+3]=1.;}}
  }}Ok(())}
 
 fn raster_draw(mesh:&super::mesh::Mesh,stream:&Stream,material:&Material,camera:&Camera,projection:&Camera,w:usize,h:usize,lights:&[Light],frame:&mut Frame,depth:&mut [f64],clipped_triangles:&mut usize)->Result<(),String>{
