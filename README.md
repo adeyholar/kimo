@@ -233,7 +233,7 @@ The installers land in `crates/kimo-gui/target/release/bundle/`. With Rust only,
 Then start the spectator first and the engine second:
 
 ```
-./target/release/kimo-gui &                                          # from crates/kimo-gui; listens on 127.0.0.1:7421
+./target/release/kimo-gui &                                          # from crates/kimo-gui; listens on the first free port of 127.0.0.1:7421-7430
 ../../target/release/kimo-mcp                                        # every tool call now shows up live (no KIMO_SPECTATOR needed)
 ```
 
