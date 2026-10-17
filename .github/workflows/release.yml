@@ -1,21 +1,38 @@
 name: release
 
+# Builds every downloadable artifact and, on a v* tag, attaches them to a DRAFT
+# GitHub release. Nothing is ever published by this workflow: a maintainer reviews
+# the draft and clicks "Publish" by hand.
+#
+#   push tag v*         -> build everything, SHA256SUMS, create/update a DRAFT release
+#   workflow_dispatch   -> dry run: build everything, upload workflow artifacts and
+#                          SHA256SUMS, no release (unless run on a v* tag with
+#                          draft_release ticked)
+#
+# Unsigned on purpose: no secrets, no certificates, GitHub-hosted runners only.
+# Every third-party action is pinned to a full commit SHA (tag in the comment).
+
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
-      publish:
-        description: "Attach artifacts to a GitHub release for this ref's tag (tags only). Off = just upload a workflow artifact."
+      draft_release:
+        description: "When run on a v* tag: also attach the artifacts to a DRAFT release (never published). Off = dry run, workflow artifacts only."
         type: boolean
         default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: "0"
+  TAURI_CLI_VERSION: "2.12.3"
 
 jobs:
   build:
@@ -32,7 +49,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             suffix: linux-x86_64-glibc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
         run: |
@@ -40,7 +57,7 @@ jobs:
           rustup default stable
           rustc -V
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -110,7 +127,7 @@ jobs:
           (cd dist && sha256sum "kimo_${dv}_amd64.deb" > "kimo_${dv}_amd64.deb.sha256")
           echo "debname=kimo_${dv}_amd64" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.pkg.outputs.name }}
           path: |
@@ -123,12 +140,12 @@ jobs:
     name: build (windows-x86_64)
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -144,32 +161,199 @@ jobs:
           if ($env:GITHUB_REF -like 'refs/tags/v*') { $version = $env:GITHUB_REF_NAME.Substring(1) }
           else { $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value }
           ./packaging/windows/build.ps1 -Version $version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kimo-windows-x86_64
           path: dist/*
           if-no-files-found: error
 
+  # Kimo Spectator desktop app (crates/kimo-gui). It is its own Cargo workspace,
+  # not a member of the root one, so tauri-action is pointed at it with projectPath.
+  gui:
+    name: spectator (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux-x86_64
+            rust_targets: ""
+            args: "--bundles deb,appimage"
+          - os: windows-latest
+            label: windows-x86_64
+            rust_targets: ""
+            args: "--bundles msi"
+          # One universal .dmg (Apple silicon + Intel) from the arm64 runner.
+          - os: macos-latest
+            label: macos-universal
+            rust_targets: "aarch64-apple-darwin x86_64-apple-darwin"
+            args: "--target universal-apple-darwin --bundles app,dmg"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Linux system packages (WebKitGTK 4.1, libsoup 3, AppImage tooling)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf file
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          for t in ${{ matrix.rust_targets }}; do rustup target add "$t"; done
+          rustc -V
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/kimo-gui/target
+          key: gui-${{ matrix.label }}-${{ hashFiles('crates/kimo-gui/Cargo.toml') }}
+          restore-keys: gui-${{ matrix.label }}-
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Install the Tauri CLI (exact version)
+        shell: bash
+        run: |
+          npm install -g "@tauri-apps/cli@${TAURI_CLI_VERSION}"
+          tauri --version
+
+      - name: App version from the tag (v1.2.3 -> 1.2.3; other runs keep tauri.conf.json)
+        id: ver
+        shell: bash
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_REF_TYPE}" = tag ] && [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf '{"version":"%s"}\n' "$v" > crates/kimo-gui/tauri.release-version.json
+            echo "extra=--config tauri.release-version.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "extra=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build with tauri-action
+        id: tauri
+        continue-on-error: ${{ runner.os == 'Windows' }}
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        with:
+          projectPath: crates/kimo-gui
+          tauriScript: tauri
+          args: ${{ matrix.args }} ${{ steps.ver.outputs.extra }}
+
+      # Windows: the .msi needs WiX. If that bundle fails, fall back to the NSIS setup .exe.
+      - name: Windows fallback, NSIS installer
+        if: runner.os == 'Windows' && steps.tauri.outcome == 'failure'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        with:
+          projectPath: crates/kimo-gui
+          tauriScript: tauri
+          args: --bundles nsis ${{ steps.ver.outputs.extra }}
+
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p dist
+          find crates/kimo-gui/target -path '*/release/bundle/*' -type f \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' -o -name '*-setup.exe' -o -name '*.dmg' \) \
+            -print0 | while IFS= read -r -d '' f; do
+              b="$(basename "$f")"; cp "$f" "dist/${b// /-}"
+            done
+          ls -l dist
+          case "$RUNNER_OS" in
+            Linux)   ls dist/*.deb >/dev/null && ls dist/*.AppImage >/dev/null ;;
+            Windows) ls dist/*.msi >/dev/null 2>&1 || ls dist/*-setup.exe >/dev/null ;;
+            macOS)   ls dist/*.dmg >/dev/null ;;
+          esac
+
+      - name: Linux smoke test (dpkg metadata, install, headless launch, uninstall)
+        if: runner.os == 'Linux'
+        run: |
+          deb=$(find dist -maxdepth 1 -name '*.deb' | head -1)
+          dpkg-deb --info "$deb"
+          sudo apt-get install -y --no-install-recommends xvfb "./$deb"
+          bin=$(dpkg -L kimo-spectator | grep -m1 '^/usr/bin/')
+          set +e
+          timeout 5 xvfb-run -a "$bin"; rc=$?
+          set -e
+          echo "exit after 5 s: $rc (124 = still running when stopped = started fine)"
+          test "$rc" -eq 124
+          sudo dpkg -r kimo-spectator
+          ! dpkg -s kimo-spectator 2>/dev/null | grep -q '^Status: install ok installed'
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kimo-spectator-${{ matrix.label }}
+          path: dist/*
+          if-no-files-found: error
+
+  checksums:
+    name: SHA256SUMS
+    needs: [build, windows, gui]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Write SHA256SUMS
+        run: |
+          cd artifacts
+          ls -l
+          find . -maxdepth 1 -type f ! -name '*.sha256' ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort > ../files.txt
+          test -s ../files.txt
+          xargs -d '\n' sha256sum -- < ../files.txt > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SHA256SUMS
+          path: artifacts/SHA256SUMS
+          if-no-files-found: error
+
   release:
-    name: publish release
-    needs: [build, windows]
-    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || inputs.publish)
+    name: draft release (never published)
+    needs: [build, windows, gui, checksums]
+    if: >-
+      ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v')
+          && (github.event_name == 'push' || inputs.draft_release)
+          && needs.build.result == 'success' && needs.windows.result == 'success'
+          && needs.gui.result == 'success' && needs.checksums.result == 'success' }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
           merge-multiple: true
-      - name: Create or update release
+      - name: Create or update the DRAFT release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
           ls -l artifacts
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber
+          cat > notes.md <<'NOTES'
+          Unsigned builds. macOS: right-click the app > Open (or `xattr -d com.apple.quarantine "/Applications/Kimo Spectator.app"`).
+          Windows: SmartScreen > More info > Run anyway. Verify downloads against SHA256SUMS.
+          NOTES
+          if draft=$(gh release view "$tag" --json isDraft -q .isDraft 2>/dev/null); then
+            if [ "$draft" != "true" ]; then
+              echo "Release $tag is already published. This workflow only touches drafts; refusing to change it."
+              exit 1
+            fi
+            gh release upload "$tag" artifacts/* --clobber
           else
-            gh release create "$GITHUB_REF_NAME" artifacts/* --title "$GITHUB_REF_NAME" --generate-notes
+            gh release create "$tag" artifacts/* --draft --verify-tag --title "kimo $tag" --notes-file notes.md
           fi
+          test "$(gh release view "$tag" --json isDraft -q .isDraft)" = true
