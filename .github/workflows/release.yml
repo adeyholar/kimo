@@ -180,6 +180,13 @@ jobs:
           key: gui-${{ matrix.label }}-${{ hashFiles('crates/kimo-gui/Cargo.toml') }}
           restore-keys: gui-${{ matrix.label }}-
 
+      # The cache restores crates/kimo-gui/target, including bundles from older versions (a 0.1.0 .msi/.deb
+      # was shipped beside 5.0.0 in dry run 39026491864). Drop them so only this build's installers are collected.
+      - name: Clear stale installer bundles from the cache
+        shell: bash
+        run: |
+          find crates/kimo-gui/target -type d -path '*/release/bundle' -prune -print -exec rm -rf {} + || true
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
@@ -234,6 +241,37 @@ jobs:
             Linux)   ls dist/*.deb >/dev/null && ls dist/*.AppImage >/dev/null ;;
             Windows) ls dist/*.msi >/dev/null 2>&1 || ls dist/*-setup.exe >/dev/null ;;
           esac
+
+      - name: Windows smoke test (msi install, launch + loopback listener, uninstall)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem dist -Filter *.msi | Select-Object -First 1
+          if (-not $msi) { throw "no .msi in dist (NSIS fallback was used); the msi smoke cannot run" }
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/norestart', '/l*v', 'msi-install.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content msi-install.log -Tail 40; throw "msi install failed: $($p.ExitCode)" }
+          Write-Output "msi install exit code: $($p.ExitCode)"
+          $exe = Get-ChildItem -Path "$env:ProgramFiles\Kimo Spectator", "$env:LOCALAPPDATA\Programs\Kimo Spectator" -Filter *.exe -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch 'uninstall' } | Select-Object -First 1
+          if (-not $exe) { throw "installed spectator exe not found" }
+          Write-Output "installed spectator exe: $($exe.FullName)"
+          $app = Start-Process $exe.FullName -PassThru
+          $ok = 0
+          for ($i = 0; $i -lt 40 -and -not $ok; $i++) {
+            Start-Sleep -Milliseconds 500
+            if ($app.HasExited) { break }
+            foreach ($port in 7421..7430) {
+              try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', $port); $c.Close(); $ok = $port; break } catch { }
+            }
+          }
+          $alive = -not $app.HasExited
+          Write-Output "spectator process alive: $alive; listening on 127.0.0.1 port: $ok"
+          if ($alive) { Stop-Process -Id $app.Id -Force; $null = $app.WaitForExit(10000) }
+          Write-Output "spectator stopped: $($app.HasExited)"
+          $u = Start-Process msiexec.exe -ArgumentList '/x', "`"$($msi.FullName)`"", '/qn', '/norestart' -Wait -PassThru
+          Write-Output "msi uninstall exit code: $($u.ExitCode)"
+          if (-not $alive -or -not $ok) { throw "spectator did not start and listen on 127.0.0.1:7421-7430" }
+          if ($u.ExitCode -ne 0) { throw "msi uninstall failed: $($u.ExitCode)" }
 
       - name: Linux smoke test (dpkg metadata, install, headless launch + loopback listener, uninstall)
         if: runner.os == 'Linux'
