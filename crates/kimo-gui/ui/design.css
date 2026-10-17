@@ -340,3 +340,11 @@ body::before{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;wi
 .frame .tag.gated::before{content:'';display:inline-block;width:7px;height:7px;margin-right:8px;border-radius:2px;background:var(--ember);vertical-align:1px}
 .frame .tag.stale.refused{border-color:var(--ember);max-width:calc(100% - 20px);overflow:hidden;text-overflow:ellipsis}
 .readcard.outliner .rt{color:var(--ember-text,var(--ember))}
+
+/* POLISH-1: (1) the Color scopes' stats line sits in the waveform half's top margin, above the plot's top line and left of
+   the vectorscope ring (it sat over the ring's top). Same 13px type, single line. (3) while a track / mask / feature-gated
+   chip is on a viewer, the HUD toast drops below the chip stack instead of landing on it: a static offset, no transition. */
+.scopestats{left:52px;right:auto;top:1px;max-width:640px;padding:0 6px;line-height:16px}
+.frame .tag:is(.trk2,.mask2,.gated)~.hud{margin-top:34px}
+.frame .tag:not(.stale)~.tag:is(.trk2,.mask2,.gated)~.hud{margin-top:68px}
+.frame .tag:not(.stale)~.tag:not(.stale)~.tag:is(.trk2,.mask2,.gated)~.hud{margin-top:102px}
