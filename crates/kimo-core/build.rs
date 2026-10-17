@@ -45,7 +45,10 @@ fn embed_git_commit() {
 /// (src/threed/manifold_shim.cpp) with the existing `cc` build-dep. No new dependencies.
 fn build_manifold() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let src = manifest.join("../../vendor/manifold-3.5.3").canonicalize().expect("vendor/manifold-3.5.3");
+    // No canonicalize(): on Windows it returns a `\\?\` / `\\?\UNC\` verbatim path that MSBuild/cl cannot open (C1083).
+    // CARGO_MANIFEST_DIR is already absolute, so walk up two plain components instead of joining "../..".
+    let src = manifest.parent().and_then(|p| p.parent()).expect("workspace root above crates/kimo-core").join("vendor").join("manifold-3.5.3");
+    assert!(src.join("CMakeLists.txt").is_file(), "vendor/manifold-3.5.3 missing at {}", src.display());
     println!("cargo:rerun-if-changed={}", src.display());
     println!("cargo:rerun-if-changed=src/threed/manifold_shim.cpp");
     let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("manifold-build");
