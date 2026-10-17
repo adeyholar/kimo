@@ -268,9 +268,26 @@ jobs:
           Write-Output "spectator process alive: $alive; listening on 127.0.0.1 port: $ok"
           if ($alive) { Stop-Process -Id $app.Id -Force; $null = $app.WaitForExit(10000) }
           Write-Output "spectator stopped: $($app.HasExited)"
+          # Pass 2: occupy 7421 with a dummy listener; the spectator must take the next free port (7422).
+          $dummy = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 7421); $dummy.Start()
+          $app2 = Start-Process $exe.FullName -PassThru
+          $ok2 = 0
+          for ($i = 0; $i -lt 40 -and -not $ok2; $i++) {
+            Start-Sleep -Milliseconds 500
+            if ($app2.HasExited) { break }
+            foreach ($port in 7422..7430) {
+              try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', $port); $c.Close(); $ok2 = $port; break } catch { }
+            }
+          }
+          $alive2 = -not $app2.HasExited
+          Write-Output "pass 2 (7421 occupied by a dummy): spectator process alive: $alive2; listening on 127.0.0.1 port: $ok2"
+          if ($alive2) { Stop-Process -Id $app2.Id -Force; $null = $app2.WaitForExit(10000) }
+          $dummy.Stop()
+          Write-Output "pass 2 spectator stopped: $($app2.HasExited)"
           $u = Start-Process msiexec.exe -ArgumentList '/x', "`"$($msi.FullName)`"", '/qn', '/norestart' -Wait -PassThru
           Write-Output "msi uninstall exit code: $($u.ExitCode)"
           if (-not $alive -or -not $ok) { throw "spectator did not start and listen on 127.0.0.1:7421-7430" }
+          if (-not $alive2 -or $ok2 -ne 7422) { throw "pass 2: expected the spectator on 127.0.0.1:7422 with 7421 occupied, got '$ok2'" }
           if ($u.ExitCode -ne 0) { throw "msi uninstall failed: $($u.ExitCode)" }
 
       - name: Linux smoke test (dpkg metadata, install, headless launch + loopback listener, uninstall)
