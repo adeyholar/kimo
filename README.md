@@ -128,32 +128,38 @@ Set it like this: `claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -
 
 Installers are built by the [release workflow](.github/workflows/release.yml) on GitHub-hosted runners and attached to a **draft** release with a `SHA256SUMS` file. Nothing is published until a maintainer reviews the draft. The builds are **unsigned**. This release ships **Linux and Windows**. macOS is coming later.
 
-Files from the first dry run (workflow_dispatch at `ca0334f`). They read version `0.1.0` because they were built before the version bump to `5.0.0`; the next build names them `Kimo-Spectator_5.0.0_…` (a `v*` tag build stamps the tag's version).
+Files in the `v5.0.0` release (tag run `39028274202` at `5ad355c`); the hashes are the release's `SHA256SUMS`.
 
 | OS | File | SHA-256 | Status |
 |---|---|---|---|
-| Linux x86_64 | `Kimo-Spectator_0.1.0_amd64.deb` | `21db41829a3b7643cfa7e44a6fb6e3de01dcb74f8cf63b595efe3fc4711cda4a` | **unsigned draft**, built on CI runners; smoke-tested on Debian 12 (install, launch, one rendered frame, uninstall) |
-| Linux x86_64 | `Kimo-Spectator_0.1.0_amd64.AppImage` | `b4721564f2d4af5ae884ffaa657cd99e4d9c49e2a8b666e1f368e54258c904fa` | **unsigned draft**, built on CI runners; smoke-tested on Debian 12 (run with `--appimage-extract-and-run`, launch, one rendered frame); a normal FUSE launch is not tested |
-| Windows x64 | `Kimo-Spectator_0.1.0_x64_en-US.msi` | `09d57bb09e9c8459a722462824bed119507c5b63a7c7d5c32f28d03a8069b1dd` | **unsigned draft, built on CI runners, not tested on a real PC** |
+| Linux x86_64 | `Kimo-Spectator_5.0.0_amd64.deb` | `4eb906d88a31444ec22a961214a58b1e9fdd4c7c54ae63350aa88ae1976f5e2b` | **unsigned draft**, built on CI runners; the same build steps were smoke-tested on Debian 12 at `ca0334f` (install, launch, one rendered frame, uninstall) |
+| Linux x86_64 | `Kimo-Spectator_5.0.0_amd64.AppImage` | `746cbbcf4c218ed7264ac3d05c513489f88caca720f476de0ef0892da2a04baa` | **unsigned draft**, built on CI runners; run with `--appimage-extract-and-run` was smoke-tested on Debian 12 at `ca0334f`; a normal FUSE launch is not tested |
+| Windows x64 | `Kimo-Spectator_5.0.0_x64_en-US.msi` | `cd2fd1fa2fff7334687b850c37bf0e11748c75aad80f2ee7ac0123eda0b54f7b` | **unsigned draft, built on CI runners**; CI installs it, launches it, checks the listener (7421, and 7422 with 7421 taken) and uninstalls it on a GitHub Windows runner; not installed on a real Windows PC yet |
 
-> **Windows is unproven.** The `.msi` was produced by a Windows runner and has not been installed or opened on a real PC yet. Treat it as an unsigned draft until someone has.
+Engine (command line) downloads, same release:
 
-Engine (command line) downloads: the `kimo-mcp` tarball is **glibc Linux only** for this release (`kimo-<tag>-linux-x86_64-glibc.tar.gz`, needs glibc 2.35 or newer). The Windows engine package is built by the release workflow. The `crates/kimo-core/build.rs` fix it needed is in this release, checked on Linux only so far; until a Windows `kimo-mcp` is attached to a release, build the engine from clone.
+| OS | File | SHA-256 |
+|---|---|---|
+| Linux x86_64 (glibc 2.35+) | `kimo-v5.0.0-linux-x86_64-glibc.tar.gz` | `1ddb80fcfafd5346143ba08c74b17f3b970ab9ff524d2a79cb2a1ced53afcbaf` |
+| Windows x64 | `kimo-5.0.0-windows-x86_64.zip` | `73bbbc34925979e52261a4bd5959080cdf287230518eddef711e8a1ec36926eb` |
+| Windows x64 (installer) | `kimo-5.0.0-windows-x86_64-setup.exe` | `c22a653d74216f070964afcb563dbb91603d005ea96f2c780e9a58f99c2ed97e` |
+
+The Windows engine packages are built and packaged by CI on a GitHub Windows runner; they have not been run on a real Windows PC yet.
 
 **Check the download** against the release's `SHA256SUMS`:
 
 ```
 sha256sum -c SHA256SUMS --ignore-missing                                   # Linux
-Get-FileHash .\Kimo-Spectator_0.1.0_x64_en-US.msi -Algorithm SHA256        # Windows PowerShell, compare by eye
+Get-FileHash .\Kimo-Spectator_5.0.0_x64_en-US.msi -Algorithm SHA256        # Windows PowerShell, compare by eye
 ```
 
 **Linux (unsigned draft)**
 
 ```
-sudo apt install ./Kimo-Spectator_0.1.0_amd64.deb      # pulls in WebKitGTK 4.1; remove with: sudo apt remove kimo-spectator
+sudo apt install ./Kimo-Spectator_5.0.0_amd64.deb      # pulls in WebKitGTK 4.1; remove with: sudo apt remove kimo-spectator
 # or, no install:
-chmod +x Kimo-Spectator_0.1.0_amd64.AppImage
-./Kimo-Spectator_0.1.0_amd64.AppImage                  # no FUSE? add --appimage-extract-and-run
+chmod +x Kimo-Spectator_5.0.0_amd64.AppImage
+./Kimo-Spectator_5.0.0_amd64.AppImage                  # no FUSE? add --appimage-extract-and-run
 ```
 
 **Windows (unsigned draft).** Run the `.msi`. SmartScreen says "Windows protected your PC": click **More info**, then **Run anyway**. The app uses Microsoft Edge WebView2, which Windows 11 already has; on older systems the installer fetches it.
@@ -167,7 +173,7 @@ The spectator listens on the first free port of `127.0.0.1:7421`-`7430` (loopbac
 All platforms: the Rust toolchain from [rustup](https://rustup.rs), `cmake` and a C++ compiler (the engine builds vendored Manifold), and `ffmpeg` + `ffprobe` on `PATH` at runtime.
 
 <table>
-<tr><th>Linux (Debian / Ubuntu)</th><th>Windows</th></tr>
+<tr><th>Linux (Debian / Ubuntu)</th><th>Windows</th><th>macOS (from source, untested)</th></tr>
 <tr valign="top"><td>
 
 ```
@@ -189,10 +195,25 @@ sudo apt install libwebkit2gtk-4.1-dev \
 3. [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (already on Windows 11).
 4. ffmpeg, for example `winget install Gyan.FFmpeg`.
 
+</td><td>
+
+```
+xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf \
+  https://sh.rustup.rs | sh
+brew install cmake ffmpeg
+# spectator app only:
+brew install node
+```
+
 </td></tr>
 </table>
 
-Linux x86_64 is the tested platform for the engine. The Windows list follows the Tauri and Rust prerequisites and is not proven by a build here. Known problem, being fixed separately: `crates/kimo-core/build.rs` passes `-- -j1` to `cmake --build`, which MSBuild rejects, so the engine build from clone on Windows is expected to fail until that fix lands (see [Verification status](#verification-status)).
+Linux x86_64 is the tested platform for the engine. The Windows list follows the Tauri and Rust prerequisites; the release workflow builds the engine and the spectator with it on a GitHub Windows runner, but a build from clone on a real Windows PC has not been tried yet.
+
+Step 4 (the spectator app) also needs Node.js 18 or newer for `npx`; the CI jobs use Node 22.
+
+**macOS: no installer in this release, and it has not been built on a Mac here.** The commands in the macOS column and in steps 2-4 are the same ones the Linux and Windows CI jobs run; `crates/kimo-core/build.rs` links `libc++` on macOS. Reports welcome.
 
 ### 2. Build the engine
 
@@ -226,6 +247,7 @@ The spectator is its own Cargo workspace in `crates/kimo-gui`. Build it with the
 cd crates/kimo-gui
 npx --yes @tauri-apps/cli@2.12.3 build --bundles deb,appimage     # Linux
 npx --yes @tauri-apps/cli@2.12.3 build --bundles msi              # Windows
+npx --yes @tauri-apps/cli@2.12.3 build --bundles app              # macOS (untested): Kimo Spectator.app
 ```
 
 The installers land in `crates/kimo-gui/target/release/bundle/`. With Rust only, `cargo install tauri-cli --version 2.12.3 --locked` then `cargo tauri build` is the same CLI.
@@ -353,7 +375,7 @@ Put this in `opencode.json` in your project, or in `~/.config/opencode/opencode.
 ### Any other MCP client
 kimo is a standard MCP stdio server (protocol 2024-11-05, `initialize`, `tools/list`, `tools/call`). Any client that can register a stdio server by command works: give it the absolute path to `kimo-mcp` and no arguments. Many clients use the `mcpServers` JSON shape shown for Cursor; some (for example Zed) use a different key, so check your client's MCP docs for the exact file and format. Only the four clients above were checked against their docs.
 
-Windows: use the path to `kimo-mcp.exe` (the Windows engine installer, once its release job is fixed, puts it in `%LOCALAPPDATA%\\Programs\\kimo\\bin`; in JSON write backslashes doubled, see the [Windows guide](packaging/windows/WINDOWS.md)). The configs above are the same except for the path; the Claude Code, Codex, Cursor and OpenCode formats were checked on their docs, not tested on Windows here.
+Windows: use the path to `kimo-mcp.exe` (the Windows engine installer `kimo-5.0.0-windows-x86_64-setup.exe` installs per user, no admin rights, into `%LOCALAPPDATA%\Programs\kimo` by default, so the binary is `%LOCALAPPDATA%\Programs\kimo\bin\kimo-mcp.exe` ([kimo.iss](packaging/windows/kimo.iss)); in JSON write backslashes doubled, see the [Windows guide](packaging/windows/WINDOWS.md)). The configs above are the same except for the path; the Claude Code, Codex, Cursor and OpenCode formats were checked on their docs, not tested on Windows here.
 
 **3. Try it.** Ask your assistant: "Use kimo to import /path/to/clip.mp4, add a title, and render a frame." Or drive it yourself with the Python client in `examples/mcp_client.py`.
 
@@ -460,9 +482,9 @@ This is the list the v3 build registers (read from `tools/list` of the grouped s
 
 - Registry: 376 tools (`crates/kimo-core/tests/golden/golden_registry.txt`, 376 lines). A default-feature `kimo-mcp` at `af615ca` lists 378 entries in `flat` mode: those 376 plus `search_tools` and `kimo_describe`. Of the 378, 362/378 live in the default build + 16 feature-gated (8 native-ocio, 8 mesh-import/material-textures/flat-sah).
 - Fuzz: 6497 calls, 0 failures, as recorded in the v3 notes at 327 tools. Not re-run for this README.
-- Linux spectator installers (`.deb`, `.AppImage`): built on CI runners (dry run at `ca0334f`, version `0.1.0`), downloaded and smoke-tested on Debian 12 x86_64 on 2026-10-17: sha256 matches, the `.deb` installs (`Depends: libwebkit2gtk-4.1-0, libgtk-3-0`) and uninstalls cleanly, and both the `.deb` and the AppImage (`--appimage-extract-and-run`) launch under Xvfb, listen on 127.0.0.1:7421 and draw the `frame_rendered` frames a real `kimo-mcp` (commit `af615ca`) sends after `project_set`, `add_track`, `add_text`. Unsigned draft; other distributions not tested.
-- Windows spectator installer (`Kimo-Spectator_0.1.0_x64_en-US.msi`): **unsigned draft, built on CI runners, not tested on a real PC.**
-- Engine release jobs: the Linux engine tarball is glibc only for this release (the static musl build was dropped). The Windows x64 engine job failed in the first dry run in `crates/kimo-core/build.rs` (MSBuild rejects `cmake --build ... -- -j1`). This release switches to `cmake --build ... --parallel 1` and links the C++ runtime per target (`libstdc++` on Linux, `libc++` on macOS, nothing on MSVC); both changes were checked on Linux only, and the Windows job has not re-run yet.
+- Linux spectator installers (`.deb`, `.AppImage`): built on CI runners (dry run at `ca0334f`, then version `0.1.0`; the `5.0.0` files come from the same steps in tag run `39028274202`), downloaded and smoke-tested on Debian 12 x86_64 on 2026-10-17: sha256 matches, the `.deb` installs (`Depends: libwebkit2gtk-4.1-0, libgtk-3-0`) and uninstalls cleanly, and both the `.deb` and the AppImage (`--appimage-extract-and-run`) launch under Xvfb, listen on 127.0.0.1:7421 and draw the `frame_rendered` frames a real `kimo-mcp` (commit `af615ca`) sends after `project_set`, `add_track`, `add_text`. Unsigned draft; other distributions not tested.
+- Windows spectator installer (`Kimo-Spectator_5.0.0_x64_en-US.msi`): **unsigned draft, built on CI runners.** CI installs, launches and uninstalls it on a GitHub Windows runner (tag run `39028274202`); not installed on a real Windows PC yet.
+- Engine release jobs: the Linux engine tarball is glibc only for this release (the static musl build was dropped). The Windows x64 engine job failed in the first dry run in `crates/kimo-core/build.rs` (MSBuild rejects `cmake --build ... -- -j1`). This release switches to `cmake --build ... --parallel 1` and links the C++ runtime per target (`libstdc++` on Linux, `libc++` on macOS, nothing on MSVC); the Windows engine job then passed on CI (tag run `39028274202`) and its zip and setup.exe are attached. Not run on a real Windows PC yet; macOS not built.
 - Windows engine build from clone: not run here.
 - Third-party licences for the spectator app: [THIRD_PARTY.md](THIRD_PARTY.md) (five MPL-2.0 crates from the Tauri stack and the LGPL libraries bundled in the AppImage, both decision pending).
 - Per-feature limits and change notes: [docs/DEV_NOTES.md](docs/DEV_NOTES.md). Feature tiers: [FEATURES.md](FEATURES.md). Plans: [ROADMAP.md](ROADMAP.md).
