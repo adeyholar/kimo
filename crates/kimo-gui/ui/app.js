@@ -7,6 +7,7 @@ import { KINDS, PRE, POST, tickRunning, pickedRows, TL_PARTS } from './panels.js
 import { route, freezeNow } from './router.js';
 
 const DESIGN_W = 1376, DESIGN_H = 768;
+const RAWISH = /^(c|clip|t|track|fx|effect|node|n|layer|l|asset|media|an|marker|mask|m|cam|light|obj)[_-]?\d+$/i;   /* GUI-FIX-2: an engine id inside a reason */
 
 export const state = {
   status: { kind: 'down', label: 'connecting' },
@@ -38,6 +39,7 @@ function previewMark() {
     if (spec.kind !== 'viewer') continue;
     const v = (state.views[mode] || {})[name]; if (!v || !v._engine) continue;
     if (mark != null) v.stale = mark; else delete v.stale;
+    if (mark != null && P.refused) { v.refused = P.refused; v.refusedSrc = P.refusedSrc || 'engine'; } else { delete v.refused; delete v.refusedSrc; }   /* GUI-FIX-2: why the frame is behind (fix2.js / frame_skipped) */
   }
 }
 
@@ -45,7 +47,7 @@ export function apply(ev) {
   if (!ev || typeof ev !== 'object') return;
   switch (ev.type) {
     case 'session':
-      if (ev.reset) { state.calls = []; state.callCount = 0; state.views = {}; state.stats = {}; state.preview = { shown: -1, want: 0, revs: false }; state.explicitActivity = false; state.explicitMode = false; state.activity = null; }
+      if (ev.reset) { state.calls = []; state.callCount = 0; state.views = {}; state.stats = {}; state.preview = { shown: -1, want: 0, revs: false }; state.explicitActivity = false; state.explicitMode = false; state.activity = null; for (const k of ['_gg', '_refuse', '_trk', '_outl', '_b2Args']) delete state[k]; }
       for (const k of ['project', 'agent', 'read_only']) if (ev[k] !== undefined) state.session[k] = ev[k];
       if (ev.width > 0 && ev.height > 0) { state.session.width = ev.width; state.session.height = ev.height; }   // project size: the transform gizmo places x/y pixels with it
       if (ev.elapsed_s !== undefined) { state.session.elapsed_s = ev.elapsed_s; state.session.t0 = performance.now(); }
@@ -100,6 +102,7 @@ export function apply(ev) {
       const P = state.preview, fr = Number.isFinite(ev.rev) ? ev.rev : null;
       if (fr != null) { if (fr < P.shown) { metrics.staleFrames++; return; } P.shown = fr; P.revs = true; }
       else if (P.revs) P.shown = Math.max(P.shown, P.want);
+      if (P.shown >= P.want) { P.refused = null; P.refusedSrc = null; }   /* GUI-FIX-2: a frame for the newest rev: nothing is refused any more */
       const src = ev.png_b64 ? 'data:image/png;base64,' + ev.png_b64 : ev.jpg_b64 ? 'data:image/jpeg;base64,' + ev.jpg_b64 : ev.src;
       // the engine's frame shows in this mode's viewer and in every other mode's viewer the engine
       // already owns or that has no frame yet, so a live session never hops to an empty viewer
@@ -115,6 +118,20 @@ export function apply(ev) {
       if (src) for (const r of state.views.export?.renders?.rows || []) if (r._live) r._thumb = src;
       if (src && (ev.png_b64 || ev.jpg_b64)) computeParade(src);
       previewMark();
+      break;
+    }
+    case 'frame_skipped': {
+      /* GUI-FIX-2: the engine could not make this call's frame (demo mode sends its reason; headless sends nothing).
+         The viewer keeps the last frame and its out-of-date chip reads the engine's reason; raw ids in it read as the
+         grade node's effect name when the GUI knows the node, else drop out. */
+      if (typeof ev.reason === 'string' && ev.reason.trim()) {
+        const nodes = Object.values(state._gg || {}).reduce((m, g) => Object.assign(m, g.nodes || {}), {});
+        state.preview.refusedSrc = 'engine';
+        state.preview.refused = ev.reason.trim().replace(/\b([A-Za-z]+[_-]?\d+)\b/g, (t) => nodes[t] && nodes[t].fx ? '· ' + String(nodes[t].fx).replace(/_/g, ' ') : RAWISH.test(t) ? '' : t).replace(/\s+/g, ' ').trim().slice(0, 80);
+        if (Number.isFinite(ev.rev)) state.preview.want = Math.max(state.preview.want, ev.rev);
+        if (!state.preview.revs) state.preview.revs = true;
+        previewMark();
+      }
       break;
     }
     case 'project_changed':

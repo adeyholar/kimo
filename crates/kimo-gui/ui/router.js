@@ -15,6 +15,7 @@ import { COV_C, pipelineOps, projectOps, qaOps, space, C_MUT, cSnap, cRestore, c
 import { COV_A, covAOps, covASee, covAPre, covAHistory } from './cov_a.js';
 import { COVB, covbOps, covbLearn, covbHistory } from './cov_b.js';
 import { readRows, callRows, CHIP, colourRows, scopeLine } from './reads.js';
+import { fix2Pre, fix2Post } from './fix2.js';   /* GUI-FIX-2 */
 
 export const FAMILIES = [
   ['pipeline', COV_C.pipeline], ['project', COV_C.project], ['qa', COV_C.qa],   /* project_ops.js: colour pipeline rows, m02 history / diff / batch / media, QA + cache in the HUD toast + rail row */
@@ -963,7 +964,8 @@ export function route(ev, state, MODES) {
   covbHistory(state, MODES, ev, COVB_H);   // before any op: the screen as it was before this step (cov_b.js)
   const fam = family(ev.tool_name), id = ev.call_id ?? ev.tool_name + '@' + (ev.ts ?? '');
   const out = [];
-  if (fam === 'inspect') return inspectOps(state, MODES, ev, id);
+  fix2Pre(state, MODES, ev);   /* GUI-FIX-2: a feature-gated refusal's cargo feature, read from the engine's error (fix2.js) */
+  if (fam === 'inspect') { const o = inspectOps(state, MODES, ev, id); fix2Post(state, MODES, ev); return o; }
   if (fam === 'transform' && (ev.phase === 'start' || ev.phase === 'complete')) xfOps(state, MODES, ev);
   if (ev.phase === 'complete' && KEY_TOOLS.test(String(ev.tool_name))) keyGraph(state, MODES, ev);   // the curve on the Graph, when the screen has one
   if (fam === '3d') sceneOps(state, MODES, ev);
@@ -1024,6 +1026,7 @@ export function route(ev, state, MODES) {
     } else { if (fam === 'export') exportOps(state, MODES, ev); hud(state, ev, fam, ev._hudErr || ev.tool_name + ' failed'); }
     if (state._callArgs) delete state._callArgs[ev.call_id];
   }
+  fix2Post(state, MODES, ev);   /* GUI-FIX-2: track overlay, outliner card, mask chip, Media / Renders rows (fix2.js) */
   return out;
 }
 
@@ -1047,7 +1050,7 @@ const summary = r => {
 };
 // GUI-FIX-1: a read's answer as a quiet card pinned to the bottom of the current screen's info panel (kv). It is
 // not an Inspector row (a read changes no value), the next read replaces it, and the screen never hops.
-function readCard(state, MODES, tool, rows) {
+function readCard(state, MODES, tool, rows, title) {   /* title: the card's label ('read' unless given; GUI-FIX-2 'outliner') */
   if (!rows || !rows.length) return false;
   const M = MODES[state.mode]; if (!M) return false;
   const V = views(state);
@@ -1060,7 +1063,7 @@ function readCard(state, MODES, tool, rows) {
   }
   const e = Object.entries(M.panels).find(([, s]) => s.kind === 'kv'); if (!e) return false;
   const K = V[e[0]] || (V[e[0]] = {});
-  K.read = { tool: String(tool), rows: rows.slice(0, 4), _flash: now() };
+  K.read = { tool: String(tool), rows: rows.slice(0, 4), _flash: now(), ...(title ? { title } : {}) };
   return true;
 }
 // GUI-FIX-1: a successful mutating call that no panel code drew (text styling and animators, an audio-effect key, a
@@ -1312,7 +1315,7 @@ function sceneOps(state, MODES, ev) {
     // mesh ops: a node on the Stack (modelling), newest in ember
     if (/^(mesh_|generate_mesh_primitive|contour_sdf_graph|set_mesh_pin|derive_vertex_tangents)/.test(tn) && ev.phase === 'complete') {
       const stk = Object.entries(MODES[mode] ? MODES[mode].panels : {}).find(([, sp]) => sp.kind === 'stack');
-      if (stk) { const S = V[stk[0]] || (V[stk[0]] = {}); S.nodes = S.nodes || []; for (const n of S.nodes) n.em = false; const nm = { mesh_lathe: 'lathe', mesh_subdivide: 'subdivide', mesh_boolean: 'boolean ' + (A.op ?? A.operation ?? 'diff'), mesh_extrude_path: 'extrude path', generate_mesh_primitive: String(A.shape ?? A.primitive ?? A.kind ?? 'primitive'), contour_sdf_graph: 'contour', set_mesh_pin: 'pin', derive_vertex_tangents: 'tangents' }[tn] || tn.replace(/^mesh_/, ''); S.nodes.push({ name: nm, em: true, _flash: now() }); if (S.nodes.length > 7) S.nodes.splice(0, S.nodes.length - 7); hit = true; }
+      if (stk) { const S = V[stk[0]] || (V[stk[0]] = {}); S.nodes = S.nodes || []; for (const n of S.nodes) n.em = false; const nm = { mesh_lathe: 'lathe', mesh_subdivide: 'subdivide', mesh_boolean: 'boolean ' + (A.op ?? A.operation ?? 'diff'), mesh_extrude_path: 'extrude path', generate_mesh_primitive: String(A.shape ?? (A.primitive && typeof A.primitive === 'object' ? A.primitive.kind : A.primitive) ?? A.kind ?? 'primitive')   /* GUI-FIX-2: primitive is {kind,…}, not a string */, contour_sdf_graph: 'contour', set_mesh_pin: 'pin', derive_vertex_tangents: 'tangents' }[tn] || tn.replace(/^mesh_/, ''); S.nodes.push({ name: nm, em: true, _flash: now() }); if (S.nodes.length > 7) S.nodes.splice(0, S.nodes.length - 7); hit = true; }
     }
     // camera (m13): orbit ring with the camera on it at its pan, a frustum wedge opening at its fov,
     // a diamond per keyframed pan, the axis triad turned by the pan; scene objects into the Scene tree
@@ -1395,4 +1398,4 @@ function sceneOps(state, MODES, ev) {
 }
 
 /* helpers project_ops.js reads (it imports them back: ES modules allow the cycle, nothing runs at load) */
-export { now as _now, RAW_ID, findClip, findTrack, timelineView, numOf, fitRuler };
+export { now as _now, RAW_ID, findClip, findTrack, timelineView, numOf, fitRuler, readCard };

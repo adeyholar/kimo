@@ -114,9 +114,10 @@ function viewer({ spec, data, w, h, state }) {
   if (gage < GIZMO_MS) html += gizmo(gz, fw, fh, state.session || {}, gage);
   for (const t of (data.tags || (data.tag ? [{ text: data.tag }] : []))) {
     const pos = t.pos === 'tr' ? `right:${t.x ?? 10}px` : `left:${t.x ?? 10}px`;
-    html += `<span class="tag" style="${pos};top:${t.y ?? 10}px">${E(t.text)}</span>`;
+    html += `<span class="tag${t.cls ? ' ' + E(t.cls) : ''}" style="${pos};top:${t.y ?? 10}px">${E(t.text)}</span>`;
   }
-  if (data.stale != null) html += `<span class="tag stale"><i></i>out of date · rev ${E(data.stale)}</span>`;   /* the frame shows an older rev than the project's (app.js previewMark) */
+  if (data.stale != null) html += data.refused ? `<span class="tag stale refused" data-source="${data.refusedSrc === 'inferred' ? 'inferred' : 'engine'}"><i></i>render refused: ${E(data.refused)}</span>`   /* GUI-FIX-2: the engine will not render this rev (app.js previewMark) */
+    : `<span class="tag stale"><i></i>out of date · rev ${E(data.stale)}</span>`;   /* the frame shows an older rev than the project's (app.js previewMark) */
   const hd = state && state.hud;
   if (hd && performance.now() - hd.t < 1600) html += `<span class="hud${hd.phase === 'error' ? ' err' : hd.fam === 'inspect' ? ' read' : ''}" style="right:${o.hudX ?? 10}px;top:${o.hudY ?? 10}px"><i></i>${E(hd.fam)} - ${E(hd.text)}</span>`;
   html += '</div>';
@@ -171,6 +172,11 @@ function overlay(ov, w, h) {
       for (let i = 1; i < nx; i++) { const t = i / nx, a = L(q[0], q[1], t), b = L(q[3], q[2], t); s += `<line x1="${px(a[0])}" y1="${px(a[1])}" x2="${px(b[0])}" y2="${px(b[1])}" stroke="rgba(255,90,35,.55)" stroke-width="1"/>`; }
       for (let j = 1; j < ny; j++) { const t = j / ny, a = L(q[0], q[3], t), b = L(q[1], q[2], t); s += `<line x1="${px(a[0])}" y1="${px(a[1])}" x2="${px(b[0])}" y2="${px(b[1])}" stroke="rgba(255,90,35,.55)" stroke-width="1"/>`; }
     }
+    // GUI-FIX-2 tracking: feature points (with the residual vector, already magnified by the router), per-corner
+    // disagreement / jitter rings, the long-gap tracker's boxes joined by their centres
+    if (o.pts) for (const q of o.pts) { const x = q.p[0] * w, y = q.p[1] * h; if (q.v) s += `<line x1="${px(x)}" y1="${px(y)}" x2="${px(x - q.v[0] * w)}" y2="${px(y - q.v[1] * h)}" stroke="var(--ember)" stroke-width="1.5"/>`; s += `<circle cx="${px(x)}" cy="${px(y)}" r="3" fill="var(--cream)"/>`; }
+    if (o.rings) for (const q of o.rings) s += `<circle cx="${px(q.p[0] * w)}" cy="${px(q.p[1] * h)}" r="${px(q.r)}" fill="none" stroke="var(--cream)" stroke-opacity=".8" stroke-width="1.25"/>`;
+    if (o.boxes && o.boxes.length) { const n = o.boxes.length; o.boxes.forEach((b, i) => { s += `<rect x="${px(b[0] * w)}" y="${px(b[1] * h)}" width="${px(b[2] * w)}" height="${px(b[3] * h)}" fill="none" stroke="${i === n - 1 ? 'var(--ember)' : 'var(--cream)'}" stroke-opacity="${i === n - 1 ? 1 : .35}" stroke-width="${i === n - 1 ? 1.6 : 1}"/>`; }); s += `<polyline points="${o.boxes.map(b => px((b[0] + b[2] / 2) * w) + ',' + px((b[1] + b[3] / 2) * h)).join(' ')}" fill="none" stroke="var(--ember)" stroke-width="1.25"/>`; }
     if (o.pt) { const [x, y] = [o.pt[0] * w, o.pt[1] * h], r = (o.r ?? .12) * Math.min(w, h); s += `<circle cx="${px(x)}" cy="${px(y)}" r="${px(r)}" fill="none" stroke="var(--ember)" stroke-width="1.5"/><circle cx="${px(x)}" cy="${px(y)}" r="3.5" fill="var(--ember)"/><path d="M${px(x - r - 6)} ${px(y)}h8M${px(x + r - 2)} ${px(y)}h8M${px(x)} ${px(y - r - 6)}v8M${px(x)} ${px(y + r - 2)}v8" stroke="var(--cream)" stroke-width="1"/>`; }
     if (o.poly) s += `<polygon points="${o.poly.map(([x, y]) => px(x * w) + ',' + px(y * h)).join(' ')}" fill="rgba(245,241,231,.07)" stroke="var(--cream)" stroke-width="1.25" stroke-dasharray="5 3"/>`;
     if (o.light) {
@@ -252,7 +258,7 @@ function kv({ spec, data, w, h }) {
   // GUI-FIX-1: the last read's answer (get_* / list_* / inspect_* / QA), pinned to the panel's bottom edge, quiet styling:
   // a read is not a value of the project, so it never renders as an Inspector row
   const R = data.read;
-  if (R && R.rows && R.rows.length) html += `<div class="readcard${F(R)}"><div class="rh"><span class="rt">read</span>${E(R.tool)}</div>${R.rows.map(r => `<div class="rr"><span class="rk">${E(r[0])}</span><span class="rv">${E(r[1])}</span></div>`).join('')}</div>`;
+  if (R && R.rows && R.rows.length) html += `<div class="readcard${F(R)}${R.title ? ' ' + E(R.title) : ''}"><div class="rh"><span class="rt">${E(R.title || 'read')}</span>${E(R.tool)}</div>${R.rows.map(r => `<div class="rr"><span class="rk">${E(r[0])}</span><span class="rv">${E(r[1])}</span></div>`).join('')}</div>`;
   return html;
 }
 function block(b, w) {
@@ -624,7 +630,7 @@ function diffbatch({ spec, data, w, h }) {
   let html = head(spec, data);
   const col = o.col || { '+': '#cfe0b8', '~': 'var(--ember-text)', '-': '#e28a7a' };
   (data.diff || []).forEach((L, i) => {
-    html += `<div style="position:absolute;left:15px;width:${split - 30}px;top:${(o.y0 ?? 52) + i * (o.step ?? 24)}px;display:flex;gap:var(--diff-gap,12px);font-family:var(--mono);font-size:var(--diff-fs,12px);white-space:pre"><span style="color:${col[L[0]]};width:10px">${E(L[0])}</span><span style="color:${L[0] === '~' && !o.col ? 'var(--text)' : (o.txt || col)[L[0]]}">${E(L[1])}</span></div>`;
+    html += `<div style="position:absolute;left:15px;width:${split - 30}px;top:${(o.y0 ?? 52) + i * (o.step ?? 24)}px;display:flex;gap:var(--diff-gap,12px);font-family:var(--mono);font-size:var(--diff-fs,12px);white-space:pre"><span style="color:${col[L[0]] || 'var(--cream)'};width:10px">${E(L[0])}</span><span style="color:${L[0] === '~' && !o.col ? 'var(--text)' : (o.txt || col)[L[0]]}">${E(L[1])}</span></div>`;
   });
   html += `<div style="position:absolute;left:${split}px;top:${o.splitTop ?? 14}px;bottom:14px;width:1px;background:var(--line)"></div>`;
   const b = data.batch || {};
@@ -1009,6 +1015,9 @@ function loudness({ spec, data, w, h }) {
 }
 
 // ---------- grading bottom: wheels + parade ----------
+// GUI-FIX-2: a wheel's conic ring (72 arcs, a colour interpolated per arc) depends only on its geometry and palette; built
+// once per geometry and reused, it no longer costs the hop onto the grading screen ~15 ms of string building (item 7).
+const CONIC = new Map();
 function wheels({ spec, data, w, h }) {
   const o = spec.opts || {};
   const pw = o.paradeW ?? Math.round(w * .36);
@@ -1019,7 +1028,7 @@ function wheels({ spec, data, w, h }) {
   const RINGE = [[0, '#dca98c'], [45, '#f99271'], [90, '#f3743d'], [135, '#f2ac7b'], [180, '#d8ca99'], [225, '#c1d397'], [270, '#bad09f'], [315, '#c7be9f'], [360, '#dca98c']];
   const hex = c => [1, 3, 5].map(k => parseInt(c.slice(k, k + 2), 16));
   const at = (st, a) => { let k = 0; while (k < st.length - 2 && st[k + 1][0] <= a) k++; const [a0, c0] = st[k], [a1, c1] = st[k + 1], t = (a - a0) / (a1 - a0), A = hex(c0), B = hex(c1); return `rgb(${A.map((v, j) => Math.round(v + (B[j] - v) * t)).join(',')})`; };
-  const conic = (cx, cy, st) => { let s = ''; const N = 72; for (let k = 0; k < N; k++) { const a0 = k * 360 / N, a1 = (k + 1.15) * 360 / N, P = a => [px(cx + Math.cos(a * Math.PI / 180) * r), px(cy - Math.sin(a * Math.PI / 180) * r)]; const [x0, y0] = P(a0), [x1, y1] = P(a1); s += `<path d="M${x0} ${y0}A${r} ${r} 0 0 0 ${x1} ${y1}" stroke="${at(st, (k + .5) * 360 / N)}"/>`; } return `<g fill="none" stroke-width="${sw}">${s}</g>`; };
+  const conic = (cx, cy, st) => { const key = `${cx},${cy},${r},${sw},${st === RINGE ? 1 : 0}`, hit = CONIC.get(key); if (hit) return hit; let s = ''; const N = 72; for (let k = 0; k < N; k++) { const a0 = k * 360 / N, a1 = (k + 1.15) * 360 / N, P = a => [px(cx + Math.cos(a * Math.PI / 180) * r), px(cy - Math.sin(a * Math.PI / 180) * r)]; const [x0, y0] = P(a0), [x1, y1] = P(a1); s += `<path d="M${x0} ${y0}A${r} ${r} 0 0 0 ${x1} ${y1}" stroke="${at(st, (k + .5) * 360 / N)}"/>`; } s = `<g fill="none" stroke-width="${sw}">${s}</g>`; if (CONIC.size > 64) CONIC.clear(); CONIC.set(key, s); return s; };
   let s = `<defs><radialGradient id="whc" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#1b1a19"/><stop offset="1" stop-color="#121211"/></radialGradient>
    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7a5ad8"/><stop offset=".35" stop-color="#3fa3a0"/><stop offset=".7" stop-color="#9fbf6a"/><stop offset="1" stop-color="#e8c79a"/></linearGradient>
    <linearGradient id="ringE" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#e8c79a"/><stop offset="1" stop-color="#ff5a23"/></linearGradient></defs>`;

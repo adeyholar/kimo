@@ -115,6 +115,7 @@ const RULES = [
   [/^(load_project|save_project|checkpoint_delete|restore|template_define|template_delete)$/, 'batch'],   // m02 History / Diff / Media
   [/^(add_marker|remove_marker|add_multicam|switch_angle|sync_clips|set_time_mode|match_events|detect_cuts|remove_silence_cuts)$/, 'edit'], [/^burn_in$/, 'captions'],   /* cov_a.js */
   [/^export|^set_export|render_queue|^(join_export|preview_range|collect_project|contact_sheet|cancel_job|resume_job)$/, 'export'],
+  [/^render_scene3d_sequence$/, 'export'],   // GUI-FIX-2: a frame sequence written to disk is a render job: its row is on the Renders list
   [/caption|transcri|title|text_/, 'captions'],
   [/batch|history|checkpoint|recipe|template_apply|project_diff|relink|undo|redo|collect_project/, 'batch'],
   [/keyframe_bezier|set_motion_path|bind_beats|set_expression|add_null|set_parent/, 'graph'],
