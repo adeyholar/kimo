@@ -686,9 +686,8 @@ function vectorscope(cx, cy, r, seed) {
   }
   return s;
 }
-function scopes(a) {   // GUI-FIX-1: a colour read's numbers (get_scopes, analyze_color, a WB pick / shot match) as one stats line
-  const S = a.data && a.data.stats;
-  return scopesBody(a) + (S && S.text ? `<div class="scopestats${F(S)}">${E(S.text)}</div>` : '');
+function scopes(a) {   // GUI-FIX-1: a colour read's stats line is drawn by app.js statsLine() as its own element, not in this markup
+  return scopesBody(a);
 }
 function scopesBody({ spec, data, w, h }) {
   const o = spec.opts || {};

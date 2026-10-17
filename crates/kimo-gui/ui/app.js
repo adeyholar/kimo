@@ -4,7 +4,7 @@
 import { connect } from './bridge.js';
 import { MODES, inferMode } from './modes.js';
 import { KINDS, PRE, POST, tickRunning, pickedRows, TL_PARTS } from './panels.js';
-import { route, freezeNow } from './router.js';
+import { route, freezeNow, flashing } from './router.js';
 
 const DESIGN_W = 1376, DESIGN_H = 768;
 const RAWISH = /^(c|clip|t|track|fx|effect|node|n|layer|l|asset|media|an|marker|mask|m|cam|light|obj)[_-]?\d+$/i;   /* GUI-FIX-2: an engine id inside a reason */
@@ -558,7 +558,9 @@ function render() {
     if (name === pickPanel && pickCall) data = { sub: `${pickCall.name}${pickCall.status === 'running' ? '' : ''}`, blocks: pickedRows(pickCall) };   // a clicked rail row, in the existing inspector
     const args = { spec, data, view: V, state, w, h, mode: state.mode, pan: pans[state.mode + ':' + name] };
     if (PRE[spec.kind]) PRE[spec.kind](el, args);   /* measures on the clean layout, before this panel is written */
-    if (!paint(el, fn(args))) continue;
+    const wrote = paint(el, fn(args));
+    if (spec.kind === 'scopes') statsLine(el, data.stats);
+    if (!wrote) continue;
     if (name === pickPanel && pickCall) fitPicked(el);
     if (POST[spec.kind]) POST[spec.kind](el, args);
   }
@@ -599,8 +601,23 @@ function renderPanel(name) {
   const spec = (MODES[state.mode] || {}).panels[name], el = nodes[name]; if (!spec || !el) return;
   const [w, h] = box(el), V = view(state.mode), args = { spec, data: V[name] || {}, view: V, state, w, h, mode: state.mode, pan: pans[state.mode + ':' + name] };
   if (PRE[spec.kind]) PRE[spec.kind](el, args);
-  if (!paint(el, KINDS[spec.kind](args))) return;
-  if (POST[spec.kind]) POST[spec.kind](el, args);
+  const wrote = paint(el, KINDS[spec.kind](args));
+  if (spec.kind === 'scopes') statsLine(el, args.data.stats);
+  if (wrote && POST[spec.kind]) POST[spec.kind](el, args);
+}
+/* COLOR-PERF: the Color scopes' stats line (a colour read's answer) is its own small element, kept out of the scopes
+   panel's markup. Inside the markup, each read rewrote the whole scopes panel twice (on apply, and again when its flash
+   class dropped): ~8 ms more p95 per frame on the colour screen. Same element, class, text and place (last child). */
+function statsLine(el, S) {
+  let d = el._st && el._st.parentNode === el ? el._st : null;
+  if (!S || !S.text) { if (d) d.remove(); el._st = null; return; }
+  const fl = flashing(S._flash);
+  if (!d || (fl && d._f !== S._flash)) {   /* a new read: a fresh element, so its one-shot flash plays */
+    const n = document.createElement('div'); n.className = fl ? 'scopestats flash' : 'scopestats';
+    if (d) d.replaceWith(n); else el.appendChild(n);
+    d = el._st = n; d._f = S._flash;
+  } else if (!fl && d.classList.contains('flash')) d.classList.remove('flash');
+  if (d.textContent !== S.text) d.textContent = S.text;
 }
 // click a rail row: its args / latency / result in the existing inspector; click it again or Esc to go back
 main.addEventListener('click', e => { const r = e.target.closest && e.target.closest('.call[data-call]'); if (!r) return; const id = r.dataset.call, c = state.calls.find(x => String(x.id) === id); state.pick = c && state.pick !== c.id ? c.id : null; schedule(); });
