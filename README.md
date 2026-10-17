@@ -92,7 +92,7 @@ How the numbers fit: `kimo_info` and the golden registry (`crates/kimo-core/test
 376 registered tools sit in 14 groups (full list [below](#tool-listing-376-tools)):
 
 | Area | Groups | Examples |
-|---|---|---|
+|---|---|
 | Editing | `project`, `timeline` | tracks, clips, trims, ripple and roll edits, speed ramps, multicam, markers, atomic `batch` with undo |
 | Motion | `animate`, `effects` | keyframes and Bezier easing, expressions, camera and shake, corner pin, transitions, adjustment layers |
 | Compositing | `masks`, `graphics` | mask layers and roto, shapes, HUD frames, counters, boxes |
@@ -114,7 +114,7 @@ How the numbers fit: `kimo_info` and the golden registry (`crates/kimo-core/test
 `KIMO_TOOLS` picks what `tools/list` returns. Every tool can be called by its own name under every profile.
 
 | Profile | `tools/list` entries | Size | Use when |
-|---|---|---|---|
+|---|---|---|
 | `grouped` (default) | 17 | 4,432 bytes | small context windows. Call a group with `action` and `args`; find tools with `search_tools`. |
 | `core` | 29 | 20,368 bytes | the most used tools with full schemas, plus `search_tools`, `kimo_describe`, `kimo_enable_group`. |
 | `flat` | 378 | 286,762 bytes | clients with large context or their own tool search. Every tool listed with its schema. |
@@ -128,21 +128,21 @@ Set it like this: `claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -
 
 Installers are built by the [release workflow](.github/workflows/release.yml) on GitHub-hosted runners and attached to a **draft** release with a `SHA256SUMS` file. Nothing is published until a maintainer reviews the draft. The builds are **unsigned**. This release ships **Linux and Windows**. macOS is coming later.
 
-Files in the `v5.0.0` release (tag run `39028274202` at `5ad355c`); the hashes are the release's `SHA256SUMS`.
+Files in the `v5.0.0` release. Check every download against that release's [`SHA256SUMS`](https://github.com/naman-sharma12345/kimo/releases/tag/v5.0.0) (a `.sha256` file also sits beside each engine package).
 
-| OS | File | SHA-256 | Status |
-|---|---|---|---|
-| Linux x86_64 | `Kimo-Spectator_5.0.0_amd64.deb` | `4eb906d88a31444ec22a961214a58b1e9fdd4c7c54ae63350aa88ae1976f5e2b` | **unsigned draft**, built on CI runners; the same build steps were smoke-tested on Debian 12 at `ca0334f` (install, launch, one rendered frame, uninstall) |
-| Linux x86_64 | `Kimo-Spectator_5.0.0_amd64.AppImage` | `746cbbcf4c218ed7264ac3d05c513489f88caca720f476de0ef0892da2a04baa` | **unsigned draft**, built on CI runners; run with `--appimage-extract-and-run` was smoke-tested on Debian 12 at `ca0334f`; a normal FUSE launch is not tested |
-| Windows x64 | `Kimo-Spectator_5.0.0_x64_en-US.msi` | `cd2fd1fa2fff7334687b850c37bf0e11748c75aad80f2ee7ac0123eda0b54f7b` | **unsigned draft, built on CI runners**; CI installs it, launches it, checks the listener (7421, and 7422 with 7421 taken) and uninstalls it on a GitHub Windows runner; not installed on a real Windows PC yet |
+| OS | File | Status |
+|---|---|---|
+| Linux x86_64 | `Kimo-Spectator_5.0.0_amd64.deb` | **unsigned draft**, built on CI runners; the same build steps were smoke-tested on Debian 12 at `ca0334f` (install, launch, one rendered frame, uninstall) |
+| Linux x86_64 | `Kimo-Spectator_5.0.0_amd64.AppImage` | **unsigned draft**, built on CI runners; run with `--appimage-extract-and-run` was smoke-tested on Debian 12 at `ca0334f`; a normal FUSE launch is not tested |
+| Windows x64 | `Kimo-Spectator_5.0.0_x64_en-US.msi` | **unsigned draft, built on CI runners**; CI installs it, launches it, checks the listener (7421, and 7422 with 7421 taken) and uninstalls it on a GitHub Windows runner; not installed on a real Windows PC yet |
 
 Engine (command line) downloads, same release:
 
-| OS | File | SHA-256 |
-|---|---|---|
-| Linux x86_64 (glibc 2.35+) | `kimo-v5.0.0-linux-x86_64-glibc.tar.gz` | `1ddb80fcfafd5346143ba08c74b17f3b970ab9ff524d2a79cb2a1ced53afcbaf` |
-| Windows x64 | `kimo-5.0.0-windows-x86_64.zip` | `73bbbc34925979e52261a4bd5959080cdf287230518eddef711e8a1ec36926eb` |
-| Windows x64 (installer) | `kimo-5.0.0-windows-x86_64-setup.exe` | `c22a653d74216f070964afcb563dbb91603d005ea96f2c780e9a58f99c2ed97e` |
+| OS | File |
+|---|---|
+| Linux x86_64 (glibc 2.35+) | `kimo-v5.0.0-linux-x86_64-glibc.tar.gz` |
+| Windows x64 | `kimo-5.0.0-windows-x86_64.zip` |
+| Windows x64 (installer) | `kimo-5.0.0-windows-x86_64-setup.exe` |
 
 The Windows engine packages are built and packaged by CI on a GitHub Windows runner; they have not been run on a real Windows PC yet.
 
@@ -482,9 +482,9 @@ This is the list the v3 build registers (read from `tools/list` of the grouped s
 
 - Registry: 376 tools (`crates/kimo-core/tests/golden/golden_registry.txt`, 376 lines). A default-feature `kimo-mcp` at `af615ca` lists 378 entries in `flat` mode: those 376 plus `search_tools` and `kimo_describe`. Of the 378, 362/378 live in the default build + 16 feature-gated (8 native-ocio, 8 mesh-import/material-textures/flat-sah).
 - Fuzz: 6497 calls, 0 failures, as recorded in the v3 notes at 327 tools. Not re-run for this README.
-- Linux spectator installers (`.deb`, `.AppImage`): built on CI runners (dry run at `ca0334f`, then version `0.1.0`; the `5.0.0` files come from the same steps in tag run `39028274202`), downloaded and smoke-tested on Debian 12 x86_64 on 2026-10-17: sha256 matches, the `.deb` installs (`Depends: libwebkit2gtk-4.1-0, libgtk-3-0`) and uninstalls cleanly, and both the `.deb` and the AppImage (`--appimage-extract-and-run`) launch under Xvfb, listen on 127.0.0.1:7421 and draw the `frame_rendered` frames a real `kimo-mcp` (commit `af615ca`) sends after `project_set`, `add_track`, `add_text`. Unsigned draft; other distributions not tested.
-- Windows spectator installer (`Kimo-Spectator_5.0.0_x64_en-US.msi`): **unsigned draft, built on CI runners.** CI installs, launches and uninstalls it on a GitHub Windows runner (tag run `39028274202`); not installed on a real Windows PC yet.
-- Engine release jobs: the Linux engine tarball is glibc only for this release (the static musl build was dropped). The Windows x64 engine job failed in the first dry run in `crates/kimo-core/build.rs` (MSBuild rejects `cmake --build ... -- -j1`). This release switches to `cmake --build ... --parallel 1` and links the C++ runtime per target (`libstdc++` on Linux, `libc++` on macOS, nothing on MSVC); the Windows engine job then passed on CI (tag run `39028274202`) and its zip and setup.exe are attached. Not run on a real Windows PC yet; macOS not built.
+- Linux spectator installers (`.deb`, `.AppImage`): built on CI runners (dry run at `ca0334f`, then version `0.1.0`; the `5.0.0` files come from the same steps in the `v5.0.0` tag build), downloaded and smoke-tested on Debian 12 x86_64 on 2026-10-17: sha256 matches, the `.deb` installs (`Depends: libwebkit2gtk-4.1-0, libgtk-3-0`) and uninstalls cleanly, and both the `.deb` and the AppImage (`--appimage-extract-and-run`) launch under Xvfb, listen on 127.0.0.1:7421 and draw the `frame_rendered` frames a real `kimo-mcp` (commit `af615ca`) sends after `project_set`, `add_track`, `add_text`. Unsigned draft; other distributions not tested.
+- Windows spectator installer (`Kimo-Spectator_5.0.0_x64_en-US.msi`): **unsigned draft, built on CI runners.** CI installs, launches and uninstalls it on a GitHub Windows runner (the `v5.0.0` tag build); not installed on a real Windows PC yet.
+- Engine release jobs: the Linux engine tarball is glibc only for this release (the static musl build was dropped). The Windows x64 engine job failed in the first dry run in `crates/kimo-core/build.rs` (MSBuild rejects `cmake --build ... -- -j1`). This release switches to `cmake --build ... --parallel 1` and links the C++ runtime per target (`libstdc++` on Linux, `libc++` on macOS, nothing on MSVC); the Windows engine job then passed on CI (the `v5.0.0` tag build) and its zip and setup.exe are attached. Not run on a real Windows PC yet; macOS not built.
 - Windows engine build from clone: not run here.
 - Third-party licences for the spectator app: [THIRD_PARTY.md](THIRD_PARTY.md) (five MPL-2.0 crates from the Tauri stack and the LGPL libraries bundled in the AppImage, both decision pending).
 - Per-feature limits and change notes: [docs/DEV_NOTES.md](docs/DEV_NOTES.md). Feature tiers: [FEATURES.md](FEATURES.md). Plans: [ROADMAP.md](ROADMAP.md).
