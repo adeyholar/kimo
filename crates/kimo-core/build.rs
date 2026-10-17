@@ -66,7 +66,8 @@ fn build_manifold() {
     // Single-config generators (Makefiles/Ninja) put the lib in out/src; Visual Studio's multi-config
     // generator puts it in out/src/<Config>, so search both and build Release explicitly (VS defaults to Debug,
     // whose /MDd CRT would not link against the /MD shim and Rust std).
-    for dir in [out.join("src"), out.join("src").join("Release")] { if dir.exists() { println!("cargo:rustc-link-search=native={}", dir.display()); } }
+    // MSVC: manifold's exportlib() sets ARCHIVE_OUTPUT_DIRECTORY to <build>/lib, so the lib lands in out/lib/Release.
+    for dir in [out.join("src"), out.join("src").join("Release"), out.join("lib"), out.join("lib").join("Release")] { if dir.exists() { println!("cargo:rustc-link-search=native={}", dir.display()); } }
     println!("cargo:rustc-link-lib=static=manifold");
     link_cpp_runtime();
 }
