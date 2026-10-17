@@ -51,14 +51,19 @@ fn build_manifold() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("manifold-build");
     let cfg = std::process::Command::new("cmake")
         .args(["-S"]).arg(&src).args(["-B"]).arg(&out)
-        .args(["-DCMAKE_BUILD_TYPE=Release","-DBUILD_SHARED_LIBS=OFF","-DMANIFOLD_CROSS_SECTION=OFF","-DMANIFOLD_PAR=OFF","-DMANIFOLD_PYBIND=OFF","-DMANIFOLD_JSBIND=OFF","-DMANIFOLD_CBIND=OFF","-DMANIFOLD_TEST=OFF","-DMANIFOLD_DOWNLOADS=OFF","-DCMAKE_POSITION_INDEPENDENT_CODE=ON"])
+        .args(["-DCMAKE_BUILD_TYPE=Release","-DBUILD_SHARED_LIBS=OFF","-DMANIFOLD_CROSS_SECTION=OFF","-DMANIFOLD_PAR=OFF","-DMANIFOLD_PYBIND=OFF","-DMANIFOLD_JSBIND=OFF","-DMANIFOLD_CBIND=OFF","-DMANIFOLD_TEST=OFF","-DMANIFOLD_DOWNLOADS=OFF","-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+            // MSVC: pin the dynamic release CRT (/MD) to match the cc-built shim and Rust std; ignored by non-MSVC toolchains.
+            "-DCMAKE_POLICY_DEFAULT_CMP0091=NEW","-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL"])
         .status().expect("cmake not found (required for vendored manifold)");
     assert!(cfg.success(), "manifold cmake configure failed");
-    let build = std::process::Command::new("cmake").args(["--build"]).arg(&out).args(["--parallel","1"]).status().expect("manifold build failed to start");
+    let build = std::process::Command::new("cmake").args(["--build"]).arg(&out).args(["--config","Release","--parallel","1"]).status().expect("manifold build failed to start");
     assert!(build.success(), "manifold build failed");
     cc::Build::new().cpp(true).std("c++17").cpp_link_stdlib(None).include(src.join("include")).include(out.join("include"))
         .file("src/threed/manifold_shim.cpp").compile("kimo_manifold_shim");
-    println!("cargo:rustc-link-search=native={}", out.join("src").display());
+    // Single-config generators (Makefiles/Ninja) put the lib in out/src; Visual Studio's multi-config
+    // generator puts it in out/src/<Config>, so search both and build Release explicitly (VS defaults to Debug,
+    // whose /MDd CRT would not link against the /MD shim and Rust std).
+    for dir in [out.join("src"), out.join("src").join("Release")] { if dir.exists() { println!("cargo:rustc-link-search=native={}", dir.display()); } }
     println!("cargo:rustc-link-lib=static=manifold");
     link_cpp_runtime();
 }
