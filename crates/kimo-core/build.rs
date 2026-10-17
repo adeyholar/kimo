@@ -41,7 +41,7 @@ fn embed_git_commit() {
 }
 
 /// Builds vendored Manifold 3.5.3 (Apache-2.0, vendor/manifold-3.5.3) as a static lib with
-/// cross-sections/TBB/bindings/tests OFF, serial (-j1, 2GB box), then compiles the C ABI shim
+/// cross-sections/TBB/bindings/tests OFF, serial (`--parallel 1`, generator-neutral so MSBuild accepts it; small box), then compiles the C ABI shim
 /// (src/threed/manifold_shim.cpp) with the existing `cc` build-dep. No new dependencies.
 fn build_manifold() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -54,7 +54,7 @@ fn build_manifold() {
         .args(["-DCMAKE_BUILD_TYPE=Release","-DBUILD_SHARED_LIBS=OFF","-DMANIFOLD_CROSS_SECTION=OFF","-DMANIFOLD_PAR=OFF","-DMANIFOLD_PYBIND=OFF","-DMANIFOLD_JSBIND=OFF","-DMANIFOLD_CBIND=OFF","-DMANIFOLD_TEST=OFF","-DMANIFOLD_DOWNLOADS=OFF","-DCMAKE_POSITION_INDEPENDENT_CODE=ON"])
         .status().expect("cmake not found (required for vendored manifold)");
     assert!(cfg.success(), "manifold cmake configure failed");
-    let build = std::process::Command::new("cmake").args(["--build"]).arg(&out).args(["--","-j1"]).status().expect("manifold build failed to start");
+    let build = std::process::Command::new("cmake").args(["--build"]).arg(&out).args(["--parallel","1"]).status().expect("manifold build failed to start");
     assert!(build.success(), "manifold build failed");
     cc::Build::new().cpp(true).std("c++17").include(src.join("include")).include(out.join("include"))
         .file("src/threed/manifold_shim.cpp").compile("kimo_manifold_shim");
