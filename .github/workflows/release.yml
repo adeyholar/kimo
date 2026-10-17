@@ -151,11 +151,7 @@ jobs:
             label: windows-x86_64
             rust_targets: ""
             args: "--bundles msi"
-          # One universal .dmg (Apple silicon + Intel) from the arm64 runner.
-          - os: macos-latest
-            label: macos-universal
-            rust_targets: "aarch64-apple-darwin x86_64-apple-darwin"
-            args: "--target universal-apple-darwin --bundles app,dmg"
+          # macOS: no build for this release (owner decision 2026-10-17); coming later.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -229,7 +225,7 @@ jobs:
         run: |
           mkdir -p dist
           find crates/kimo-gui/target -path '*/release/bundle/*' -type f \
-            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' -o -name '*-setup.exe' -o -name '*.dmg' \) \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' -o -name '*-setup.exe' \) \
             -print0 | while IFS= read -r -d '' f; do
               b="$(basename "$f")"; cp "$f" "dist/${b// /-}"
             done
@@ -237,23 +233,29 @@ jobs:
           case "$RUNNER_OS" in
             Linux)   ls dist/*.deb >/dev/null && ls dist/*.AppImage >/dev/null ;;
             Windows) ls dist/*.msi >/dev/null 2>&1 || ls dist/*-setup.exe >/dev/null ;;
-            macOS)   ls dist/*.dmg >/dev/null ;;
           esac
 
-      - name: Linux smoke test (dpkg metadata, install, headless launch, uninstall)
+      - name: Linux smoke test (dpkg metadata, install, headless launch + loopback listener, uninstall)
         if: runner.os == 'Linux'
         run: |
           deb=$(find dist -maxdepth 1 -name '*.deb' | head -1)
           dpkg-deb --info "$deb"
           sudo apt-get install -y --no-install-recommends xvfb "./$deb"
-          bin=$(dpkg -L kimo-spectator | grep -m1 '^/usr/bin/')
-          set +e
-          timeout 5 xvfb-run -a "$bin"; rc=$?
-          set -e
-          echo "exit after 5 s: $rc (124 = still running when stopped = started fine)"
-          test "$rc" -eq 124
-          sudo dpkg -r kimo-spectator
-          ! dpkg -s kimo-spectator 2>/dev/null | grep -q '^Status: install ok installed'
+          pkg=$(dpkg-deb --field "$deb" Package)
+          bin=$(dpkg -L "$pkg" | grep -m1 '^/usr/bin/')
+          xvfb-run -a "$bin" > gui.log 2>&1 &
+          ok=0
+          for _ in $(seq 1 20); do
+            sleep 0.5
+            if python3 -c 'import socket; socket.create_connection(("127.0.0.1", 7421), 1).close()'; then ok=1; break; fi
+          done
+          pkill -f "$bin" || true
+          cat gui.log
+          echo "spectator listening on 127.0.0.1:7421: $ok"
+          test "$ok" = 1
+          sudo dpkg -r "$pkg"
+          test -z "$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep ' installed$' || true)"
+          test ! -e "$bin"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -311,7 +313,8 @@ jobs:
           tag="$GITHUB_REF_NAME"
           ls -l artifacts
           cat > notes.md <<'NOTES'
-          Unsigned builds. macOS: right-click the app > Open (or `xattr -d com.apple.quarantine "/Applications/Kimo Spectator.app"`).
+          DRAFT. Unsigned builds for Linux and Windows. macOS is coming later.
+          Windows installer: unsigned draft, built on a GitHub-hosted runner, not tested on a real PC.
           Windows: SmartScreen > More info > Run anyway. Verify downloads against SHA256SUMS.
           NOTES
           if draft=$(gh release view "$tag" --json isDraft -q .isDraft 2>/dev/null); then

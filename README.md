@@ -1,31 +1,95 @@
 <p align="center">
-  <img src="docs/assets/kimo-logo.png" alt="kimo" width="160">
+  <a href="https://getkimo.tech"><img src="docs/assets/kimo-logo.png" alt="kimo" width="140"></a>
 </p>
 
 <h1 align="center">kimo</h1>
 
-<p align="center"><b>A video editor an AI can drive.</b><br>
-MCP-first. Every feature is a tool call. Written in Rust, CPU renderer, runs on a 2 GB box.<br>
-<a href="https://getkimo.tech"><b>getkimo.tech</b></a></p>
+<p align="center">
+  <b>A video editor an AI can drive.</b><br>
+  Headless Rust engine. Every edit is an MCP tool call. A live spectator app shows you what the agent is doing.<br>
+  <a href="https://getkimo.tech"><b>getkimo.tech</b></a>
+</p>
 
 <p align="center">
-  <img alt="license" src="https://img.shields.io/badge/license-MIT-F4F0E8?labelColor=0E0E12">
-  <img alt="language" src="https://img.shields.io/badge/rust-core-FF5C28?labelColor=0E0E12">
-  <img alt="tools" src="https://img.shields.io/badge/MCP%20tools-376-F4F0E8?labelColor=0E0E12">
-  <img alt="fuzz" src="https://img.shields.io/badge/tool%20fuzz-6497%20calls%2C%200%20failures-FF5C28?labelColor=0E0E12">
+  <a href="https://github.com/naman-sharma12345/kimo/actions/workflows/kimo-validation.yml"><img alt="CI" src="https://github.com/naman-sharma12345/kimo/actions/workflows/kimo-validation.yml/badge.svg"></a>
+  <a href="https://github.com/naman-sharma12345/kimo/actions/workflows/release.yml"><img alt="release build" src="https://github.com/naman-sharma12345/kimo/actions/workflows/release.yml/badge.svg"></a>
+  <a href="https://github.com/naman-sharma12345/kimo/releases"><img alt="release" src="https://img.shields.io/github/v/release/naman-sharma12345/kimo?include_prereleases&label=release&labelColor=0E0E12&color=FF5C28"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/github/license/naman-sharma12345/kimo?labelColor=0E0E12&color=F4F0E8"></a>
+  <img alt="MCP tools" src="https://img.shields.io/badge/MCP%20tools-362%2F378%20live%20%2B%2016%20gated-F4F0E8?labelColor=0E0E12">
+</p>
+
+<p align="center">
+  <a href="#demo">Demo</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#the-mcp-tool-ecosystem">Tools</a> ·
+  <a href="#install-prebuilt-installers">Install</a> ·
+  <a href="#build-from-clone">Build</a> ·
+  <a href="#setup-add-kimo-to-your-ai-client">Connect your AI</a> ·
+  <a href="#watching-it-work-spectator-telemetry">Spectator</a>
 </p>
 
 ---
 
+## Demo
+
+<p align="center"><img src="docs/media/kimo_v5_live_demo.gif" alt="An agent's real MCP tool calls driving the kimo spectator" width="720"></p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/v5demo_1_edit_effects.jpg" alt="Edit and effects calls"><br><sub><b>Edit + effects.</b> <code>add_effect</code> lands on the clip; the viewer re-renders on its own.</sub></td>
+    <td width="50%"><img src="docs/media/v5demo_2_render_refused.jpg" alt="Render refused chip"><br><sub><b>A refused render.</b> A broken grade graph gets a "render refused" chip with the engine's reason.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/v5demo_3_coalesced_burst.jpg" alt="Coalesced burst"><br><sub><b>A burst of calls.</b> Eight fast moves, coalesced into two preview frames, every call still logged.</sub></td>
+    <td><img src="docs/media/v5demo_4_audio_mix.jpg" alt="Audio mix"><br><sub><b>Audio.</b> Pan, effects and <code>normalize_loudness</code> to -14 LUFS.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/v5demo_5_scene3d_cpu_lighting.jpg" alt="3D scene with CPU lighting"><br><sub><b>3D on the CPU.</b> <code>render_scene3d_cpu</code> with <code>cpu_lighting</code>: lit, shadowed geometry.</sub></td>
+  </tr>
+</table>
+
+Real `kimo-mcp` tool calls (30 calls, 18 tools) streamed to the spectator over loopback TCP and recorded at 1920x1080. Nothing in these frames was staged in the UI.
+
 ## What it is
 
-kimo is a video editor with no GUI. You talk to it over the [Model Context Protocol](https://modelcontextprotocol.io). Cut, keyframe, grade, track, key, relight, simulate, caption, mix and export are all registered commands, and the MCP server's tool list is generated from that same registry. There is no feature a human can reach that an AI cannot.
+kimo is a video editor with no editing GUI. You talk to it over the [Model Context Protocol](https://modelcontextprotocol.io). Cut, keyframe, grade, track, key, relight, simulate, caption, mix and export are all registered commands, and the MCP server's tool list is generated from that same registry. There is no feature a human can reach that an AI cannot.
 
 The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve in one engine: editing, motion graphics, VFX, tracking and pro color. It is an early engine with honest tiers. [FEATURES.md](FEATURES.md) lists what is solid, what is beta and what is not built.
 
-## Capabilities
+## Architecture
 
-376 registered tools in 14 groups (full list [below](#tool-listing-376-tools)):
+```mermaid
+flowchart LR
+    agent["AI agent<br/>(Claude Code, Codex, Cursor, OpenCode, any MCP client)"]
+    subgraph engine["kimo-mcp: the headless engine"]
+        direction TB
+        reg["command registry<br/>tools/list is generated from it"]
+        core["kimo-core<br/>project model, CPU renderer,<br/>color, audio, text, tracking, 3D"]
+        prev["preview thread<br/>one auto frame after mutating calls"]
+        reg --> core --> prev
+    end
+    ff[("ffmpeg / ffprobe")]
+    gui["Kimo Spectator (kimo-gui)<br/>read-only, never calls render_frame"]
+    agent -- "JSON-RPC over stdio<br/>tools/call is the only way to edit" --> reg
+    core <-- "decode / encode / probe" --> ff
+    engine -. "telemetry JSONL on 127.0.0.1:7421<br/>call events, frame_rendered, frame_skipped" .-> gui
+```
+
+- **Headless engine.** `crates/kimo-core` holds the project model, keyframes, the command registry, tool groups, the CPU renderer, effects, text, audio, tracking and color. `crates/kimo-mcp` is the MCP stdio server; `kimo` (`crates/kimo-cli`) is a command line client for the same tools. Decode, encode and probing go through `ffmpeg` and `ffprobe`. The renderer is CPU only; GPU code is off by default.
+- **Edits only through MCP tool calls.** Add a tool to the registry and it appears in the MCP server, the CLI, the fuzz test and the schema. There is no side door.
+- **The GUI is a pure telemetry spectator.** `crates/kimo-gui` (a Tauri app, its own Cargo workspace) registers zero IPC commands and only listens on loopback. It shows each call, the timeline and the preview frames the engine pushes. It never calls `render_frame` and has no code path back to the engine. Close it and the engine carries on; open it mid-session and it catches up.
+
+More: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/EXTENDING.md](docs/EXTENDING.md), [crates/kimo-gui/README.md](crates/kimo-gui/README.md).
+
+## The MCP tool ecosystem
+
+**362/378 live in the default build + 16 feature-gated (8 native-ocio, 8 mesh-import/material-textures/flat-sah).**
+
+A default `tools/list` shows 17 grouped entries; set `KIMO_TOOLS=flat` to list all 378 (see [Tool list profiles](#tool-list-profiles)).
+
+How the numbers fit: `kimo_info` and the golden registry (`crates/kimo-core/tests/golden/golden_registry.txt`) count 376 tools in 14 groups. A flat `tools/list` (`KIMO_TOOLS=flat`) lists 378: those 376 plus the two meta tools `search_tools` and `kimo_describe`. Of the 378, 362 are live in the default build and 16 are feature-gated (8 native-ocio, 8 mesh-import/material-textures/flat-sah); the gated ones stay in the list and answer with a clear refusal until their feature is built in.
+
+376 registered tools sit in 14 groups (full list [below](#tool-listing-376-tools)):
 
 | Area | Groups | Examples |
 |---|---|---|
@@ -39,56 +103,141 @@ The target is the surface of CapCut, After Effects, Premiere and DaVinci Resolve
 | Audio | `audio` | clips, effects, beats, loudness, ducking, speech intervals |
 | Output | `output` | frame and video export, chunked export jobs, GIF, EXR, manifests, frame lint, contact sheets |
 
-## Architecture
-
-- `crates/kimo-core` holds the project model, keyframes, the command registry, tool groups, the CPU renderer, effects, text, audio, tracking and color.
-- `crates/kimo-mcp` is the MCP stdio server. Its tool list is generated from the registry.
-- `kimo` is a command line client for the same tools. The fuzz runner and the schema come from the same registry too.
-- Rendering and decoding: the renderer is CPU only. GPU code is off by default with a CPU fallback. Decode, encode and probing go through `ffmpeg` and `ffprobe`.
-
-Add a tool to the registry and it appears in the MCP server, the CLI, the fuzz test and the schema. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/EXTENDING.md](docs/EXTENDING.md).
-
-## Principles
+**Principles**
 
 - **MCP first.** Every tool is callable by name. The default `tools/list` is grouped so a client does not read every schema up front.
 - **CPU, small memory.** Tuned for a 2 GB machine. A cold release build of the whole workspace took 17 minutes on a shared 2 CPU / 2 GB machine (`CARGO_BUILD_JOBS=1`).
 - **Measured, not claimed.** Every "better than X" line in FEATURES.md has a stated baseline and a measured number, including the cases where we lost.
 - **Fuzzed.** The v3 notes record 6497 fuzz calls with 0 failures at 327 tools. These numbers come from the project notes. They were not re-run for this README.
 
-## Install
+### Tool list profiles
+`KIMO_TOOLS` picks what `tools/list` returns. Every tool can be called by its own name under every profile.
 
-**Status of prebuilt downloads.** The v3.0.0 Linux (`.deb` and portable `tar.gz`) and Windows x64 assets are listed on the [Releases page](https://github.com/naman-sharma12345/kimo/releases) once they exist there. Windows x64 is built by a GitHub Actions runner and is not verified until the runner output exists. Until you see assets attached to a release, build from source. Older v1.0.0 downloads are a different, 255-tool build.
+| Profile | `tools/list` entries | Size | Use when |
+|---|---|---|---|
+| `grouped` (default) | 17 | 4,432 bytes | small context windows. Call a group with `action` and `args`; find tools with `search_tools`. |
+| `core` | 29 | 20,368 bytes | the most used tools with full schemas, plus `search_tools`, `kimo_describe`, `kimo_enable_group`. |
+| `flat` | 378 | 286,762 bytes | clients with large context or their own tool search. Every tool listed with its schema. |
+| group names, e.g. `audio,color_grade` | varies | varies | those groups listed flat, the rest grouped. |
 
-### Build from source (Linux x86_64 is the tested platform)
+Measured on a default-feature `kimo-mcp` built from commit `af615ca` (`initialize`, then `tools/list`; size is the compact JSON of the `result`). `kimo_enable_group` is listed in `grouped` and `core` but not in `flat`. `search_tools(query, limit=8, group?)` returns ranked tools, effects and transitions with the required args and a `call_as` hint.
 
-Everything in this section was run against a build of the v3 branch.
+Set it like this: `claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -- /home/you/.local/bin/kimo-mcp`, or `[mcp_servers.kimo.env] KIMO_TOOLS = "core"` for Codex. For JSON configs add `"env": { "KIMO_TOOLS": "core" }` (OpenCode: `"environment": { ... }`).
 
-**Prerequisites**
+## Install (prebuilt installers)
 
-- Rust stable (install with [rustup](https://rustup.rs)) and a C linker (`build-essential` on Debian/Ubuntu).
-- `ffmpeg` and `ffprobe` on PATH (`sudo apt install ffmpeg`; checked with ffmpeg 4.4.2). Decode, encode and probing go through them.
-- About 2 GB of RAM is enough to run. The release build is the heavy part: use `CARGO_BUILD_JOBS=1` on a small box (measured 17 minutes for a cold release build of the whole workspace on a shared 2 CPU / 2 GB machine).
-- Linux x86_64 is the tested platform. Other platforms: see Verification status below.
+Installers are built by the [release workflow](.github/workflows/release.yml) on GitHub-hosted runners and attached to a **draft** release with a `SHA256SUMS` file. Nothing is published until a maintainer reviews the draft. The builds are **unsigned**. This release ships **Linux and Windows**. macOS is coming later.
 
-**Build**
+Files from the first dry run (workflow_dispatch at `ca0334f`). They read version `0.1.0` because they were built before the version bump to `5.0.0`; the next build names them `Kimo-Spectator_5.0.0_…` (a `v*` tag build stamps the tag's version).
+
+| OS | File | SHA-256 | Status |
+|---|---|---|---|
+| Linux x86_64 | `Kimo-Spectator_0.1.0_amd64.deb` | `21db41829a3b7643cfa7e44a6fb6e3de01dcb74f8cf63b595efe3fc4711cda4a` | **unsigned draft**, built on CI runners; smoke-tested on Debian 12 (install, launch, one rendered frame, uninstall) |
+| Linux x86_64 | `Kimo-Spectator_0.1.0_amd64.AppImage` | `b4721564f2d4af5ae884ffaa657cd99e4d9c49e2a8b666e1f368e54258c904fa` | **unsigned draft**, built on CI runners; smoke-tested on Debian 12 (run with `--appimage-extract-and-run`, launch, one rendered frame); a normal FUSE launch is not tested |
+| Windows x64 | `Kimo-Spectator_0.1.0_x64_en-US.msi` | `09d57bb09e9c8459a722462824bed119507c5b63a7c7d5c32f28d03a8069b1dd` | **unsigned draft, built on CI runners, not tested on a real PC** |
+
+> **Windows is unproven.** The `.msi` was produced by a Windows runner and has not been installed or opened on a real PC yet. Treat it as an unsigned draft until someone has.
+
+Engine (command line) downloads: the `kimo-mcp` tarball is **glibc Linux only** for this release (`kimo-<tag>-linux-x86_64-glibc.tar.gz`, needs glibc 2.35 or newer). The Windows engine package is built by the release workflow. The `crates/kimo-core/build.rs` fix it needed is in this release, checked on Linux only so far; until a Windows `kimo-mcp` is attached to a release, build the engine from clone.
+
+**Check the download** against the release's `SHA256SUMS`:
+
+```
+sha256sum -c SHA256SUMS --ignore-missing                                   # Linux
+Get-FileHash .\Kimo-Spectator_0.1.0_x64_en-US.msi -Algorithm SHA256        # Windows PowerShell, compare by eye
+```
+
+**Linux (unsigned draft)**
+
+```
+sudo apt install ./Kimo-Spectator_0.1.0_amd64.deb      # pulls in WebKitGTK 4.1; remove with: sudo apt remove kimo-spectator
+# or, no install:
+chmod +x Kimo-Spectator_0.1.0_amd64.AppImage
+./Kimo-Spectator_0.1.0_amd64.AppImage                  # no FUSE? add --appimage-extract-and-run
+```
+
+**Windows (unsigned draft).** Run the `.msi`. SmartScreen says "Windows protected your PC": click **More info**, then **Run anyway**. The app uses Microsoft Edge WebView2, which Windows 11 already has; on older systems the installer fetches it.
+
+The spectator listens on `127.0.0.1:7421`. Point the engine at it with `KIMO_SPECTATOR=tcp://127.0.0.1:7421` (see [Watching it work](#watching-it-work-spectator-telemetry)).
+
+## Build from clone
+
+### 1. Prerequisites
+
+All platforms: the Rust toolchain from [rustup](https://rustup.rs), `cmake` and a C++ compiler (the engine builds vendored Manifold), and `ffmpeg` + `ffprobe` on `PATH` at runtime.
+
+<table>
+<tr><th>Linux (Debian / Ubuntu)</th><th>Windows</th></tr>
+<tr valign="top"><td>
+
+```
+curl --proto '=https' --tlsv1.2 -sSf \
+  https://sh.rustup.rs | sh
+sudo apt install build-essential cmake \
+  libssl-dev ffmpeg
+# spectator app only:
+sudo apt install libwebkit2gtk-4.1-dev \
+  libsoup-3.0-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev
+```
+
+</td><td>
+
+1. [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with **Desktop development with C++** (MSVC, Windows SDK, CMake).
+2. [rustup-init.exe](https://rustup.rs) (default `x86_64-pc-windows-msvc`).
+3. [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (already on Windows 11).
+4. ffmpeg, for example `winget install Gyan.FFmpeg`.
+
+</td></tr>
+</table>
+
+Linux x86_64 is the tested platform for the engine. The Windows list follows the Tauri and Rust prerequisites and is not proven by a build here. Known problem, being fixed separately: `crates/kimo-core/build.rs` passes `-- -j1` to `cmake --build`, which MSBuild rejects, so the engine build from clone on Windows is expected to fail until that fix lands (see [Verification status](#verification-status)).
+
+### 2. Build the engine
 
 ```
 git clone https://github.com/naman-sharma12345/kimo.git
 cd kimo
-CARGO_BUILD_JOBS=1 cargo build --release --workspace --bins
-ls target/release/kimo target/release/kimo-mcp
-target/release/kimo --version          # prints version the version in Cargo.toml and the git commit
+cargo build --release --workspace --bins           # on a 2 GB box: CARGO_BUILD_JOBS=1 (cold build ~17 min)
+target/release/kimo --version                       # the version in Cargo.toml and the git commit
 ```
 
 `kimo-mcp` is the MCP server (stdio). `kimo` is the command line client for the same tools.
 
-**Check the MCP server answers**
+### 3. Run it headless
+
+`kimo-mcp` takes no required arguments: it reads JSON-RPC on stdin and writes replies on stdout. Your MCP client normally starts it for you.
 
 ```
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | target/release/kimo-mcp
+target/release/kimo-mcp                                              # plain headless MCP server
+KIMO_SPECTATOR=tcp://127.0.0.1:7421 target/release/kimo-mcp          # same, streaming telemetry to the spectator
+target/release/kimo-mcp --spectator-demo                             # demo mode: one paced frame per call (needs KIMO_SPECTATOR)
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | target/release/kimo-mcp   # quick check
 ```
 
-The reply contains `"serverInfo":{"commit":"...","name":"kimo",...,"version":"the version in Cargo.toml"}`.
+The check prints `"serverInfo":{"commit":"...","name":"kimo",...,"version":"..."}`. `--demo-pace-ms <50..100>` sets the demo pace; `KIMO_TOOLS` picks the tool list profile.
+
+### 4. Build the spectator app (optional)
+
+The spectator is its own Cargo workspace in `crates/kimo-gui`. Build it with the Tauri CLI; `npx` fetches it, no global install needed:
+
+```
+cd crates/kimo-gui
+npx --yes @tauri-apps/cli@2.12.3 build --bundles deb,appimage     # Linux
+npx --yes @tauri-apps/cli@2.12.3 build --bundles msi              # Windows
+```
+
+The installers land in `crates/kimo-gui/target/release/bundle/`. With Rust only, `cargo install tauri-cli --version 2.12.3 --locked` then `cargo tauri build` is the same CLI.
+
+Then start the spectator first and the engine second:
+
+```
+./target/release/kimo-gui &                                          # from crates/kimo-gui; listens on 127.0.0.1:7421
+KIMO_SPECTATOR=tcp://127.0.0.1:7421 ../../target/release/kimo-mcp    # every tool call now shows up live
+```
+
+### 5. Connect a client
 
 **Client config.** Use the absolute path of the binary you just built, for example `/home/you/kimo/target/release/kimo-mcp`.
 
@@ -114,7 +263,9 @@ The server itself (launch, `initialize`, `tools/list`) is verified on this build
 
 Codex and OpenCode use the formats shown under "Setup" below with the same path. `KIMO_TOOLS=core` (env var on the server entry) shrinks `tools/list`; see "Tool list profiles" below.
 
-**Quickstart with the CLI.** State lives in a project file (`--project p.kimo`, created on first use). Every command below ran against this build; replace the media path with your own file.
+### 6. Quickstart with the CLI
+
+State lives in a project file (`--project p.kimo`, created on first use). Every command below ran against this build; replace the media path with your own file.
 
 ```
 K=target/release/kimo
@@ -132,12 +283,11 @@ $K tools describe add_clip                                             # argumen
 
 Ids (`track1`, `asset2`) are what the previous call returned, so read them from the output. `export` checks free memory first and refuses with a clear message when the frame would not fit; set `KIMO_MEM_MB` to override its budget. Exit codes: 0 ok, 1 tool error, 2 usage, 3 preflight failed. `kimo --help` lists every subcommand.
 
-
 ## Setup: add kimo to your AI client
 
 kimo is a local MCP server that speaks over stdin/stdout (the "stdio" transport). There is nothing to start by hand: your client launches `kimo-mcp` itself. You only need the path to the binary.
 
-**1. Get the binary** (build from source, see Install above) and put it somewhere stable, for example:
+**1. Get the binary** (build from clone, see [Build from clone](#build-from-clone) above) and put it somewhere stable, for example:
 
 ```
 mkdir -p ~/.local/bin && cp /path/to/kimo/target/release/kimo-mcp ~/.local/bin/
@@ -203,24 +353,9 @@ Put this in `opencode.json` in your project, or in `~/.config/opencode/opencode.
 ### Any other MCP client
 kimo is a standard MCP stdio server (protocol 2024-11-05, `initialize`, `tools/list`, `tools/call`). Any client that can register a stdio server by command works: give it the absolute path to `kimo-mcp` and no arguments. Many clients use the `mcpServers` JSON shape shown for Cursor; some (for example Zed) use a different key, so check your client's MCP docs for the exact file and format. Only the four clients above were checked against their docs.
 
-Windows: use the path to `kimo-mcp.exe` (the installer puts it in `%LOCALAPPDATA%\\Programs\\kimo\\bin`; in JSON write backslashes doubled, see the [Windows guide](packaging/windows/WINDOWS.md)). The configs above are the same except for the path; the Claude Code, Codex, Cursor and OpenCode formats were checked on their docs, not tested on Windows here. macOS: build from source (below) and use the path to `target/release/kimo-mcp`.
+Windows: use the path to `kimo-mcp.exe` (the Windows engine installer, once its release job is fixed, puts it in `%LOCALAPPDATA%\\Programs\\kimo\\bin`; in JSON write backslashes doubled, see the [Windows guide](packaging/windows/WINDOWS.md)). The configs above are the same except for the path; the Claude Code, Codex, Cursor and OpenCode formats were checked on their docs, not tested on Windows here.
 
 **3. Try it.** Ask your assistant: "Use kimo to import /path/to/clip.mp4, add a title, and render a frame." Or drive it yourself with the Python client in `examples/mcp_client.py`.
-
-
-### Tool list profiles
-`KIMO_TOOLS` picks what `tools/list` returns. Every tool can be called by its own name under every profile.
-
-| Profile | `tools/list` entries | Size | Use when |
-|---|---|---|---|
-| `grouped` (default) | 17 | 4,467 bytes | small context windows. Call a group with `action` and `args`; find tools with `search_tools`. |
-| `core` | 29 | 20,369 bytes | the most used tools with full schemas, plus `search_tools`, `kimo_describe`, `kimo_enable_group`. |
-| `flat` | 329 | 254,503 bytes | clients with large context or their own tool search. Every tool listed with its schema. |
-| group names, e.g. `audio,color_grade` | varies | varies | those groups listed flat, the rest grouped. |
-
-Entries and sizes were measured on the v3.0.0 static Linux release build (`initialize` then `tools/list`, compact JSON, no client). The 378 in `flat` is the 376 registry tools plus two discovery tools, `search_tools` and `kimo_describe`. `kimo_enable_group` is listed in `grouped` and `core` but not in `flat`. The 376 count in the badge and the tool listing below is the registry (`golden_registry.txt`, 376 lines). `search_tools(query, limit=8, group?)` returns ranked tools, effects and transitions with the required args and a `call_as` hint.
-
-Set it like this: `claude mcp add --transport stdio --env KIMO_TOOLS=core kimo -- /home/you/.local/bin/kimo-mcp`, or `[mcp_servers.kimo.env] KIMO_TOOLS = "core"` for Codex. For JSON configs add `"env": { "KIMO_TOOLS": "core" }` (OpenCode: `"environment": { ... }`).
 
 ## Watching it work: spectator telemetry
 
@@ -260,6 +395,13 @@ rather than losing anything, and nothing ever waits while no app is listening. C
 latest-only lane (the newest two), so they can never crowd out, drop or delay call events. Only the headless canvas
 frames below coalesce.
 
+Every headless frame a call queues ends as exactly one `frame_rendered` (auto) or one
+`{"type":"frame_skipped","skip_reason",...,"call_id","rev","gen","frame_lane_drops","ts_ms"}`. Refusals
+(`memory_budget`, `session_busy`, `pq_output`, `hlg_output`, `render_error`, `render_panic`) also carry
+`"refused": true` and a human `reason`, and the spectator shows them as a "render refused" chip. Benign skips
+(`coalesced`, `superseded_by_render_frame`, `frame_lane_dropped`, `disconnected`) mean a newer frame replaces this one
+and carry no reason. Details: `crates/kimo-mcp/src/preview.rs` ("Headless skips").
+
 ### Two preview modes
 
 - **Headless (default).** As described above: canvas frames coalesce by call cadence, so a burst of 59 calls 50 ms
@@ -284,7 +426,7 @@ Call a group with `{"action": "<tool name>", "args": {...}}`, for example `{"nam
 
 ## Tool listing (376 tools)
 
-This is the list the v3 build registers (read from `tools/list` of the grouped server plus `kimo_describe group=<name>`, 376 tools in 14 groups; the grouped `tools/list` itself shows 14 group tools plus `search_tools`, `kimo_describe`, `kimo_enable_group`). `kimo --version` and `kimo_info` report the workspace version, which is 3.0.0 from this release. Get any tool's arguments with `kimo tools describe <name>` or `kimo_describe`, and find tools by words with `search_tools`.
+This is the list the v3 build registers (read from `tools/list` of the grouped server plus `kimo_describe group=<name>`, 376 tools in 14 groups; the grouped `tools/list` itself shows 14 group tools plus `search_tools`, `kimo_describe`, `kimo_enable_group`). `kimo --version` and `kimo_info` report the workspace version, which is 5.0.0 from this release. Get any tool's arguments with `kimo tools describe <name>` or `kimo_describe`, and find tools by words with `search_tools`.
 
 | Group | Tools |
 |---|---|
@@ -305,19 +447,18 @@ This is the list the v3 build registers (read from `tools/list` of the grouped s
 
 ## Verification status
 
-- Registry: 327 tools. The v3.0.0 static build lists 329 entries in `flat` mode: those 327 plus `search_tools` and `kimo_describe`. The golden registry file `crates/kimo-core/tests/golden/golden_registry.txt` has 327 lines.
-- Fuzz: 6497 calls, 0 failures, as recorded in the v3 notes. Not re-run for this README.
-- Windows x64: unverified until a GitHub Actions runner has produced and smoke-tested the installer and ZIP.
-- macOS: no binaries; build from source.
+- Registry: 376 tools (`crates/kimo-core/tests/golden/golden_registry.txt`, 376 lines). A default-feature `kimo-mcp` at `af615ca` lists 378 entries in `flat` mode: those 376 plus `search_tools` and `kimo_describe`. Of the 378, 362/378 live in the default build + 16 feature-gated (8 native-ocio, 8 mesh-import/material-textures/flat-sah).
+- Fuzz: 6497 calls, 0 failures, as recorded in the v3 notes at 327 tools. Not re-run for this README.
+- Linux spectator installers (`.deb`, `.AppImage`): built on CI runners (dry run at `ca0334f`, version `0.1.0`), downloaded and smoke-tested on Debian 12 x86_64 on 2026-10-17: sha256 matches, the `.deb` installs (`Depends: libwebkit2gtk-4.1-0, libgtk-3-0`) and uninstalls cleanly, and both the `.deb` and the AppImage (`--appimage-extract-and-run`) launch under Xvfb, listen on 127.0.0.1:7421 and draw the `frame_rendered` frames a real `kimo-mcp` (commit `af615ca`) sends after `project_set`, `add_track`, `add_text`. Unsigned draft; other distributions not tested.
+- Windows spectator installer (`Kimo-Spectator_0.1.0_x64_en-US.msi`): **unsigned draft, built on CI runners, not tested on a real PC.**
+- Engine release jobs: the Linux engine tarball is glibc only for this release (the static musl build was dropped). The Windows x64 engine job failed in the first dry run in `crates/kimo-core/build.rs` (MSBuild rejects `cmake --build ... -- -j1`). This release switches to `cmake --build ... --parallel 1` and links the C++ runtime per target (`libstdc++` on Linux, `libc++` on macOS, nothing on MSVC); both changes were checked on Linux only, and the Windows job has not re-run yet.
+- Windows engine build from clone: not run here.
+- Third-party licences for the spectator app: [THIRD_PARTY.md](THIRD_PARTY.md) (five MPL-2.0 crates from the Tauri stack and the LGPL libraries bundled in the AppImage, both decision pending).
 - Per-feature limits and change notes: [docs/DEV_NOTES.md](docs/DEV_NOTES.md). Feature tiers: [FEATURES.md](FEATURES.md). Plans: [ROADMAP.md](ROADMAP.md).
 
-## Contributing and the README rule
+## Work in progress (feature branches)
 
-The README is updated with every product change. If a change adds, removes or regroups tools, or ships a new proof, the same commit updates this file.
-
-MIT licensed.
-
-## Coherent fields (feature-branch WIP)
+### Coherent fields (feature-branch WIP)
 This feature branch adds original raw 2D Perlin/simplex fields, analytic gradients,
 MCP point sampling and an animatable noise effect. It is not part of the finalized
 v3 release. Compilation, numeric tests, warning delta and real 1080p visual
@@ -326,13 +467,21 @@ See [the noise plan](docs/noise/PLAN.md) and [verification commands](docs/noise/
 The next WIP field units add explicit Euclidean Worley F1/F2, FBM, domain warp and
 2D potential curl. These are independently selected raw operators, not presets.
 They are also uncompiled and unrendered here. See [field units](docs/noise/FIELD_UNITS.md).
-## Camera math primitives (feature-branch WIP)
+### Camera math primitives (feature-branch WIP)
 Explicit-pose projection and camera-space near-plane clipping are drafted as raw
 MCP math tools. Uncompiled, unrendered, not integrated into the legacy renderer.
 They do not yet fix existing Scene3D output. See [camera WIP](docs/camera/WIP.md).
-## Raw UV math (feature-branch WIP)
+### Raw UV math (feature-branch WIP)
 Uncompiled original push/radial coordinate primitives, MCP-callable but not a
 rendered transition. See [UV WIP](docs/uv/WIP.md). No visual sign-off.
-## Particle simulation primitive (feature-branch WIP)
+### Particle simulation primitive (feature-branch WIP)
 Uncompiled raw fixed-step 3D trajectory + force/swept-plane math. No emitter or
 renderer adapter yet, no visual sign-off. See [particle WIP](docs/particles/WIP.md).
+
+## Contributing and the README rule
+
+The README is updated with every product change. If a change adds, removes or regroups tools, or ships a new proof, the same commit updates this file.
+
+## License
+
+MIT licensed. See [LICENSE](LICENSE). Third-party components of the spectator app: [THIRD_PARTY.md](THIRD_PARTY.md).
