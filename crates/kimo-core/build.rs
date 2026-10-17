@@ -23,7 +23,7 @@ fn build_ocio() {
     if std::env::var_os("CARGO_FEATURE_NATIVE_OCIO").is_none() { return; }
     let include = std::env::var("OCIO_INCLUDE_DIR").expect("native-ocio requires OCIO_INCLUDE_DIR (OCIO 2 headers)");
     let lib = std::env::var("OCIO_LIB_DIR").expect("native-ocio requires OCIO_LIB_DIR (shared OCIO 2 library)");
-    cc::Build::new().cpp(true).std("c++17").include(include)
+    cc::Build::new().cpp(true).std("c++17").cpp_link_stdlib(None).include(include)
         .file("src/color/ocio_native.cpp").compile("kimo_ocio_native");
     println!("cargo:rustc-link-search=native={lib}");
     println!("cargo:rustc-link-lib=dylib=OpenColorIO");
@@ -56,9 +56,24 @@ fn build_manifold() {
     assert!(cfg.success(), "manifold cmake configure failed");
     let build = std::process::Command::new("cmake").args(["--build"]).arg(&out).args(["--parallel","1"]).status().expect("manifold build failed to start");
     assert!(build.success(), "manifold build failed");
-    cc::Build::new().cpp(true).std("c++17").include(src.join("include")).include(out.join("include"))
+    cc::Build::new().cpp(true).std("c++17").cpp_link_stdlib(None).include(src.join("include")).include(out.join("include"))
         .file("src/threed/manifold_shim.cpp").compile("kimo_manifold_shim");
     println!("cargo:rustc-link-search=native={}", out.join("src").display());
     println!("cargo:rustc-link-lib=static=manifold");
-    println!("cargo:rustc-link-lib=dylib=stdc++");
+    link_cpp_runtime();
+}
+
+/// Links the C++ runtime exactly once, after every C++ static lib (the `cc` builds above opt out of
+/// cc's own stdlib link). Reads the TARGET's os/env from Cargo, not cfg!(), because this script runs
+/// on the host: libc++ on Apple, nothing on MSVC (the CRT carries it), libstdc++ everywhere else
+/// (Linux gnu and musl included).
+fn link_cpp_runtime() {
+    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let lib = match (os.as_str(), target_env.as_str()) {
+        (_, "msvc") => None,
+        ("macos" | "ios", _) => Some("c++"),
+        _ => Some("stdc++"),
+    };
+    if let Some(lib) = lib { println!("cargo:rustc-link-lib=dylib={lib}"); }
 }
