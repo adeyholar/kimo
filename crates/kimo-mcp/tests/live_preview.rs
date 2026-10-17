@@ -14,7 +14,7 @@ impl Mcp {
     fn spawn(envs: &[(&str, &str)]) -> Mcp {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_kimo-mcp"));
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
-            .env_remove("KIMO_SPECTATOR").env_remove("KIMO_TOOLS").env_remove("KIMO_SPECTATOR_FRAMES").env_remove("KIMO_SPECTATOR_FRAME_PX");
+            .env("KIMO_SPECTATOR", "off").env_remove("KIMO_TOOLS").env_remove("KIMO_SPECTATOR_FRAMES").env_remove("KIMO_SPECTATOR_FRAME_PX");
         for (k, v) in envs { cmd.env(k, v); }
         let mut ch = cmd.spawn().expect("spawn kimo-mcp");
         let stdin = ch.stdin.take().unwrap();

@@ -15,7 +15,7 @@ impl Mcp {
     fn spawn(envs: &[(&str, &str)], args: &[&str]) -> Mcp {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_kimo-mcp"));
         cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
-            .env_remove("KIMO_SPECTATOR").env_remove("KIMO_TOOLS").env_remove("KIMO_SPECTATOR_FRAMES").env_remove("KIMO_SPECTATOR_FRAME_PX").env_remove("KIMO_SPECTATOR_DEMO");
+            .env("KIMO_SPECTATOR", "off").env_remove("KIMO_TOOLS").env_remove("KIMO_SPECTATOR_FRAMES").env_remove("KIMO_SPECTATOR_FRAME_PX").env_remove("KIMO_SPECTATOR_DEMO");
         for (k, v) in envs { cmd.env(k, v); }
         let mut ch = cmd.spawn().expect("spawn kimo-mcp");
         let stdin = ch.stdin.take();
@@ -193,7 +193,7 @@ fn headless_by_default_and_demo_costs_nothing_without_a_spectator() {
 
     // demo asked for, but telemetry off or nobody listening: no pacing, no renderer
     let dead = { let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap(); l.local_addr().unwrap().port() };
-    for envs in [vec![("KIMO_SPECTATOR_DEMO", "on")], vec![("KIMO_SPECTATOR_DEMO", "100"), ("KIMO_SPECTATOR", "")]] {
+    for envs in [vec![("KIMO_SPECTATOR_DEMO", "on")], vec![("KIMO_SPECTATOR_DEMO", "100"), ("KIMO_SPECTATOR", "off")]] {
         let mut m = Mcp::spawn(&envs, &[]);
         let many: Vec<(&str, Value)> = (0..200).map(|k| ("project_set", json!({"width": 320 + 2 * k, "height": 180}))).collect();
         let t0 = Instant::now();

@@ -158,7 +158,7 @@ chmod +x Kimo-Spectator_0.1.0_amd64.AppImage
 
 **Windows (unsigned draft).** Run the `.msi`. SmartScreen says "Windows protected your PC": click **More info**, then **Run anyway**. The app uses Microsoft Edge WebView2, which Windows 11 already has; on older systems the installer fetches it.
 
-The spectator listens on `127.0.0.1:7421`. Point the engine at it with `KIMO_SPECTATOR=tcp://127.0.0.1:7421` (see [Watching it work](#watching-it-work-spectator-telemetry)).
+The spectator listens on the first free port of `127.0.0.1:7421`-`7430` (loopback only, never `0.0.0.0`) and the engine finds it there by default, so there is nothing to set: open the app and calls show up. `KIMO_SPECTATOR=off` turns the stream off (see [Watching it work](#watching-it-work-spectator-telemetry)).
 
 ## Build from clone
 
@@ -210,9 +210,9 @@ target/release/kimo --version                       # the version in Cargo.toml 
 `kimo-mcp` takes no required arguments: it reads JSON-RPC on stdin and writes replies on stdout. Your MCP client normally starts it for you.
 
 ```
-target/release/kimo-mcp                                              # plain headless MCP server
-KIMO_SPECTATOR=tcp://127.0.0.1:7421 target/release/kimo-mcp          # same, streaming telemetry to the spectator
-target/release/kimo-mcp --spectator-demo                             # demo mode: one paced frame per call (needs KIMO_SPECTATOR)
+target/release/kimo-mcp                                              # headless MCP server; streams telemetry to the spectator when it is open
+KIMO_SPECTATOR=off target/release/kimo-mcp                           # same, with telemetry off
+target/release/kimo-mcp --spectator-demo                             # demo mode: one paced frame per call (needs the spectator open)
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | target/release/kimo-mcp   # quick check
 ```
 
@@ -234,7 +234,7 @@ Then start the spectator first and the engine second:
 
 ```
 ./target/release/kimo-gui &                                          # from crates/kimo-gui; listens on 127.0.0.1:7421
-KIMO_SPECTATOR=tcp://127.0.0.1:7421 ../../target/release/kimo-mcp    # every tool call now shows up live
+../../target/release/kimo-mcp                                        # every tool call now shows up live (no KIMO_SPECTATOR needed)
 ```
 
 ### 5. Connect a client
@@ -359,10 +359,19 @@ Windows: use the path to `kimo-mcp.exe` (the Windows engine installer, once its 
 
 ## Watching it work: spectator telemetry
 
-Set `KIMO_SPECTATOR=tcp://127.0.0.1:7421` (or `on`) on the server entry and every tool call streams live to the
-Kimo spectator app (`crates/kimo-gui`), which listens on that loopback port: a `start` event with the arguments,
-`progress` for long calls such as `export`, and `complete` with what changed in the project (or `error`), all
-under one `call_id`. `file:/path/events.jsonl` writes the same lines to a file. Unset, nothing runs. The stream is
+Kimo's spectator app (`crates/kimo-gui`) connects on its own. Open it and every tool call streams to it live; you don't
+set anything. With `KIMO_SPECTATOR` unset or empty (or `on`), kimo-mcp looks for the app on loopback ports
+127.0.0.1:7421–7430, in order. It never uses 0.0.0.0 or any other host. It only streams to a peer that answers the
+versioned spectator handshake (`KIMO-SPECTATOR/1`; any other answer, an older version included, is a failed
+handshake), so a different program holding one of those ports gets nothing. The search runs on the telemetry thread,
+never on a tool call. The app takes the first free port in that range and shows "listening 127.0.0.1:<port>".
+`KIMO_SPECTATOR=off` (or `0`/`false`) turns telemetry off: no telemetry thread, no events.
+`KIMO_SPECTATOR=tcp://127.0.0.1:<port>` pins one port with no scan and no handshake; a host that is not a loopback
+address (127.0.0.1, localhost) is ignored and telemetry stays off. `file:/path/events.jsonl` writes the same lines to
+a file. A malformed value is treated as off, silently. With no app connected, events are dropped before they are
+serialized, and nothing about telemetry is written to stdout or stderr. With an app connected, each tool call sends
+a `start` event with the arguments, `progress` for long calls such as `export`, and `complete` with what changed in
+the project (or `error`), all under one `call_id`. The stream is
 out of band: `tools/list`, results and stdout are byte-identical with it on or off, it never waits for the app,
 and with no app listening events are dropped. The app can be opened and closed at any point in a session: the
 engine notices a closed window before its next event, reconnects on its own (retrying after 50 ms, doubling to
@@ -377,7 +386,8 @@ so the app never waits for the agent to call `render_frame`. Read-only calls (`g
 its own decode cache, so tool calls never wait for it. The playhead moves to an explicit `time`/`at` (a split shows
 the cut), else into the clip the call touched, and otherwise stays put. Frames are only rendered while an app is
 connected (one that opens mid-session gets the current frame at once); with telemetry off or nobody listening
-there is no render thread at all, and `KIMO_SPECTATOR_FRAMES=0` keeps the call events but turns the frames off.
+there is no render thread at all (with nobody listening, events are dropped before they are serialized and the
+telemetry thread looks for the app again at most once a second), and `KIMO_SPECTATOR_FRAMES=0` keeps the call events but turns the frames off.
 The `{"type":"session"}` event and every `{"type":"project_changed"}` carry the project `width` and `height` in pixels
 (the size after the call), so the app can place x/y transform moves on the viewer.
 `export` progress events carry `current_frame` (frames finished, so the index of the next frame), `total_frames`,
@@ -415,8 +425,9 @@ and carry no reason. Details: `crates/kimo-mcp/src/preview.rs` ("Headless skips"
   made is sent as `{"type":"frame_skipped","demo":true,"reason":...}`, so frames and calls always match one to one.
   Turn it on with `KIMO_SPECTATOR_DEMO=on` (or a pace in ms, e.g. `KIMO_SPECTATOR_DEMO=60`), or on the command line
   with `kimo-mcp --spectator-demo` or `kimo-mcp --demo-pace-ms 60` (the command line wins). It needs
-  `KIMO_SPECTATOR` set too, and it does nothing (no pacing, no renderer) while no app is connected. Example:
-  `claude mcp add --transport stdio --env KIMO_SPECTATOR=on --env KIMO_SPECTATOR_DEMO=75 kimo -- /home/you/.local/bin/kimo-mcp`.
+  telemetry on (the default; not with `KIMO_SPECTATOR=off`), and it does nothing (no pacing, no renderer) while no app
+  is connected. Example:
+  `claude mcp add --transport stdio --env KIMO_SPECTATOR_DEMO=75 kimo -- /home/you/.local/bin/kimo-mcp`.
   Pacing was chosen over rendering every frame without waiting because unwaited frames would be rendered after the
   agent had already moved on, so the canvas would trail the timeline and inspector and show the wrong state for a call.
 

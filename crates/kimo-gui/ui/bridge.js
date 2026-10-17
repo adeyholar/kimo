@@ -18,7 +18,7 @@ export function connect(onEvent, onStatus) {
     // The engine keeps no replay buffer (spectator.rs: events from while the GUI was gone are not replayed).
     let live = false, was = false;
     window.__TAURI__.event.listen('engine-event', e => { if (!live) { live = was = true; onStatus('live', 'live'); } onEvent(e.payload); });
-    window.__TAURI__.event.listen('spectator-status', e => { const s = String(e.payload); live = s === 'live'; if (live) was = true; onStatus(live ? 'live' : 'down', !live && was && s === 'listening' ? 'reconnecting' : s); });
+    window.__TAURI__.event.listen('spectator-status', e => { const s = String(e.payload); live = s === 'live'; if (live) was = true; onStatus(live ? 'live' : 'down', !live && was && s.startsWith('listening') ? 'reconnecting' : s); });
     onStatus('down', 'listening');
     return { kind: 'tauri' };
   }

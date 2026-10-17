@@ -19,11 +19,10 @@ fn requests() -> Vec<Value> {
     ]
 }
 
-/// Run kimo-mcp over `reqs` with KIMO_SPECTATOR = `spec` (None = unset). Returns stdout bytes.
+/// Run kimo-mcp over `reqs` with KIMO_SPECTATOR = `spec` (None = `off`: telemetry is on by default). Returns stdout bytes.
 fn run(spec: Option<&str>, reqs: &[Value]) -> Vec<u8> {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_kimo-mcp"));
-    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).env_remove("KIMO_SPECTATOR").env_remove("KIMO_TOOLS");
-    if let Some(s) = spec { cmd.env("KIMO_SPECTATOR", s); }
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).env("KIMO_SPECTATOR", spec.unwrap_or("off")).env_remove("KIMO_TOOLS");
     let mut ch = cmd.spawn().expect("spawn kimo-mcp");
     // Drain stdout on its own thread while stdin is fed: with thousands of requests the responses overflow the OS pipe
     // buffer, and a harness that writes everything before reading anything deadlocks with the server (both block in

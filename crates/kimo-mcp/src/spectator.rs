@@ -1,8 +1,15 @@
-//! Spectator telemetry: opt-in, out-of-band JSON-lines events for the Kimo spectator GUI.
+//! Spectator telemetry: out-of-band JSON-lines events for the Kimo spectator GUI, on by default.
 //!
-//! Off unless `KIMO_SPECTATOR` is set. Accepted values:
-//!   `tcp://127.0.0.1:7421` (loopback only; `on`, `1` and `gui` mean this, the GUI shell's listener),
-//!   `file:/path/events.jsonl` (append; tests and recordings).
+//! `KIMO_SPECTATOR` picks the sink:
+//!   unset or empty (the default; `on`, `1` and `gui` mean the same): the spectator GUI. The engine tries
+//!     127.0.0.1:7421..=7430 in order and keeps only a peer that greets it with the spectator's hello line
+//!     (`HELLO`, a versioned line, `KIMO-SPECTATOR/1`; any other line, an older or newer version included, is a failed
+//!     handshake; sent by crates/kimo-gui/src/main.rs as soon as it accepts), so a foreign app holding one of those ports
+//!     never gets a byte of telemetry; with no spectator there it retries quietly (nothing is ever printed);
+//!   `tcp://127.0.0.1:PORT` (loopback only): exactly that port, no scanning and no hello (tests, relays, recordings);
+//!   `file:/path/events.jsonl` (append; tests and recordings);
+//!   `off`, `0`, `false`: telemetry off (no thread, no work). So is any value it cannot use (a non-loopback host, an
+//!     unparsable one): quietly, since nothing about telemetry is ever printed.
 //! Guarantees: nothing is ever written to stdout (the MCP channel); tool arguments and results are only read,
 //! never changed. Two lanes feed one background writer, the only place that touches the sink:
 //!   * state telemetry (every tools/call's start and its one complete|error, project_changed, the agent's own
@@ -16,9 +23,9 @@
 //!     `frame_skipped` with `skip_reason: "frame_lane_dropped"` (preview.rs, "Headless skips").
 //! The writer takes lines in the order they were emitted across both lanes and writes whole lines only: a spectator
 //! that is open but slow to read (a busy webview) is waited for, never cut off, so no line is ever truncated on a live
-//! connection. With no listener events are dropped; the writer reconnects lazily with backoff when the GUI is closed
-//! and reopened mid-session, and events from while it was gone are not replayed (a reopened GUI gets the current frame).
-//! With the variable unset every hook below is a single `OnceLock` load.
+//! connection. With no listener events are dropped before they are serialized (`listening`); the writer reconnects on its
+//! own backoff timer when the GUI is closed and reopened mid-session, and events from while it was gone are not replayed
+//! (a reopened GUI gets the current frame). With `KIMO_SPECTATOR=off` every hook below is a single `OnceLock` load.
 //!
 //! One event per line, the spectator's unified contract (crates/kimo-gui/README.md, "Unified tool events"):
 //!   {tool_name, call_id, rpc_id, phase: start|progress|complete|error, target: {track_id, clip_id, param}, payload, ts, ts_ms}
@@ -45,8 +52,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// The spectator shell's loopback listener (crates/kimo-gui/src/main.rs).
-pub const GUI_ADDR: &str = "127.0.0.1:7421";
+/// The spectator shell's loopback ports (crates/kimo-gui/src/main.rs binds the first free one): the default sink scans them.
+pub const GUI_PORTS: std::ops::RangeInclusive<u16> = 7421..=7430;
+/// The line the spectator shell sends first on every connection it accepts; the default sink keeps only a peer that sends it.
+pub const HELLO: &str = "KIMO-SPECTATOR/1";
+/// How long the default sink waits for that hello from a peer on one of `GUI_PORTS` before trying the next port.
+const HELLO_WAIT: Duration = Duration::from_millis(250);
 /// Queued state-telemetry bytes past which emitting waits for the writer (bounded backpressure, never a drop).
 /// Far above any burst a live spectator falls behind by: 8,000 calls against a spectator stalled for 3 s queue a few MB.
 pub const STATE_BOUND: usize = 64 << 20;
@@ -75,7 +86,7 @@ static LANES: Mutex<Lanes> = Mutex::new(Lanes { state: VecDeque::new(), state_by
 /// Signals both ways: new lines for the writer, freed room and an idle writer for whoever waits on it.
 static LANES_CV: Condvar = Condvar::new();
 #[derive(Debug, Clone, PartialEq)]
-pub enum Dest { Tcp(String), File(String) }
+pub enum Dest { Tcp(String), File(String), Gui }
 
 /// Whether telemetry is on (a sink was named and its writer started).
 static SINK: OnceLock<bool> = OnceLock::new();
@@ -83,6 +94,8 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 static REV: AtomicU64 = AtomicU64::new(0);
 /// Live frames pushed off the latest-only frame lane before the writer took them, since the process started.
 static FRAME_LANE_DROPS: AtomicU64 = AtomicU64::new(0);
+/// Events serialized to a line so far (`ser`): stays put while nobody is listening (`listening`).
+static SERIALIZED: AtomicU64 = AtomicU64::new(0);
 /// True while the writer holds a live connection to the sink (a file sink counts once opened). Read by the live
 /// preview (preview.rs), which renders nothing while no spectator is listening.
 static CONNECTED: AtomicBool = AtomicBool::new(false);
@@ -92,11 +105,12 @@ static ACTIVE: Mutex<Option<Active>> = Mutex::new(None);
 
 struct Active { call_id: String, rpc_id: Value, tool: String, target: Value, t0: Instant, snap: Snap, last_progress: Option<(Instant, f64)>, last_frame: Option<(Instant, u64)>, frames_t0: Option<(Instant, u64)>, args: Value }
 
-/// Parse a `KIMO_SPECTATOR` value. None = telemetry off (unset, empty, `0`, `off`, unparsable or non-loopback).
+/// Parse an explicit `KIMO_SPECTATOR` value. None = telemetry off (empty, `0`, `off`, unparsable or non-loopback);
+/// `init` applies the default (`dest_or_default`) for unset or empty.
 pub fn parse_dest(spec: &str) -> Option<Dest> {
     let s = spec.trim();
     if s.is_empty() || s == "0" || s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("false") { return None; }
-    if ["1", "on", "true", "gui"].iter().any(|k| s.eq_ignore_ascii_case(k)) { return Some(Dest::Tcp(GUI_ADDR.into())); }
+    if ["1", "on", "true", "gui"].iter().any(|k| s.eq_ignore_ascii_case(k)) { return Some(Dest::Gui); }
     if let Some(p) = s.strip_prefix("file://").or_else(|| s.strip_prefix("file:")) { return (!p.is_empty()).then(|| Dest::File(p.into())); }
     let addr = s.strip_prefix("tcp://").unwrap_or(s).trim_end_matches('/');
     use std::net::ToSocketAddrs;
@@ -104,23 +118,29 @@ pub fn parse_dest(spec: &str) -> Option<Dest> {
     (!all.is_empty() && all.iter().all(|a| a.ip().is_loopback())).then(|| Dest::Tcp(addr.into()))
 }
 
-/// Read `KIMO_SPECTATOR` once and, when it names a sink, start the writer thread and install the engine's progress hook.
+/// The sink for a `KIMO_SPECTATOR` value with the default applied: unset or empty = the spectator GUI (`Dest::Gui`,
+/// 127.0.0.1:7421..=7430 with the hello); anything else as `parse_dest` reads it (`off`, `0`, `false` = telemetry off).
+pub fn dest_or_default(raw: &str) -> Option<Dest> {
+    if raw.trim().is_empty() { Some(Dest::Gui) } else { parse_dest(raw) }
+}
+
+/// Read `KIMO_SPECTATOR` once and, when there is a sink (by default there is), start the writer thread and install the
+/// engine's progress hook.
 pub fn init() {
     let raw = std::env::var("KIMO_SPECTATOR").unwrap_or_default();
-    let dest = parse_dest(&raw);
-    if dest.is_none() && !raw.trim().is_empty() && !matches!(raw.trim(), "0" | "off" | "OFF" | "false") {
-        eprintln!("kimo: KIMO_SPECTATOR={raw:?} ignored (use tcp://127.0.0.1:PORT or file:/path); telemetry off");
-    }
+    let dest = dest_or_default(&raw);
+    // a value it cannot use (not loopback, unparsable) means telemetry off, quietly: kimo-mcp's stdio belongs to the
+    // MCP client, and nothing about telemetry is ever printed
     init_with(dest);
 }
 
 fn init_with(dest: Option<Dest>) {
     let sink = dest.and_then(|d| {
         // The telemetry writer thread. Purpose: drain the two event lanes to the sink so the request loop never blocks on I/O.
-        // Lifecycle: started at most once per process (init runs once, SINK is a OnceLock) and only when KIMO_SPECTATOR names a sink;
+        // Lifecycle: started at most once per process (init runs once, SINK is a OnceLock) and only when there is a sink (by default);
         // it reconnects with backoff and lives until the process exits (SINK, which owns the sender, is never dropped). Join/cancel
-        // owner: detached by design, nothing joins it; `flush` gives a bounded best-effort drain before exit. Headless (KIMO_SPECTATOR
-        // unset or off): never started. Started through the engine's guarded spawn path; `init` runs at startup with no cancellation
+        // owner: detached by design, nothing joins it; `flush` gives a bounded best-effort drain before exit. With nobody listening it
+        // drops nothing itself (emitters drop before serializing) and retries on its backoff timer. KIMO_SPECTATOR=off: never started. Started through the engine's guarded spawn path; `init` runs at startup with no cancellation
         // token installed, so the writer inherits none and no tool call's time limit can cancel it.
         kimo_core::guard::spawn_builder_with_token(std::thread::Builder::new().name("kimo-spectator".into()), move || writer(d)).ok()
     });
@@ -140,6 +160,11 @@ pub fn enabled() -> bool { SINK.get() == Some(&true) }
 #[inline]
 pub fn connected() -> bool { CONNECTED.load(Ordering::Relaxed) }
 
+/// Events are worth building: a spectator is connected, or the writer has not tried the sink yet (startup). False
+/// while the writer has found nobody: emitters then drop their event before serializing it.
+#[inline]
+fn listening() -> bool { connected() || !ATTEMPTED.load(Ordering::SeqCst) }
+
 /// `connected`, once the writer has made its first attempt to reach the sink (it does at startup, on the session
 /// event): waits for that attempt for at most `within`. Spectator demo mode only, so that the first calls of a
 /// session are not taken for calls with nobody listening.
@@ -153,14 +178,14 @@ pub(crate) fn connected_settled(within: Duration) -> bool {
 /// so frames never displace, drop or hold up state telemetry, and never wait themselves. The frame carries
 /// `frame_lane_drops` (counting the drop this push causes); each frame it pushes off is reported on the state lane.
 pub(crate) fn emit_frame(mut v: Value) {
-    if !enabled() { return; }
+    if !enabled() || !listening() { return; }
     let meta = (v["call_id"].as_str().unwrap_or("").to_string(), v["rev"].as_u64().unwrap_or(0), v["gen"].as_u64().unwrap_or(0));
     let mut q = LANES.lock().unwrap_or_else(|e| e.into_inner());
     let drops = (q.frames.len() + 1).saturating_sub(FRAME_DEPTH.max(1)) as u64;
     v["frame_lane_drops"] = json!(FRAME_LANE_DROPS.fetch_add(drops, Ordering::Relaxed) + drops);
     q.seq += 1;
     let s = q.seq;
-    let dropped = push_latest(&mut q.frames, (s, v.to_string(), meta), FRAME_DEPTH);
+    let dropped = push_latest(&mut q.frames, (s, ser(&v), meta), FRAME_DEPTH);
     drop(q);
     LANES_CV.notify_all();
     for (_, _, (call_id, rev, gen)) in dropped { emit_skip(&crate::preview::skip_event(crate::preview::SKIP_FRAME_LANE_DROPPED, &call_id, rev, gen)); }
@@ -174,12 +199,16 @@ pub(crate) fn emit_skip(v: &Value) { emit(v); }
 
 /// A spectator demo frame (preview.rs): on the lossless state lane, in order; the writer reports its delivery by `seq`
 /// (`preview::demo_delivered`). False: telemetry is off, and nobody will report it.
-pub(crate) fn emit_demo_frame(v: &Value, seq: u64) -> bool { enqueue(v.to_string(), Kind::Demo(seq)) }
+pub(crate) fn emit_demo_frame(v: &Value, seq: u64) -> bool { listening() && enqueue(ser(v), Kind::Demo(seq)) }
 
 pub(crate) fn now_ms() -> u64 { ts_ms() }
 
-/// State telemetry: queued in order, never coalesced, never dropped, never displaced by frames.
-fn emit(v: &Value) { enqueue(v.to_string(), Kind::State); }
+/// State telemetry: queued in order, never coalesced, never dropped, never displaced by frames, while a spectator is
+/// listening; with nobody listening it is dropped here, before it is serialized.
+fn emit(v: &Value) { if listening() { enqueue(ser(v), Kind::State); } }
+
+/// An event serialized to its line (counted in `SERIALIZED`).
+fn ser(v: &Value) -> String { SERIALIZED.fetch_add(1, Ordering::Relaxed); v.to_string() }
 
 /// The frame lane's rule: append, then drop the oldest past `depth`. Returns what it dropped, oldest first.
 pub(crate) fn push_latest<T>(q: &mut VecDeque<T>, item: T, depth: usize) -> Vec<T> {
@@ -270,6 +299,25 @@ impl Conn {
     }
 }
 
+/// A connection to the spectator shell on 127.0.0.1:`port`: kept only when the peer's first line, within `HELLO_WAIT`, is
+/// `HELLO`. Anything else (a refused port, a foreign app that stays silent or says something else) is closed unwritten.
+/// Reads byte by byte so nothing past the hello is consumed.
+fn greeted(port: u16) -> Option<std::net::TcpStream> {
+    use std::io::Read;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut s = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250)).ok()?;
+    s.set_read_timeout(Some(HELLO_WAIT)).ok()?;
+    let (t0, mut line, mut b) = (Instant::now(), Vec::new(), [0u8; 1]);
+    while line.len() <= HELLO.len() && t0.elapsed() < HELLO_WAIT {
+        match s.read(&mut b) { Ok(1) if b[0] == b'\n' => break, Ok(1) => line.push(b[0]), _ => return None }
+    }
+    if line.strip_suffix(b"\r").unwrap_or(&line) != HELLO.as_bytes() { return None; }
+    s.set_read_timeout(None).ok()?;
+    let _ = s.set_nodelay(true);
+    let _ = s.set_write_timeout(Some(Duration::from_millis(250)));
+    Some(s)
+}
+
 /// False once the peer has closed its end: a non-blocking peek reads EOF (or fails).
 fn peer_open(s: &std::net::TcpStream) -> bool {
     if s.set_nonblocking(true).is_err() { return false; }
@@ -284,6 +332,7 @@ fn peer_open(s: &std::net::TcpStream) -> bool {
 
 fn open(dest: &Dest) -> Option<Conn> {
     match dest {
+        Dest::Gui => GUI_PORTS.clone().find_map(|p| greeted(p).map(Conn::Tcp)),
         Dest::File(p) => std::fs::OpenOptions::new().create(true).append(true).open(p).ok().map(Conn::File),
         Dest::Tcp(a) => {
             use std::net::ToSocketAddrs;
@@ -320,22 +369,30 @@ fn writer(dest: Dest) {
     let mut backoff = Backoff::new();
     let mut retry_at = Instant::now();
     loop {
-        // the next line in emission order across both lanes; the writer is marked busy until it is handled
-        let (mut l, kind) = {
+        // the next line in emission order across both lanes; the writer is marked busy until it is handled. While nobody
+        // is connected it also wakes on the reconnect timer (None), since emitters queue nothing then.
+        let next = {
             let mut q = LANES.lock().unwrap_or_else(|e| e.into_inner());
             q.writing = false;
             loop {
                 match frame_first(q.state.front().map(|x| x.0), q.frames.front().map(|x| x.0)) {
-                    Some(true) => { let (_, l, _) = q.frames.pop_front().unwrap(); q.writing = true; break (l, None); }
-                    Some(false) => { let (_, l, k) = q.state.pop_front().unwrap(); q.state_bytes -= l.len(); q.writing = true; break (l, Some(k)); }
-                    None => { LANES_CV.notify_all(); q = LANES_CV.wait(q).unwrap_or_else(|e| e.into_inner()); }
+                    Some(true) => { let (_, l, _) = q.frames.pop_front().unwrap(); q.writing = true; break Some((l, None)); }
+                    Some(false) => { let (_, l, k) = q.state.pop_front().unwrap(); q.state_bytes -= l.len(); q.writing = true; break Some((l, Some(k))); }
+                    None => {
+                        LANES_CV.notify_all();
+                        if conn.is_some() { q = LANES_CV.wait(q).unwrap_or_else(|e| e.into_inner()); continue; }
+                        let now = Instant::now();
+                        if now >= retry_at { break None; }
+                        q = LANES_CV.wait_timeout(q, retry_at - now).unwrap_or_else(|e| e.into_inner()).0;
+                    }
                 }
             }
         };
         LANES_CV.notify_all(); // room on the state lane for an emitter that waits on the bound
         if conn.as_mut().map_or(false, |c| !c.alive()) {
+            // reconnect at once; `CONNECTED` stays set until that attempt fails, so the emitters do not drop the
+            // events of a call that straddles the move to a newly opened spectator
             conn = None;
-            CONNECTED.store(false, Ordering::Relaxed);
             retry_at = Instant::now();
         }
         if conn.is_none() && Instant::now() >= retry_at {
@@ -345,9 +402,10 @@ fn writer(dest: Dest) {
                 backoff.reset();
                 CONNECTED.store(true, Ordering::Relaxed);
                 crate::preview::reconnected(first); // a spectator that just (re)opened gets the current frame
-            } else { retry_at = Instant::now() + backoff.fail(); }
+            } else { CONNECTED.store(false, Ordering::Relaxed); retry_at = Instant::now() + backoff.fail(); }
             if first { ATTEMPTED.store(true, Ordering::SeqCst); }
         }
+        let Some((mut l, kind)) = next else { continue };
         if let Some(c) = conn.as_mut() {
             l.push('\n');
             if c.write_line(l.as_bytes()).is_err() { conn = None; CONNECTED.store(false, Ordering::Relaxed); retry_at = Instant::now() + backoff.fail(); }
@@ -547,9 +605,11 @@ pub fn call_start(name: &str, args: &Value, rpc_id: Option<&Value>, ss: &Arc<Mut
         if let Some((t, _, _)) = target["clip_id"].as_str().and_then(|c| snap.find(c)) { target["track_id"] = json!(t); }
     }
     let a = Active { call_id: new_call_id(), rpc_id: rpc_id.cloned().unwrap_or(Value::Null), tool, target, t0: Instant::now(), snap, last_progress: None, last_frame: None, frames_t0: None, args: eff };
-    let mut ev = event(&a, "start", json!({"args": summarize(&a.args)}));
-    if let Some(g) = group { ev["group"] = json!(g); }
-    emit(&ev);
+    if listening() {
+        let mut ev = event(&a, "start", json!({"args": summarize(&a.args)}));
+        if let Some(g) = group { ev["group"] = json!(g); }
+        emit(&ev);
+    }
     *ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(a);
     crate::preview::call_started();
 }
@@ -576,6 +636,7 @@ fn on_progress(p: &kimo_core::telemetry::Progress) {
     }
     if let Some((t, f)) = a.last_progress { if frac < 1.0 && (now.duration_since(t) < Duration::from_millis(40) || frac - f < 0.002) { return; } }
     a.last_progress = Some((now, frac));
+    if !listening() { return; }
     let el = now.duration_since(a.t0).as_millis() as u64;
     let mut payload = json!({"pct": (frac * 1000.0).round() / 10.0, "progress": frac, "stage": p.stage, "elapsed_ms": el});
     if let (Some(f), Some(n)) = (p.frame, p.total_frames) {
@@ -610,6 +671,14 @@ pub fn call_end(result: &Value, ss: &Arc<Mutex<Session>>) {
     let after = snapshot(ss, a.target["clip_id"].as_str());
     let changed = diff(&a.snap, &after);
     let mutated = after.undo != a.snap.undo || (after.w, after.h) != (a.snap.w, a.snap.h) || changed.as_object().map_or(false, |o| !o.is_empty());
+    if !listening() {
+        // nobody listening: no result parsing, no event, no agent frame; keep what a spectator that connects later needs
+        if mutated { REV.fetch_add(1, Ordering::Relaxed); }
+        let hint = playhead_hint(&a.args, &a.target, &changed, &after);
+        crate::preview::call_finished(ss, &a.call_id, REV.load(Ordering::Relaxed), mutated || declared_mutating(&a.tool), hint, after.duration, false);
+        crate::preview::demo_frame(&a.call_id, &a.rpc_id, &a.tool);
+        return;
+    }
     let res = serde_json::from_str::<Value>(text).unwrap_or_else(|_| json!(text));
     let images = result.get("content").and_then(|c| c.as_array()).map_or(0, |c| c.iter().filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("image")).count());
     let mut p = json!({"dur_ms": dur_ms, "result": summarize(&res), "changed": changed, "mutated": mutated});
@@ -680,6 +749,24 @@ pub fn call_abort(message: &str) {
 mod tests {
     use super::*;
     #[test]
+    fn nobody_listening_serializes_nothing() {
+        // telemetry on (a loopback sink nobody listens on): once the writer has found nobody, events are dropped
+        // before they are serialized
+        let dead = { let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap(); l.local_addr().unwrap().port() };
+        init_with(Some(Dest::Tcp(format!("127.0.0.1:{dead}"))));
+        let t0 = Instant::now();
+        while !ATTEMPTED.load(Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(5) { std::thread::sleep(Duration::from_millis(2)); }
+        assert!(enabled() && !connected() && !listening());
+        let before = SERIALIZED.load(Ordering::Relaxed);
+        let ss = Arc::new(Mutex::new(Session::new()));
+        for (i, (name, args)) in [("project_set", json!({"width": 320, "height": 180})), ("add_track", json!({})), ("get_project", json!({}))].into_iter().enumerate() {
+            call_start(name, &args, Some(&json!(i)), &ss);
+            let r = kimo_core::commands::dispatch(&mut ss.lock().unwrap(), name, &args).expect("dispatch");
+            call_end(&json!({"content": [{"type": "text", "text": r.to_string()}], "isError": false}), &ss);
+        }
+        assert_eq!(SERIALIZED.load(Ordering::Relaxed), before, "no app connected: no event was serialized");
+    }
+    #[test]
     fn frames_are_latest_only_and_never_hold_state() {
         // the frame lane keeps the newest FRAME_DEPTH, dropping the oldest
         let mut f = VecDeque::new();
@@ -714,7 +801,13 @@ mod tests {
         assert_eq!(parse_dest(""), None);
         assert_eq!(parse_dest("off"), None);
         assert_eq!(parse_dest("0"), None);
-        assert_eq!(parse_dest("on"), Some(Dest::Tcp(GUI_ADDR.into())));
+        assert_eq!(parse_dest("on"), Some(Dest::Gui));
+        // on by default: unset or empty = the spectator GUI; off/0/false = off; explicit sinks pin exactly what they name
+        for raw in ["", "  "] { assert_eq!(dest_or_default(raw), Some(Dest::Gui)); }
+        for raw in ["off", "OFF", "0", "false"] { assert_eq!(dest_or_default(raw), None); }
+        assert_eq!(dest_or_default("file:/tmp/x.jsonl"), Some(Dest::File("/tmp/x.jsonl".into())));
+        assert_eq!(dest_or_default("tcp://127.0.0.1:7421"), Some(Dest::Tcp("127.0.0.1:7421".into())));
+        assert_eq!(dest_or_default("tcp://8.8.8.8:7421"), None);
         assert_eq!(parse_dest("tcp://127.0.0.1:7421"), Some(Dest::Tcp("127.0.0.1:7421".into())));
         assert_eq!(parse_dest("127.0.0.1:9000"), Some(Dest::Tcp("127.0.0.1:9000".into())));
         assert_eq!(parse_dest("file:/tmp/x.jsonl"), Some(Dest::File("/tmp/x.jsonl".into())));

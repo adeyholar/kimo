@@ -10,6 +10,8 @@ engine.
 
 ```
 engine (kimo-mcp / script) --JSONL over TCP 127.0.0.1:7421--> tauri shell (src/main.rs)
+    (the shell binds the first free port of 127.0.0.1:7421-7430 and greets each connection with
+     "KIMO-SPECTATOR/1"; kimo-mcp scans that range by default and streams only to a peer that greets it)
                                                              | tauri events
                                                              v
                                                        webview (ui/)

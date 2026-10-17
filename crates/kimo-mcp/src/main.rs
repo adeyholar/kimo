@@ -2,7 +2,8 @@
 //! Tools are generated from kimo_core::commands::registry().
 //! Every tool call runs on a worker thread under the sandbox layer (kimo_core::guard): argument sanitizer, project limits with
 //! rollback, memory budget, panic catching, and a wall-clock time limit with cooperative cancel (hard exit as the last resort).
-//! Every tools/call is also reported to the spectator GUI when KIMO_SPECTATOR is set (spectator.rs): out of band, never on stdout.
+//! Every tools/call is also reported to the spectator GUI (spectator.rs; on by default, found on 127.0.0.1:7421..=7430,
+//! KIMO_SPECTATOR=off turns it off): out of band, never on stdout.
 //! Command line: `--spectator-demo` (spectator demo mode at the default pace) or `--demo-pace-ms <50..=100>` turn on
 //! spectator demo mode, which gives every call its own preview frame and paces the calls (preview.rs); they override
 //! `KIMO_SPECTATOR_DEMO`. Default: headless (off).
@@ -56,7 +57,7 @@ fn main() {
     kimo_core::guard::init();
     let argv: Vec<String> = std::env::args().skip(1).collect();
     preview::configure_demo(demo_arg(&argv).as_deref()); // spectator demo mode: off unless asked for
-    spectator::init(); // opt-in telemetry for the spectator GUI (KIMO_SPECTATOR); off = no thread, no work
+    spectator::init(); // telemetry for the spectator GUI, on by default (KIMO_SPECTATOR); KIMO_SPECTATOR=off = no thread, no work
     std::panic::set_hook(Box::new(|i| { if std::thread::current().name() == Some("kimo-preview") { return; } eprintln!("kimo: {i}"); })); // a cancelled live preview is not news
     let ss = Arc::new(Mutex::new(Session::new()));
     let mut enabled: std::collections::HashSet<String> = std::collections::HashSet::new();

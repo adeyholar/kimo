@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Watch the real engine in a plain browser: kimo-mcp telemetry (TCP JSON lines) -> SSE for the spectator UI.
 
-The Tauri shell listens on 127.0.0.1:7421 itself. Without the shell, run this relay in its place and open the UI
-with ?feed=sse:
+The Tauri shell listens on 127.0.0.1:7421 itself (the first free port of 7421-7430). Without the shell, run this relay
+in its place and open the UI with ?feed=sse; it greets kimo-mcp with the same hello line, so the default finds it:
 
     python3 crates/kimo-mcp/tools/spectator_sse_relay.py            # TCP :7421 in, SSE :7422 out
-    KIMO_SPECTATOR=tcp://127.0.0.1:7421 kimo-mcp                     # any MCP client drives it
+    kimo-mcp                                                         # streams to :7421 by default; any MCP client drives it
     open http://127.0.0.1:8123/ui/index.html?feed=sse                # crates/kimo-gui served on :8123
 
 Stdlib only, loopback only. Events that arrive before a browser connects are kept (last 2000) and replayed to it.
@@ -31,6 +31,8 @@ def engine_loop():
     srv.bind(("127.0.0.1", A.tcp)); srv.listen(4)
     while True:
         conn, _ = srv.accept()
+        try: conn.sendall(b"KIMO-SPECTATOR/1\n")  # the hello kimo-mcp's default sink waits for (spectator.rs HELLO)
+        except OSError: conn.close(); continue
         threading.Thread(target=read_engine, args=(conn,), daemon=True).start()
 
 def read_engine(conn):

@@ -1,7 +1,10 @@
 //! Kimo spectator: read-only live view of engine tool execution.
 //!
 //! The engine (kimo-mcp or a script) streams newline-delimited JSON tool events
-//! over loopback TCP 127.0.0.1:7421; this shell forwards them to the webview.
+//! over loopback TCP; this shell binds the first free port of 127.0.0.1:7421..=7430
+//! (loopback only, never 0.0.0.0), logs which one it took, greets every connection
+//! with the versioned hello line kimo-mcp waits for (`HELLO`), and forwards the events to the
+//! webview. kimo-mcp finds it there by default, with nothing to set.
 //! READ-ONLY BY CONSTRUCTION: there are no IPC commands at all - the frontend
 //! can only listen. Event schema (all fields except `type` optional):
 //!   {"type":"tool_start","id":"c7","name":"color_grade",
@@ -12,11 +15,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde_json::Value;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
-const BIND: &str = "127.0.0.1:7421";
+/// The loopback ports kimo-mcp scans by default (crates/kimo-mcp/src/spectator.rs, `GUI_PORTS`).
+const PORTS: std::ops::RangeInclusive<u16> = 7421..=7430;
+/// The first line on every accepted connection; kimo-mcp keeps a connection only after reading it (`HELLO` there).
+const HELLO: &[u8] = b"KIMO-SPECTATOR/1\n";
 
 fn main() {
     tauri::Builder::default()
@@ -33,18 +39,27 @@ fn main() {
 /// Reconnects forever; a dropped engine never kills the spectator.
 fn listen_loop(handle: tauri::AppHandle) {
     loop {
-        let listener = match TcpListener::bind(BIND) {
-            Ok(l) => l,
-            Err(e) => {
-                let _ = handle.emit("spectator-status", format!("bind failed: {e}"));
+        let listener = match PORTS.clone().find_map(|p| TcpListener::bind(("127.0.0.1", p)).ok()) {
+            Some(l) => l,
+            None => {
+                let _ = handle.emit("spectator-status", "bind failed: 127.0.0.1:7421-7430 all in use");
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 continue;
             }
         };
-        let _ = handle.emit("spectator-status", "listening");
+        // the status pill (ui/bridge.js) shows exactly "listening 127.0.0.1:<port>" for the port this shell bound
+        let status = listener.local_addr().map_or_else(|_| "listening".to_string(), |a| format!("listening {a}"));
+        eprintln!("kimo spectator: {status}");
+        if let Some(w) = handle.get_webview_window("main") {
+            let _ = w.set_title(&format!("Kimo \u{b7} spectator \u{b7} {status}"));
+        }
+        let _ = handle.emit("spectator-status", status.as_str());
         for stream in listener.incoming() {
             match stream {
-                Ok(s) => {
+                Ok(mut s) => {
+                    if s.write_all(HELLO).is_err() {
+                        continue; // the engine went away before the hello
+                    }
                     let _ = handle.emit("spectator-status", "live");
                     for line in BufReader::new(s).lines() {
                         let line = match line {
@@ -63,7 +78,7 @@ fn listen_loop(handle: tauri::AppHandle) {
                             }
                         }
                     }
-                    let _ = handle.emit("spectator-status", "listening");
+                    let _ = handle.emit("spectator-status", status.as_str());
                 }
                 Err(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
             }
